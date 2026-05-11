@@ -1,7 +1,10 @@
 .env
 venv/
+.venv/
 __pycache__/
 *.pyc
 .DS_Store
 *.ipynb_checkpoints
 .idea/
+data/raw/
+data/*.csv
