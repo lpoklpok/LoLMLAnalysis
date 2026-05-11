@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 # Load API key from .env file
 load_dotenv()
 API_KEY = os.getenv("OPENWEATHER_API_KEY")
-print(f"Key loaded: {API_KEY}")
+
 
 def get_weather(city):
     url = "https://api.openweathermap.org/data/2.5/weather"
