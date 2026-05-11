@@ -15,6 +15,7 @@
  
  ## 3. Considerations and Limitations of the Plan
  - The data ingested is all from free sources, this means for OraclesElixir this isnt the most commprehensive data (as many leagues are missing key information) and OddsPortal require a manual web scrape (which takes time and isnt comprehensive - aka doesn't log 10% of major league games and doesn't log any amateur games even though we are using those as training and test data'- but its free, other data sources require money but could be considered if the trade-off between time/consistent data is worth the money)
+ - OddsPortal restricts odds visibility for US-based users — a VPN to a non-US location (e.g. Vancouver) is required when running PullOddsData.py to get full odds data
  - We need to create a system that combines the datasets together cleanly since they come from different sources and likely use slightly different names for some teams
  - With limited data we also likely miss out on potential features we can add
  - We are missing potentially other sources of information including, but not limited to, patch history, high elo ranked stats, scrim results (although this would be insider info).
