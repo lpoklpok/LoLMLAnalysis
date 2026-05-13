@@ -33,8 +33,8 @@ export default function SideWinRate({ stats, loading }: { stats: SummaryStats | 
           <YAxis domain={[40, 60]} tick={{ fill: '#9ca3af', fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
           <Tooltip
             contentStyle={{ backgroundColor: '#111827', border: '1px solid #374151', borderRadius: 8 }}
-            formatter={(value: number, _: string, entry: { payload: { wins: number } }) =>
-              [`${value}% (${entry.payload.wins.toLocaleString()} wins)`, 'Win Rate']
+            formatter={(value, _name, entry) =>
+              [`${value}% (${(entry.payload as { wins: number }).wins.toLocaleString()} wins)`, 'Win Rate']
             }
           />
           <ReferenceLine y={50} stroke="#4b5563" strokeDasharray="4 4" />
