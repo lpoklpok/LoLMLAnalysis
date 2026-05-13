@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase'
 import SideWinRate from './components/SideWinRate'
 import ChampionTable from './components/ChampionTable'
 import StatsCards from './components/StatsCards'
+import Link from 'next/link'
 
 const LEAGUES = ['All', 'LCK', 'LEC', 'LCS', 'LPL']
 
@@ -74,7 +75,10 @@ export default function Dashboard() {
         <FilterSelect label="League" value={league} options={LEAGUES} onChange={setLeague} />
         <FilterSelect label="Year"   value={year}   options={years}   onChange={setYear} />
         <FilterSelect label="Patch"  value={patch}  options={patches} onChange={setPatch} />
-        <span className="text-xs text-gray-500 ml-auto">
+        <Link href="/players" className="ml-auto text-sm text-blue-400 hover:text-blue-300 transition-colors">
+          Player Lookup →
+        </Link>
+        <span className="text-xs text-gray-500">
           {loading ? 'Loading…' : `${(stats?.total_games ?? 0).toLocaleString()} games`}
         </span>
       </div>

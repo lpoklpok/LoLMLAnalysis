@@ -16,7 +16,7 @@ GAME_META_COLS = ['gameid', 'league', 'year', 'split', 'playoffs', 'date', 'game
 EXCLUDE_COLS = set(GAME_META_COLS + ['side', 'position', 'datacompleteness', 'url'])
 
 # Only these columns are kept per player (everything else is on the team rows)
-PLAYER_KEEP_COLS = ['champion', 'golddiffat10', 'golddiffat15', 'golddiffat20', 'golddiffat25']
+PLAYER_KEEP_COLS = ['playername', 'champion', 'golddiffat10', 'golddiffat15', 'golddiffat20', 'golddiffat25']
 
 
 def load_raw():

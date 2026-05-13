@@ -31,7 +31,11 @@ KEEP_COLS = [
     # Teams and result
     'blue_team_teamname', 'red_team_teamname', 'blue_team_result',
 
-    # Champions per position
+    # Players and champions per position
+    'blue_top_playername', 'blue_jng_playername', 'blue_mid_playername',
+    'blue_bot_playername', 'blue_sup_playername',
+    'red_top_playername',  'red_jng_playername',  'red_mid_playername',
+    'red_bot_playername',  'red_sup_playername',
     'blue_top_champion', 'blue_jng_champion', 'blue_mid_champion',
     'blue_bot_champion', 'blue_sup_champion',
     'red_top_champion',  'red_jng_champion',  'red_mid_champion',
