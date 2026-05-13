@@ -78,6 +78,9 @@ export default function Dashboard() {
         <Link href="/players" className="ml-auto text-sm text-blue-400 hover:text-blue-300 transition-colors">
           Player Lookup →
         </Link>
+        <Link href="/model" className="text-sm text-purple-400 hover:text-purple-300 transition-colors">
+          Model →
+        </Link>
         <span className="text-xs text-gray-500">
           {loading ? 'Loading…' : `${(stats?.total_games ?? 0).toLocaleString()} games`}
         </span>
