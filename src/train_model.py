@@ -22,8 +22,9 @@ from xgboost import XGBClassifier
 
 PROCESSED_DIR = Path(os.path.dirname(__file__)) / '..' / 'data' / 'processed'
 
-FEATURES    = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs']
-FILL_VALUES = {'elo_diff': 0.0, 'rwr_diff': 0.0, 'h2h_wr': 0.5, 'playoffs': 0}
+FEATURES_ELO  = ['elo_diff']
+FEATURES_FULL = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs']
+FILL_VALUES   = {'elo_diff': 0.0, 'rwr_diff': 0.0, 'h2h_wr': 0.5, 'playoffs': 0}
 
 
 def load_data() -> pd.DataFrame:
@@ -47,32 +48,28 @@ def run():
     print(f"Train: {len(train):,} games (2024)")
     print(f"Test:  {len(test):,} games (2025-2026)\n")
 
-    X_train = train[FEATURES].fillna(FILL_VALUES)
-    X_test  = test[FEATURES].fillna(FILL_VALUES)
     y_train = train['blue_win'].values
     y_test  = test['blue_win'].values
 
-    # --- Logistic Regression ---
-    lr = Pipeline([
+    # --- ELO-only Logistic Regression ---
+    X_train_elo = train[FEATURES_ELO].fillna(FILL_VALUES)
+    X_test_elo  = test[FEATURES_ELO].fillna(FILL_VALUES)
+    lr_elo = Pipeline([
         ('scaler', StandardScaler()),
         ('lr',     LogisticRegression(max_iter=1000)),
     ])
-    lr.fit(X_train, y_train)
-    pred_lr = lr.predict_proba(X_test)[:, 1]
+    lr_elo.fit(X_train_elo, y_train)
+    pred_elo = lr_elo.predict_proba(X_test_elo)[:, 1]
 
-    # --- XGBoost ---
-    xgb = XGBClassifier(
-        n_estimators=200,
-        max_depth=3,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        use_label_encoder=False,
-        eval_metric='logloss',
-        random_state=42,
-    )
-    xgb.fit(X_train, y_train)
-    pred_xgb = xgb.predict_proba(X_test)[:, 1]
+    # --- Full Logistic Regression ---
+    X_train_full = train[FEATURES_FULL].fillna(FILL_VALUES)
+    X_test_full  = test[FEATURES_FULL].fillna(FILL_VALUES)
+    lr_full = Pipeline([
+        ('scaler', StandardScaler()),
+        ('lr',     LogisticRegression(max_iter=1000)),
+    ])
+    lr_full.fit(X_train_full, y_train)
+    pred_full = lr_full.predict_proba(X_test_full)[:, 1]
 
     # --- Baselines ---
     pred_coin   = np.full(len(y_test), 0.5)
@@ -81,33 +78,29 @@ def run():
     n_odds      = has_odds.sum()
 
     print("=== Full test set ===")
-    evaluate("Coin flip (50/50)",   y_test, pred_coin)
-    evaluate("Logistic Regression", y_test, pred_lr)
-    evaluate("XGBoost",             y_test, pred_xgb)
+    evaluate("Coin flip (50/50)",      y_test, pred_coin)
+    evaluate("LR — ELO only",          y_test, pred_elo)
+    evaluate("LR — ELO + form + H2H",  y_test, pred_full)
 
     print(f"\n=== Games with market odds ({n_odds:,} games) ===")
-    evaluate("Coin flip (50/50)",   y_test[has_odds], pred_coin[has_odds])
-    evaluate("Market odds",         y_test[has_odds], pred_market[has_odds])
-    evaluate("Logistic Regression", y_test[has_odds], pred_lr[has_odds])
-    evaluate("XGBoost",             y_test[has_odds], pred_xgb[has_odds])
+    evaluate("Coin flip (50/50)",      y_test[has_odds], pred_coin[has_odds])
+    evaluate("Market odds",            y_test[has_odds], pred_market[has_odds])
+    evaluate("LR — ELO only",          y_test[has_odds], pred_elo[has_odds])
+    evaluate("LR — ELO + form + H2H",  y_test[has_odds], pred_full[has_odds])
 
-    # --- LR Coefficients ---
-    print("\n=== Logistic Regression coefficients ===")
-    coefs = lr.named_steps['lr'].coef_[0]
-    for feat, coef in zip(FEATURES, coefs):
+    # --- Coefficients ---
+    print("\n=== ELO-only coefficients ===")
+    print(f"  elo_diff  {lr_elo.named_steps['lr'].coef_[0][0]:+.4f}")
+
+    print("\n=== Full model coefficients ===")
+    for feat, coef in zip(FEATURES_FULL, lr_full.named_steps['lr'].coef_[0]):
         print(f"  {feat:<20} {coef:+.4f}")
 
-    # --- XGBoost feature importance ---
-    print("\n=== XGBoost feature importance ===")
-    importances = xgb.feature_importances_
-    for feat, imp in sorted(zip(FEATURES, importances), key=lambda x: -x[1]):
-        print(f"  {feat:<20} {imp:.4f}")
-
-    # --- Save predictions (best model = whichever has lower log loss) ---
-    out = test[['gameid', 'date', 'league', 'blue_team', 'red_team',
+    # --- Save predictions ---
+    out = test[['gameid', 'date', 'league', 'playoffs', 'blue_team', 'red_team',
                 'blue_win', 'q_blue_win']].copy()
-    out['pred_lr']  = pred_lr
-    out['pred_xgb'] = pred_xgb
+    out['pred_elo']  = pred_elo
+    out['pred_full'] = pred_full
     out.to_csv(PROCESSED_DIR / 'predictions.csv', index=False)
     print(f"\nPredictions saved to predictions.csv")
 
