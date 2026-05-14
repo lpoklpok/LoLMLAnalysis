@@ -98,7 +98,7 @@ export default function RollingLogLossChart({ games }: { games: RawGame[] }) {
           <Tooltip
             contentStyle={{ backgroundColor: '#111827', border: '1px solid #374151', borderRadius: 8, fontSize: 12 }}
             labelFormatter={v => new Date(v).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-            formatter={(v: number) => [v.toFixed(4), 'Log Loss']}
+            formatter={(v) => [(v as number).toFixed(4), 'Log Loss']}
           />
           <Legend wrapperStyle={{ fontSize: 12, color: '#9ca3af' }} />
           <ReferenceLine y={0.6931} stroke="#6b7280" strokeDasharray="4 4" label={{ value: 'Coin Flip', fill: '#6b7280', fontSize: 11 }} />
