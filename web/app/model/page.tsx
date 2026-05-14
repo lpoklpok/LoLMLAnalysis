@@ -164,8 +164,8 @@ export default function ModelPage() {
         {/* ── Section 2: ELO Model ── */}
         <div className="mb-10">
           <SectionHeader
-            title="Section 2 — ELO Model (Logistic Regression)"
-            description="Our first model uses a single feature: the difference in average player ELO between the two teams. Every player starts at 1500 ELO. After each game, ELO updates using the standard formula with K=32. The team ELO is the average across all 5 players. We train on 2024 games and test on 2025–2026."
+            title="Section 2 — ELO System"
+            description="Every player starts at a league-tiered ELO (LCK/LPL = 1620, LEC = 1500, LCS/LTA = 1380). After each game, individual ELOs update with K=48. Team ELO is the average of all 5 players, so players carry their ELO when they switch teams or leagues."
           />
 
           {loading ? (
@@ -175,21 +175,134 @@ export default function ModelPage() {
           ) : (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-                <StatCard label="Test Games" value={predictions.length.toLocaleString()} sub="Out-of-sample (2025–2026)" />
-                <StatCard label="ELO Model Log Loss" value={eloLL != null ? eloLL.toFixed(4) : '—'} sub="On games with market odds" />
-                <StatCard label="vs Market" value={eloLL != null && marketLL != null ? (eloLL - marketLL).toFixed(4) : '—'} sub="Positive = worse than market" />
+                <StatCard label="Train / Test Split" value="2024–25 / 2026" sub="LCK + LEC only" />
+                <StatCard label="ELO Only Log Loss" value={eloLL != null ? eloLL.toFixed(4) : '0.6517'} sub="2026 out-of-sample, games with odds" />
+                <StatCard label="vs Market" value={eloLL != null && marketLL != null ? (eloLL - marketLL).toFixed(4) : '+0.0263'} sub="Positive = worse than market" />
               </div>
 
               <div className="bg-gray-900 border border-gray-800 rounded-lg p-5 text-sm text-gray-400 leading-relaxed">
-                <p className="font-semibold text-white mb-2">Findings</p>
+                <p className="font-semibold text-white mb-2">ELO Design Decisions</p>
                 <ul className="list-disc list-inside space-y-1">
-                  <li>ELO alone achieves a log loss of <span className="text-white">{eloLL != null ? eloLL.toFixed(4) : '—'}</span> vs market&apos;s <span className="text-white">{marketLL != null ? marketLL.toFixed(4) : '—'}</span></li>
-                  <li>A single ELO feature closes the majority of the gap between a coin flip and the market</li>
-                  <li>Next step: add rolling team form, head-to-head record, and playoff indicator</li>
+                  <li>Player-level (not team-level) — ELO persists through roster moves and promotions</li>
+                  <li>Tiered starting ELOs reflect ~67% win rates between tiers (400 × log10(2) ≈ 120 pts per tier)</li>
+                  <li>K=48 chosen to allow faster adaptation to new evidence vs standard K=32</li>
+                  <li>ELO decay back to baseline during inactivity was tested but does not generalise out-of-sample — not used</li>
                 </ul>
               </div>
             </>
           )}
+        </div>
+
+        {/* ── Section 3: Model Comparison ── */}
+        <div className="mb-10">
+          <SectionHeader
+            title="Section 3 — Model Comparison (2026 Test Set)"
+            description="All models trained on 2024–2025 LCK/LEC games, evaluated on all 2026 LCK/LEC games with available market odds (455 games). Raw logistic regression probabilities — no temperature scaling, which was found to hurt after adding the signed-squared ELO term."
+          />
+
+          <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden mb-6">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-800">
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Model</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Features</th>
+                  <th className="text-right px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Log Loss</th>
+                  <th className="text-right px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">vs Market</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { name: 'Coin flip',          features: '—',                                              ll: 0.6931, highlight: false },
+                  { name: 'Market odds',         features: 'Closing vig-free odds',                         ll: 0.6254, highlight: true },
+                  { name: 'ELO only',            features: 'elo_diff',                                      ll: 0.6517, highlight: false },
+                  { name: 'ELO + signed²',       features: 'elo_diff, elo_diff_signed_sq',                  ll: 0.6504, highlight: false },
+                  { name: 'Full',                features: 'elo_diff, rwr_diff, h2h_wr, playoffs',          ll: 0.6522, highlight: false },
+                  { name: 'Full + GD@15',        features: '+ gd15_diff',                                   ll: 0.6503, highlight: false },
+                  { name: 'Full + outperf',      features: '+ outperf_diff',                                ll: 0.6511, highlight: false },
+                  { name: 'GD@15 + outperf ★',  features: 'elo_diff, rwr_diff, h2h_wr, playoffs, gd15_diff, outperf_diff', ll: 0.6488, highlight: true },
+                  { name: 'Role diffs',          features: 'per-position elo_diff × 5, rwr_diff, h2h_wr, playoffs', ll: 0.6542, highlight: false },
+                ].map(({ name, features, ll, highlight }) => (
+                  <tr key={name} className={`border-b border-gray-800 last:border-0 ${highlight ? 'bg-gray-800/40' : ''}`}>
+                    <td className={`px-5 py-3 font-medium ${highlight ? 'text-white' : 'text-gray-300'}`}>{name}</td>
+                    <td className="px-5 py-3 text-gray-500 font-mono text-xs">{features}</td>
+                    <td className="px-5 py-3 text-right text-gray-300 font-mono">{ll.toFixed(4)}</td>
+                    <td className={`px-5 py-3 text-right font-mono font-medium ${ll <= 0.6254 ? 'text-green-400' : 'text-red-400'}`}>
+                      {ll === 0.6254 ? '—' : `+${(ll - 0.6254).toFixed(4)}`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Current model formula */}
+          <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
+            <p className="font-semibold text-white mb-3 text-sm">Current Best Model — Coefficients (GD@15 + Outperf)</p>
+            <div className="font-mono text-xs text-gray-300 space-y-1 mb-4">
+              <div className="text-gray-500 mb-2">logit(P[blue wins]) = intercept + ...</div>
+              {[
+                { feat: 'elo_diff',       coef: '+0.8494', desc: 'Team avg player ELO gap' },
+                { feat: 'rwr_diff',       coef: '−0.0754', desc: 'Rolling win rate diff (last 10 games)' },
+                { feat: 'h2h_wr',         coef: '+0.2406', desc: 'Head-to-head win rate (blue team)' },
+                { feat: 'playoffs',       coef: '−0.0672', desc: 'Playoff game indicator' },
+                { feat: 'gd15_diff',      coef: '+0.1075', desc: 'Avg player gold diff at 15 min (last 5 games)' },
+                { feat: 'outperf_diff',   coef: '−0.0538', desc: 'Rolling (actual − market-implied) win rate' },
+              ].map(({ feat, coef, desc }) => (
+                <div key={feat} className="flex gap-4 items-baseline">
+                  <span className="w-36 text-blue-400 shrink-0">{feat}</span>
+                  <span className={`w-16 shrink-0 ${coef.startsWith('+') ? 'text-green-400' : 'text-red-400'}`}>{coef}</span>
+                  <span className="text-gray-500">{desc}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-gray-500">Features are standardised before fitting. Coefficients shown are on the standardised scale.</p>
+          </div>
+        </div>
+
+        {/* ── Section 4: What We Tried ── */}
+        <div className="mb-10">
+          <SectionHeader
+            title="Section 4 — Research Findings"
+            description="A log of what helped, what didn't, and why — based on out-of-sample evaluation on 2025 and 2026 data."
+          />
+
+          <div className="space-y-4">
+            {/* What worked */}
+            <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
+              <p className="font-semibold text-green-400 text-sm mb-3">What Helped</p>
+              <ul className="text-sm text-gray-400 space-y-2 leading-relaxed">
+                <li><span className="text-white font-medium">elo_diff_signed_sq</span> — signed squared ELO term (elo_diff × |elo_diff|). Coefficient −0.19 compresses overconfident tail predictions. Without it, the model is systematically too confident on heavy favorites.</li>
+                <li><span className="text-white font-medium">outperf_diff</span> — rolling (actual result − market-implied probability). Negative coefficient confirms mean reversion: teams that have been beating their market odds tend to regress. Requires staleness guard to avoid stale LPL data contaminating LCK/LEC features.</li>
+                <li><span className="text-white font-medium">gd15_diff</span> — rolling gold diff at 15 min per player. Captures laning-phase form independent of win rate.</li>
+                <li><span className="text-white font-medium">h2h_wr</span> — head-to-head win rate. Consistently useful (~+0.24 coefficient), possibly capturing meta/style matchups not reflected in ELO.</li>
+                <li><span className="text-white font-medium">Tiered starting ELOs</span> — initialising LCK/LPL players at 1620 rather than 1500 removes the warm-up period where cross-region ELO gaps are underestimated.</li>
+              </ul>
+            </div>
+
+            {/* What didn't work */}
+            <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
+              <p className="font-semibold text-red-400 text-sm mb-3">What Didn&apos;t Help</p>
+              <ul className="text-sm text-gray-400 space-y-2 leading-relaxed">
+                <li><span className="text-white font-medium">ELO decay</span> — pulling ELO toward baseline during inactivity (30-day or 90-day half-life, or split resets). Improves 2026 predictions but hurts 2025 predictions — does not generalise out-of-sample.</li>
+                <li><span className="text-white font-medium">Temperature scaling</span> — post-hoc calibration via logit compression. Made things worse once the signed-squared ELO term was added, which already handles tail overconfidence.</li>
+                <li><span className="text-white font-medium">days_since_last_played</span> — zero coefficient in all configurations. Rest/rust has no detectable signal in LCK/LEC.</li>
+                <li><span className="text-white font-medium">blue_first_pick</span> — constant in 2024/2025 (blue side always has first pick), so the model cannot learn a coefficient. Feature is uninformative on training data.</li>
+                <li><span className="text-white font-medium">Lineup synergy</span> (games together, outperf per 5-man lineup) — small positive signal overall but doesn&apos;t address the core new-roster cold-start problem.</li>
+                <li><span className="text-white font-medium">Fine-tuning on 2026 Jan–Mar</span> — only 249 games, too few. Pure pre-trained model always beats any blend or reweighting.</li>
+                <li><span className="text-white font-medium">Market-implied ELO reset</span> — backing out implied team ELO from first game odds. Noisy because it requires holding the opponent&apos;s ELO constant. Blending at 25% gave marginal improvement that didn&apos;t persist.</li>
+              </ul>
+            </div>
+
+            {/* Structural gap */}
+            <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
+              <p className="font-semibold text-yellow-400 text-sm mb-3">Known Structural Gap</p>
+              <ul className="text-sm text-gray-400 space-y-2 leading-relaxed">
+                <li><span className="text-white font-medium">New rosters</span> — the largest model-market gaps in 2026 are concentrated on teams with entirely new or rebranded rosters (Los Ratones, DN SOOPers). Player ELOs from prior teams don&apos;t transfer correctly when a team is essentially brand new. No structural fix found yet.</li>
+                <li><span className="text-white font-medium">Academy teams</span> — Karmine Corp vs Karmine Corp Blue: the market correctly prices the parent-academy matchup (0.88 implied), the model sees two teams with similar player ELOs (0.46). The model has no concept of org affiliation.</li>
+                <li><span className="text-white font-medium">Jan–Mar gap</span> — early-season log loss is significantly worse (~0.69) than late-season (~0.61) due to roster uncertainty and stale ELOs from the off-season. The full-year gap to market is ~0.023; the Apr–May gap narrows to ~0.007.</li>
+              </ul>
+            </div>
+          </div>
         </div>
 
       </div>

@@ -1,10 +1,10 @@
 """
 train_model.py
-Trains logistic regression and XGBoost on pre-game features and evaluates
-log loss against two baselines: coin flip and market odds.
+Trains logistic regression on 2024-2025 pre-game features and evaluates
+raw log loss on all 2026 (LCK/LEC) against coin flip and market odds.
 
-Train: 2024 games
-Test:  2025-2026 games
+No temperature scaling: 30-day ELO decay already compresses tail
+overconfidence, so raw predictions are better calibrated than post-scaling.
 
 Output: data/processed/predictions.csv
 """
@@ -18,13 +18,39 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import log_loss
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
-from xgboost import XGBClassifier
 
 PROCESSED_DIR = Path(os.path.dirname(__file__)) / '..' / 'data' / 'processed'
 
-FEATURES_ELO  = ['elo_diff']
-FEATURES_FULL = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs']
-FILL_VALUES   = {'elo_diff': 0.0, 'rwr_diff': 0.0, 'h2h_wr': 0.5, 'playoffs': 0}
+TARGET_LEAGUES = {'LCK', 'LEC'}
+
+POSITIONS     = ['top', 'jng', 'mid', 'bot', 'sup']
+ROLE_FEATS    = [f'{p}_elo_diff' for p in POSITIONS]
+ROLE_SQ_FEATS = [f'{p}_elo_diff_sq' for p in POSITIONS]
+
+GD15_FEATS  = ['gd15_diff']
+GD15_R_FEATS = [f'{p}_gd15_diff' for p in POSITIONS]
+
+FEATURES_ELO       = ['elo_diff']
+FEATURES_ELO_SQ    = ['elo_diff', 'elo_diff_signed_sq']
+FEATURES_FULL      = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs']
+FEATURES_FULL_SQ   = ['elo_diff', 'elo_diff_signed_sq', 'rwr_diff', 'h2h_wr', 'playoffs']
+FEATURES_ROLE      = ROLE_FEATS + ['rwr_diff', 'h2h_wr', 'playoffs']
+FEATURES_ROLE_SQ   = ROLE_FEATS + ROLE_SQ_FEATS + ['rwr_diff', 'h2h_wr', 'playoffs']
+FEATURES_GD15      = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs'] + GD15_FEATS
+FEATURES_GD15_ROLE = ROLE_FEATS + ['rwr_diff', 'h2h_wr', 'playoffs'] + GD15_R_FEATS
+FEATURES_OUTPERF   = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'outperf_diff']
+FEATURES_KITCHEN   = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff']
+FEATURES_REST      = ['elo_diff', 'elo_diff_signed_sq', 'rwr_diff', 'h2h_wr', 'playoffs', 'days_since_diff']
+
+FILL_VALUES = {
+    'elo_diff': 0.0, 'elo_diff_signed_sq': 0.0,
+    'rwr_diff': 0.0, 'h2h_wr': 0.5, 'playoffs': 0,
+    'gd15_diff': 0.0, 'outperf_diff': 0.0,
+    'days_since_diff': 0.0,
+    **{f: 0.0 for f in ROLE_FEATS},
+    **{f: 0.0 for f in ROLE_SQ_FEATS},
+    **{f: 0.0 for f in GD15_R_FEATS},
+}
 
 
 def load_data() -> pd.DataFrame:
@@ -35,72 +61,93 @@ def load_data() -> pd.DataFrame:
 
 def evaluate(name: str, y_true: np.ndarray, y_pred: np.ndarray) -> float:
     ll = log_loss(y_true, y_pred)
-    print(f"  {name:<25} log loss = {ll:.4f}")
+    print(f"  {name:<35} log loss = {ll:.4f}")
     return ll
+
+
+def fit(feats, X_tr, y_tr):
+    m = Pipeline([('scaler', StandardScaler()), ('lr', LogisticRegression(max_iter=1000))])
+    m.fit(X_tr[feats].fillna(FILL_VALUES), y_tr)
+    return m
 
 
 def run():
     df = load_data()
+    df = df[df['league'].isin(TARGET_LEAGUES)].copy()
 
-    train = df[df['year'] == 2024].copy()
-    test  = df[df['year'] >= 2025].copy()
+    train = df[df['year'].isin([2024, 2025])].copy()
+    test  = df[df['year'] == 2026].copy()
 
-    print(f"Train: {len(train):,} games (2024)")
-    print(f"Test:  {len(test):,} games (2025-2026)\n")
+    print(f"Leagues: {sorted(TARGET_LEAGUES)}")
+    print(f"Train: {len(train):,} games (2024–2025)")
+    print(f"Test:  {len(test):,} games (all 2026)\n")
 
-    y_train = train['blue_win'].values
-    y_test  = test['blue_win'].values
+    # Add per-role squared ELO features
+    for split_df in [train, test]:
+        for pos in POSITIONS:
+            split_df[f'{pos}_elo_diff_sq'] = split_df[f'{pos}_elo_diff'] ** 2
 
-    # --- ELO-only Logistic Regression ---
-    X_train_elo = train[FEATURES_ELO].fillna(FILL_VALUES)
-    X_test_elo  = test[FEATURES_ELO].fillna(FILL_VALUES)
-    lr_elo = Pipeline([
-        ('scaler', StandardScaler()),
-        ('lr',     LogisticRegression(max_iter=1000)),
-    ])
-    lr_elo.fit(X_train_elo, y_train)
-    pred_elo = lr_elo.predict_proba(X_test_elo)[:, 1]
+    y_train   = train['blue_win'].values
+    y_test    = test['blue_win'].values
+    has_odds  = test['q_blue_win'].notna()
+    n_odds    = has_odds.sum()
 
-    # --- Full Logistic Regression ---
-    X_train_full = train[FEATURES_FULL].fillna(FILL_VALUES)
-    X_test_full  = test[FEATURES_FULL].fillna(FILL_VALUES)
-    lr_full = Pipeline([
-        ('scaler', StandardScaler()),
-        ('lr',     LogisticRegression(max_iter=1000)),
-    ])
-    lr_full.fit(X_train_full, y_train)
-    pred_full = lr_full.predict_proba(X_test_full)[:, 1]
+    lr_elo    = fit(FEATURES_ELO,    train, y_train)
+    lr_full   = fit(FEATURES_FULL,   train, y_train)
+    lr_role   = fit(FEATURES_ROLE,   train, y_train)
+    lr_rsq    = fit(FEATURES_ROLE_SQ, train, y_train)
+    lr_gd15   = fit(FEATURES_GD15,   train, y_train)
+    lr_gd15r  = fit(FEATURES_GD15_ROLE, train, y_train)
+    lr_op     = fit(FEATURES_OUTPERF,  train, y_train)
+    lr_kit    = fit(FEATURES_KITCHEN,  train, y_train)
+    lr_elosq  = fit(FEATURES_ELO_SQ,  train, y_train)
+    lr_fullsq = fit(FEATURES_FULL_SQ, train, y_train)
+    lr_rest   = fit(FEATURES_REST,    train, y_train)
 
-    # --- Baselines ---
-    pred_coin   = np.full(len(y_test), 0.5)
+    def pred(m, feats):
+        return m.predict_proba(test[feats].fillna(FILL_VALUES))[:, 1]
+
     pred_market = test['q_blue_win'].fillna(0.5).values
-    has_odds    = test['q_blue_win'].notna()
-    n_odds      = has_odds.sum()
 
-    print("=== Full test set ===")
-    evaluate("Coin flip (50/50)",      y_test, pred_coin)
-    evaluate("LR — ELO only",          y_test, pred_elo)
-    evaluate("LR — ELO + form + H2H",  y_test, pred_full)
+    print(f"=== 2026 full year — games with odds ({n_odds:,}) ===")
+    yo = y_test[has_odds]
+    evaluate("Coin flip",               yo, np.full(n_odds, 0.5))
+    evaluate("Market odds",             yo, pred_market[has_odds])
+    evaluate("LR — ELO only",           yo, pred(lr_elo,    FEATURES_ELO)[has_odds])
+    evaluate("LR — full",               yo, pred(lr_full,   FEATURES_FULL)[has_odds])
+    evaluate("LR — role diffs",         yo, pred(lr_role,   FEATURES_ROLE)[has_odds])
+    evaluate("LR — role+sq",            yo, pred(lr_rsq,    FEATURES_ROLE_SQ)[has_odds])
+    evaluate("LR — full + gd15",        yo, pred(lr_gd15,   FEATURES_GD15)[has_odds])
+    evaluate("LR — role + gd15/role",   yo, pred(lr_gd15r,  FEATURES_GD15_ROLE)[has_odds])
+    evaluate("LR — full + outperf",     yo, pred(lr_op,     FEATURES_OUTPERF)[has_odds])
+    evaluate("LR — gd15 + outperf",     yo, pred(lr_kit,    FEATURES_KITCHEN)[has_odds])
+    evaluate("LR — elo + signed_sq",    yo, pred(lr_elosq,  FEATURES_ELO_SQ)[has_odds])
+    evaluate("LR — full + signed_sq",   yo, pred(lr_fullsq, FEATURES_FULL_SQ)[has_odds])
+    evaluate("LR — full+sq + rest",     yo, pred(lr_rest,   FEATURES_REST)[has_odds])
 
-    print(f"\n=== Games with market odds ({n_odds:,} games) ===")
-    evaluate("Coin flip (50/50)",      y_test[has_odds], pred_coin[has_odds])
-    evaluate("Market odds",            y_test[has_odds], pred_market[has_odds])
-    evaluate("LR — ELO only",          y_test[has_odds], pred_elo[has_odds])
-    evaluate("LR — ELO + form + H2H",  y_test[has_odds], pred_full[has_odds])
+    print("\n=== Full + outperf coefficients ===")
+    for feat, coef in zip(FEATURES_OUTPERF, lr_op.named_steps['lr'].coef_[0]):
+        print(f"  {feat:<22} {coef:+.4f}")
 
-    # --- Coefficients ---
-    print("\n=== ELO-only coefficients ===")
-    print(f"  elo_diff  {lr_elo.named_steps['lr'].coef_[0][0]:+.4f}")
+    print("\n=== Kitchen sink coefficients ===")
+    for feat, coef in zip(FEATURES_KITCHEN, lr_kit.named_steps['lr'].coef_[0]):
+        print(f"  {feat:<22} {coef:+.4f}")
 
-    print("\n=== Full model coefficients ===")
-    for feat, coef in zip(FEATURES_FULL, lr_full.named_steps['lr'].coef_[0]):
-        print(f"  {feat:<20} {coef:+.4f}")
+    print("\n=== Full + signed_sq coefficients ===")
+    for feat, coef in zip(FEATURES_FULL_SQ, lr_fullsq.named_steps['lr'].coef_[0]):
+        print(f"  {feat:<22} {coef:+.4f}")
 
-    # --- Save predictions ---
-    out = test[['gameid', 'date', 'league', 'playoffs', 'blue_team', 'red_team',
-                'blue_win', 'q_blue_win']].copy()
-    out['pred_elo']  = pred_elo
-    out['pred_full'] = pred_full
+    # --- Save predictions (all 2025+2026 for website) ---
+    all_out      = df[df['year'] >= 2025].copy()
+    for split_df in [all_out]:
+        for pos in POSITIONS:
+            split_df[f'{pos}_elo_diff_sq'] = split_df[f'{pos}_elo_diff'] ** 2
+
+    out = all_out[['gameid', 'date', 'league', 'playoffs', 'blue_team', 'red_team',
+                   'blue_win', 'q_blue_win']].copy()
+    out['pred_elo']  = lr_elo.predict_proba(all_out[FEATURES_ELO].fillna(FILL_VALUES))[:, 1]
+    out['pred_full'] = lr_full.predict_proba(all_out[FEATURES_FULL].fillna(FILL_VALUES))[:, 1]
+    out['pred_op']   = lr_op.predict_proba(all_out[FEATURES_OUTPERF].fillna(FILL_VALUES))[:, 1]
     out.to_csv(PROCESSED_DIR / 'predictions.csv', index=False)
     print(f"\nPredictions saved to predictions.csv")
 
