@@ -235,6 +235,58 @@ export default function ModelPage() {
             </table>
           </div>
 
+          {/* McFadden R2 + permutation importance */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+            <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">McFadden R²</p>
+              <p className="text-3xl font-bold text-white">0.061</p>
+              <p className="text-xs text-gray-500 mt-1">Best model (GD@15 + outperf) on 2026 test set. 0.05–0.10 is typical for sports prediction — outcomes are genuinely noisy.</p>
+            </div>
+            <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Null Log Loss</p>
+              <p className="text-3xl font-bold text-white">0.6908</p>
+              <p className="text-xs text-gray-500 mt-1">Predicting the base rate (blue win %) for every game. Model achieves 0.6488 — R² measures how much of this gap the model explains.</p>
+            </div>
+          </div>
+
+          <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden mb-6">
+            <div className="px-5 py-3 border-b border-gray-800">
+              <h3 className="text-sm font-semibold text-gray-300">Permutation Importance</h3>
+              <p className="text-xs text-gray-500 mt-1">Each feature is randomly shuffled; the log loss increase shows how much the model relies on it.</p>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-800">
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Feature</th>
+                  <th className="text-right px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Shuffled LL</th>
+                  <th className="text-right px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Delta</th>
+                  <th className="text-right px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">% Increase</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { feat: 'elo_diff',      shuffled: 0.7897, delta: +0.1409, pct: 21.73 },
+                  { feat: 'h2h_wr',        shuffled: 0.6543, delta: +0.0055, pct:  0.85 },
+                  { feat: 'rwr_diff',      shuffled: 0.6530, delta: +0.0043, pct:  0.66 },
+                  { feat: 'outperf_diff',  shuffled: 0.6516, delta: +0.0028, pct:  0.43 },
+                  { feat: 'gd15_diff',     shuffled: 0.6508, delta: +0.0021, pct:  0.32 },
+                  { feat: 'playoffs',      shuffled: 0.6480, delta: -0.0008, pct: -0.12 },
+                ].map(({ feat, shuffled, delta, pct }) => (
+                  <tr key={feat} className="border-b border-gray-800 last:border-0">
+                    <td className="px-5 py-3 font-mono text-blue-400">{feat}</td>
+                    <td className="px-5 py-3 text-right font-mono text-gray-300">{shuffled.toFixed(4)}</td>
+                    <td className={`px-5 py-3 text-right font-mono font-medium ${delta > 0.01 ? 'text-red-400' : delta > 0 ? 'text-yellow-400' : 'text-gray-500'}`}>
+                      {delta >= 0 ? '+' : ''}{delta.toFixed(4)}
+                    </td>
+                    <td className={`px-5 py-3 text-right font-mono ${delta > 0.01 ? 'text-red-400' : delta > 0 ? 'text-yellow-400' : 'text-gray-500'}`}>
+                      {pct >= 0 ? '+' : ''}{pct.toFixed(2)}%
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
           {/* Current model formula */}
           <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
             <p className="font-semibold text-white mb-3 text-sm">Current Best Model — Coefficients (GD@15 + Outperf)</p>
