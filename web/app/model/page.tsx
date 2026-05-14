@@ -33,7 +33,7 @@ export default function ModelPage() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    supabase.rpc('get_market_game_data').then(({ data, error }) => {
+    supabase.rpc('get_market_game_data').limit(10000).then(({ data, error }) => {
       if (error) { setError(error.message); setLoading(false); return }
       setGames(data as GameRow[])
       setLoading(false)
