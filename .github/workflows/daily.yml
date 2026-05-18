@@ -21,6 +21,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Cache historical OE data (2014–2025)
+        uses: actions/cache@v4
+        with:
+          path: data/raw
+          key: oe-historical-v1
+
       - name: Pull latest Oracle's Elixir data
         run: python src/PullOEData.py
 
