@@ -24,6 +24,15 @@ import pandas as pd
 PROCESSED_DIR   = Path(os.path.dirname(__file__)) / '..' / 'data' / 'processed'
 CHECKPOINT_PATH = PROCESSED_DIR / 'fe_checkpoint.json'
 
+# Canonical team names — normalise rebrands so H2H history stays continuous
+_TEAM_NORM: dict[str, str] = {
+    'DRX':          'Kiwoom DRX',   # rebranded for 2026 LCK season
+    'MAD Lions KOI': 'Movistar KOI', # rebranded for 2025 LEC season
+}
+
+def _norm_team(name: str) -> str:
+    return _TEAM_NORM.get(name, name)
+
 MAJOR_LEAGUES = {'LEC', 'LPL', 'LCK'}
 
 # ELO constants
@@ -318,8 +327,8 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
         if any(pd.isna(x) for x in blue_players + red_players):
             continue
 
-        blue_team = str(g.blue_team_teamname)
-        red_team  = str(g.red_team_teamname)
+        blue_team = _norm_team(str(g.blue_team_teamname))
+        red_team  = _norm_team(str(g.red_team_teamname))
         blue_win  = int(g.blue_team_result)
 
         league       = g.league
