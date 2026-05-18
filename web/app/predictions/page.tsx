@@ -18,7 +18,16 @@ interface ModelInfo {
   features: ModelFeature[]
   mcfadden_r2: number
   n_train: number
+  n_eval: number
   updated_at: string
+}
+
+interface RoleH2H {
+  pos: string
+  blue: string
+  red: string
+  n: number
+  blue_wins: number
 }
 
 interface Prediction {
@@ -37,6 +46,7 @@ interface Prediction {
   feat_h2h_wr: number | null
   feat_gd15_diff: number | null
   feat_outperf_diff: number | null
+  role_h2h: RoleH2H[] | null
 }
 
 // ---------- helpers ----------
@@ -104,6 +114,47 @@ function FeatureVal({
       }`}>
         {missing ? '—' : format(value!)}
       </span>
+    </div>
+  )
+}
+
+const POS_LABEL: Record<string, string> = {
+  top: 'TOP', jng: 'JNG', mid: 'MID', bot: 'BOT', sup: 'SUP',
+}
+
+function RoleH2HTable({ rows }: { rows: RoleH2H[] }) {
+  return (
+    <div className="border-t border-gray-800 pt-3">
+      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Player H2H</p>
+      <div className="space-y-1">
+        {rows.map(({ pos, blue, red, n, blue_wins }) => {
+          const enough  = n >= 5
+          const bluePct = enough ? Math.round((blue_wins / n) * 100) : null
+          const favor   = bluePct != null && bluePct !== 50
+            ? (bluePct > 50 ? 'text-blue-400' : 'text-red-400')
+            : 'text-gray-400'
+          return (
+            <div key={pos} className="grid grid-cols-[36px_1fr_auto] gap-x-2 items-center text-xs">
+              <span className="font-mono text-gray-600">{POS_LABEL[pos]}</span>
+              <span className="truncate text-gray-400">
+                <span className="text-gray-200">{blue}</span>
+                <span className="text-gray-600 mx-1">vs</span>
+                <span className="text-gray-200">{red}</span>
+              </span>
+              {enough ? (
+                <span className={`font-mono shrink-0 ${favor}`}>
+                  {blue_wins}–{n - blue_wins}
+                  <span className="text-gray-600 ml-1">({bluePct}%)</span>
+                </span>
+              ) : (
+                <span className="font-mono text-gray-700 shrink-0">
+                  {n > 0 ? `${blue_wins}–${n - blue_wins}` : '—'}
+                </span>
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -187,6 +238,11 @@ function MatchCard({ game }: { game: Prediction }) {
           <span className="text-xs text-gray-500">±{sePct}% SE</span>
         )}
       </div>
+
+      {/* Per-role player head-to-head */}
+      {game.role_h2h && game.role_h2h.length > 0 && (
+        <RoleH2HTable rows={game.role_h2h} />
+      )}
     </div>
   )
 }
@@ -197,7 +253,7 @@ function EquationPanel({ info }: { info: ModelInfo }) {
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 mb-3">
         <h2 className="text-sm font-semibold text-gray-200">Logistic Regression</h2>
         <span className="text-xs text-gray-500">
-          McFadden R² = {info.mcfadden_r2.toFixed(3)} · trained on {info.n_train.toLocaleString()} games (2024–2025)
+          McFadden R² = {info.mcfadden_r2.toFixed(3)} (2026 hold-out, n={info.n_eval?.toLocaleString()}) · trained on {info.n_train.toLocaleString()} games (2024–2025)
         </span>
       </div>
 

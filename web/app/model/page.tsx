@@ -235,6 +235,49 @@ export default function ModelPage() {
             </table>
           </div>
 
+          {/* Apples-to-apples log loss comparison (games with odds only) */}
+          <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden mb-6">
+            <div className="px-5 py-3 border-b border-gray-800">
+              <h3 className="text-sm font-semibold text-gray-300">Apples-to-Apples Log Loss (Games with Market Odds Only)</h3>
+              <p className="text-xs text-gray-500 mt-1">Restricted to the same set of games for a fair comparison. Train = 2024–25 (n=2,784), Test = 2026 (n=559). Our LR = GD@15 + Outperf model.</p>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-800">
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Model</th>
+                  <th className="text-right px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Train LL</th>
+                  <th className="text-right px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Test LL</th>
+                  <th className="text-right px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Train vs Mkt</th>
+                  <th className="text-right px-5 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Test vs Mkt</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { name: 'Market odds',  train: 0.6111, test: 0.6276, highlight: true },
+                  { name: 'Our LR',       train: 0.6185, test: 0.6402, highlight: false },
+                  { name: 'Null (base rate)', train: null, test: 0.6902, highlight: false },
+                ].map(({ name, train, test, highlight }) => {
+                  const mktTrain = 0.6111, mktTest = 0.6276
+                  const trainDelta = train != null ? train - mktTrain : null
+                  const testDelta  = test  != null ? test  - mktTest  : null
+                  return (
+                    <tr key={name} className={`border-b border-gray-800 last:border-0 ${highlight ? 'bg-gray-800/40' : ''}`}>
+                      <td className={`px-5 py-3 font-medium ${highlight ? 'text-white' : 'text-gray-300'}`}>{name}</td>
+                      <td className="px-5 py-3 text-right font-mono text-gray-300">{train != null ? train.toFixed(4) : '—'}</td>
+                      <td className="px-5 py-3 text-right font-mono text-gray-300">{test != null ? test.toFixed(4) : '—'}</td>
+                      <td className={`px-5 py-3 text-right font-mono font-medium ${trainDelta == null ? 'text-gray-500' : trainDelta === 0 ? 'text-gray-400' : trainDelta < 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        {trainDelta == null ? '—' : trainDelta === 0 ? '—' : `${trainDelta > 0 ? '+' : ''}${trainDelta.toFixed(4)}`}
+                      </td>
+                      <td className={`px-5 py-3 text-right font-mono font-medium ${testDelta == null ? 'text-gray-500' : testDelta === 0 ? 'text-gray-400' : testDelta < 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        {testDelta == null ? '—' : testDelta === 0 ? '—' : `${testDelta > 0 ? '+' : ''}${testDelta.toFixed(4)}`}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+
           {/* McFadden R2 + permutation importance */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
             <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">

@@ -86,6 +86,23 @@ def _rolling_winrate(history: list[int], n: int = 10) -> float:
     return sum(recent) / len(recent)
 
 
+def _player_h2h_wr(blue_p: str, red_p: str, pos: str,
+                   player_h2h: dict, prior: int = 5) -> float:
+    """Bayesian-shrunk win rate for blue_p vs red_p at position pos.
+
+    Key is canonical (alphabetically sorted) pair so the dict is symmetric.
+    Prior=5 means an unseen matchup starts at 0.5 and needs several games
+    to deviate meaningfully (avoids extreme values from 1 or 2 data points).
+    """
+    p0, p1 = (blue_p, red_p) if blue_p <= red_p else (red_p, blue_p)
+    key = (p0, p1, pos)
+    hist = player_h2h[key]
+    n = len(hist)
+    wins_p0 = sum(hist)
+    wins_blue = wins_p0 if p0 == blue_p else n - wins_p0
+    return (wins_blue + prior * 0.5) / (n + prior)
+
+
 # ---------------------------------------------------------------------------
 # Checkpoint serialisation
 # ---------------------------------------------------------------------------
@@ -103,7 +120,8 @@ def _save_checkpoint(
         elo_map, player_last_played, player_last_split,
         team_history, h2h, player_gd15, team_gd20,
         team_outperf, team_outperf_elo, team_outperf_staleness,
-        team_stats, series_record, roster_state, last_processed_date):
+        team_stats, series_record, roster_state, last_processed_date,
+        player_h2h):
 
     def ts(v):
         return v.isoformat() if hasattr(v, 'isoformat') else str(v)
@@ -126,6 +144,7 @@ def _save_checkpoint(
             for k, v in series_record.items()
         },
         'roster_state': roster_state,
+        'player_h2h': {'|||'.join(k): v for k, v in player_h2h.items()},
     }
     with open(CHECKPOINT_PATH, 'w') as f:
         json.dump(checkpoint, f, cls=_NumpyEncoder)
@@ -160,6 +179,12 @@ def _load_checkpoint():
 
     roster_state = c.get('roster_state', {})
 
+    player_h2h: dict = defaultdict(list)
+    for s, v in c.get('player_h2h', {}).items():
+        parts = s.split('|||')
+        key = (parts[0], parts[1], parts[2])
+        player_h2h[key] = list(v)
+
     last_date = pd.Timestamp(c['last_processed_date'])
     if last_date.tzinfo is None:
         last_date = last_date.tz_localize('UTC')
@@ -167,7 +192,7 @@ def _load_checkpoint():
     return (last_date, elo_map, player_last_played, player_last_split,
             team_history, h2h, player_gd15, team_gd20, team_outperf,
             team_outperf_elo, team_outperf_staleness, team_stats, series_record,
-            roster_state)
+            roster_state, player_h2h)
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +276,7 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
         (last_date, elo_map, player_last_played, player_last_split,
          team_history, h2h, player_gd15, team_gd20, team_outperf,
          team_outperf_elo, team_outperf_staleness, team_stats, series_record,
-         roster_state) = ckpt
+         roster_state, player_h2h) = ckpt
 
         new_df = df[df['date'] > last_date]
         if new_df.empty:
@@ -280,6 +305,7 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
         team_outperf_staleness = defaultdict(int)
         team_stats             = defaultdict(lambda: defaultdict(list))
         series_record          = {}
+        player_h2h             = defaultdict(list)
 
     rows: list[dict] = []
     last_processed_date = None
@@ -423,6 +449,18 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
             r = red_gd15_vals[i]
             role_gd15_diffs[f'{pos}_gd15_diff'] = b - r if not (np.isnan(b) or np.isnan(r)) else float('nan')
 
+        # Player vs player role h2h (Bayesian-shrunk, prior=5 virtual games)
+        # role_h2h_wr: mean Bayesian win rate across 5 roles (centered at 0.5)
+        # role_h2h_signed_sq: signed square of deviation from 0.5 — near-zero unless
+        #   there are many matchups AND an extreme win rate (e.g. Showmaker vs Faker)
+        _role_wrs = [
+            _player_h2h_wr(blue_players[i], red_players[i], POSITIONS[i], player_h2h)
+            for i in range(len(POSITIONS))
+        ]
+        role_h2h_wr = float(np.mean(_role_wrs))
+        _role_devs  = [w - 0.5 for w in _role_wrs]
+        role_h2h_signed_sq = float(np.mean([d * abs(d) for d in _role_devs]))
+
         rows.append({
             'gameid':          g.gameid,
             'date':            g.date,
@@ -449,8 +487,10 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
             'red_rwr':         red_rwr,
             'rwr_diff':        blue_rwr - red_rwr if not (pd.isna(blue_rwr) or pd.isna(red_rwr)) else np.nan,
 
-            # Head-to-head
+            # Head-to-head (team and per-role player matchup)
             'h2h_wr':          h2h_wr,
+            'role_h2h_wr':     role_h2h_wr,
+            'role_h2h_signed_sq': role_h2h_signed_sq,
 
             # Rolling team GD@20 (early game macro form, last 5 games)
             'gd20_diff':       gd20_diff,
@@ -520,6 +560,13 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
             h2h[pair].append(blue_win)
         else:
             h2h[pair].append(1 - blue_win)
+
+        # Update player role h2h (stored from perspective of alphabetically first player)
+        for i, pos in enumerate(POSITIONS):
+            bp, rp = blue_players[i], red_players[i]
+            p0, p1 = (bp, rp) if bp <= rp else (rp, bp)
+            key = (p0, p1, pos)
+            player_h2h[key].append(blue_win if p0 == bp else 1 - blue_win)
 
         # Update team GD@20 histories
         raw_gd20 = getattr(g, 'blue_team_golddiffat20', None)
@@ -615,7 +662,8 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
             elo_map, player_last_played, player_last_split,
             team_history, h2h, player_gd15, team_gd20,
             team_outperf, team_outperf_elo, team_outperf_staleness,
-            team_stats, series_record, roster_state, last_processed_date)
+            team_stats, series_record, roster_state, last_processed_date,
+            player_h2h)
 
     # --- Save ELO state for predict_upcoming.py ---
     elo_state = {
@@ -628,6 +676,14 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
     # --- Save roster state for predict_upcoming.py ---
     with open(PROCESSED_DIR / 'roster_state.json', 'w') as f:
         json.dump(roster_state, f, indent=2)
+
+    # --- Save player h2h state for predict_upcoming.py ---
+    player_h2h_out = {
+        '|||'.join(k): {'n': len(v), 'wins': int(sum(v))}
+        for k, v in player_h2h.items()
+    }
+    with open(PROCESSED_DIR / 'player_h2h.json', 'w') as f:
+        json.dump(player_h2h_out, f, cls=_NumpyEncoder)
 
     n_new = len(new_rows)
     print(f"New games processed: {n_new:,}")

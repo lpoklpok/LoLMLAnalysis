@@ -165,27 +165,52 @@ def fetch_upcoming(days_ahead: int = 14) -> pd.DataFrame:
     return df
 
 
-def load_state() -> tuple[dict, dict, pd.DataFrame]:
+def load_state() -> tuple[dict, dict, pd.DataFrame, dict]:
     with open(PROCESSED_DIR / 'elo_state.json') as f:
         elo_state = json.load(f)
     with open(PROCESSED_DIR / 'roster_state.json') as f:
         roster_state = json.load(f)
     features = pd.read_csv(PROCESSED_DIR / 'features.csv', low_memory=False)
     features['date'] = pd.to_datetime(features['date'], utc=True)
-    return elo_state['elo_map'], roster_state, features
+    player_h2h_path = PROCESSED_DIR / 'player_h2h.json'
+    player_h2h: dict = {}
+    if player_h2h_path.exists():
+        with open(player_h2h_path) as f:
+            raw = json.load(f)
+        player_h2h = {tuple(k.split('|||')): v for k, v in raw.items()}
+    return elo_state['elo_map'], roster_state, features, player_h2h
+
+
+def _role_h2h_info(blue_players: list, red_players: list, player_h2h: dict) -> list[dict]:
+    """Per-role head-to-head record from blue player's perspective."""
+    result = []
+    for i, pos in enumerate(POSITIONS):
+        bp, rp = blue_players[i], red_players[i]
+        p0, p1 = (bp, rp) if bp <= rp else (rp, bp)
+        key = (p0, p1, pos)
+        data = player_h2h.get(key, {'n': 0, 'wins': 0})
+        n = data['n']
+        wins_p0 = data['wins']
+        blue_wins = wins_p0 if p0 == bp else n - wins_p0
+        result.append({'pos': pos, 'blue': bp, 'red': rp, 'n': n, 'blue_wins': blue_wins})
+    return result
 
 
 def train_model(features: pd.DataFrame) -> tuple[Pipeline, np.ndarray | None, dict]:
     """Returns (fitted pipeline, inverse Fisher information matrix, model stats dict)."""
     train   = features[features['year'].isin([2024, 2025])]
+    test    = features[features['year'] == 2026]
     X_train = train[FEATS].fillna(FILL)
     y_train = train['blue_win'].values
 
     model = Pipeline([('s', StandardScaler()), ('lr', LogisticRegression(max_iter=1000))])
     model.fit(X_train, y_train)
 
-    fim_inv    = _compute_fim_inv(model, X_train)
-    model_stats = _compute_model_stats(model, fim_inv, X_train, y_train)
+    fim_inv     = _compute_fim_inv(model, X_train)
+    # Use 2026 hold-out for R² — in-sample would be optimistic
+    X_eval  = test[FEATS].fillna(FILL)  if len(test) else X_train
+    y_eval  = test['blue_win'].values   if len(test) else y_train
+    model_stats = _compute_model_stats(model, fim_inv, X_train, y_train, X_eval, y_eval)
     return model, fim_inv, model_stats
 
 
@@ -205,19 +230,20 @@ def _compute_fim_inv(model: Pipeline, X_train: pd.DataFrame) -> np.ndarray | Non
 
 
 def _compute_model_stats(model: Pipeline, fim_inv: np.ndarray | None,
-                         X_train: pd.DataFrame, y_train: np.ndarray) -> dict:
+                         X_train: pd.DataFrame, y_train: np.ndarray,
+                         X_eval: pd.DataFrame, y_eval: np.ndarray) -> dict:
     """
     Compute and return model metadata for display:
       - per-feature standardised coefficient, SE, and individual R²
-      - McFadden R² for the overall model
+      - McFadden R² computed on the held-out evaluation set (2026)
     """
     lr = model.named_steps['lr']
 
-    # McFadden R²
-    p_train = model.predict_proba(X_train)[:, 1]
-    n       = len(y_train)
-    L_full  = -float(sk_log_loss(y_train, p_train, normalize=False))
-    p_null  = float(y_train.mean())
+    # McFadden R² on held-out eval set
+    p_eval  = model.predict_proba(X_eval)[:, 1]
+    n       = len(y_eval)
+    L_full  = -float(sk_log_loss(y_eval, p_eval, normalize=False))
+    p_null  = float(y_eval.mean())
     L_null  = n * (p_null * np.log(p_null) + (1 - p_null) * np.log(1 - p_null))
     mcfadden_r2 = float(1 - L_full / L_null)
 
@@ -240,7 +266,8 @@ def _compute_model_stats(model: Pipeline, fim_inv: np.ndarray | None,
     return {
         'features':    feature_stats,
         'mcfadden_r2': round(mcfadden_r2, 4),
-        'n_train':     int(n),
+        'n_train':     int(len(y_train)),
+        'n_eval':      int(n),
     }
 
 
@@ -276,7 +303,8 @@ def _safe(v) -> float | None:
 
 def predict_game(blue_team: str, red_team: str, league: str,
                  elo_map: dict, roster_state: dict, features: pd.DataFrame,
-                 model: Pipeline, fim_inv: np.ndarray | None) -> dict | None:
+                 model: Pipeline, fim_inv: np.ndarray | None,
+                 player_h2h: dict | None = None) -> dict | None:
     blue_players = roster_state.get(blue_team)
     red_players  = roster_state.get(red_team)
 
@@ -333,12 +361,14 @@ def predict_game(blue_team: str, red_team: str, league: str,
         'feat_h2h_wr':        _safe(h2h_wr),
         'feat_gd15_diff':     _safe(gd15_diff),
         'feat_outperf_diff':  _safe(outperf_diff),
+        # per-role player head-to-head records (informational only)
+        'role_h2h':           _role_h2h_info(blue_players, red_players, player_h2h or {}),
     }
 
 
 def run():
     print("Loading ELO + roster state...")
-    elo_map, roster_state, features = load_state()
+    elo_map, roster_state, features, player_h2h = load_state()
 
     print("Training model on 2024-2025...")
     model, fim_inv, model_stats = train_model(features)
@@ -358,7 +388,7 @@ def run():
         dt      = row['DateTime_UTC']
         best_of = int(row['BestOf'])
 
-        pred = predict_game(blue, red, league, elo_map, roster_state, features, model, fim_inv)
+        pred = predict_game(blue, red, league, elo_map, roster_state, features, model, fim_inv, player_h2h)
         if pred:
             pred['date']    = dt.isoformat()
             pred['best_of'] = best_of
@@ -381,12 +411,11 @@ def run():
         print("Uploading to Supabase...")
         client = create_client(supabase_url, supabase_key)
 
-        # Upload predictions
+        # Upload predictions (use results list directly so role_h2h stays as a list, not string)
         client.table('upcoming_predictions').delete().neq('blue_team', '').execute()
-        records = out.to_dict(orient='records')
-        for i in range(0, len(records), 100):
-            client.table('upcoming_predictions').insert(records[i:i+100]).execute()
-        print(f"Uploaded {len(records)} upcoming predictions.")
+        for i in range(0, len(results), 100):
+            client.table('upcoming_predictions').insert(results[i:i+100]).execute()
+        print(f"Uploaded {len(results)} upcoming predictions.")
 
         # Upload model stats (upsert into single row)
         client.table('model_info').upsert({
@@ -394,10 +423,11 @@ def run():
             'features':     model_stats['features'],
             'mcfadden_r2':  model_stats['mcfadden_r2'],
             'n_train':      model_stats['n_train'],
+            'n_eval':       model_stats['n_eval'],
             'updated_at':   pd.Timestamp.now('UTC').isoformat(),
         }).execute()
-        print(f"Uploaded model stats (McFadden R²={model_stats['mcfadden_r2']:.4f}, "
-              f"n={model_stats['n_train']:,}).")
+        print(f"Uploaded model stats (McFadden R²={model_stats['mcfadden_r2']:.4f} on 2026 hold-out, "
+              f"n_train={model_stats['n_train']:,}, n_eval={model_stats['n_eval']:,}).")
 
 
 if __name__ == '__main__':
