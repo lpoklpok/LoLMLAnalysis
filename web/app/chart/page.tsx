@@ -35,6 +35,9 @@ interface ChartPoint {
   opponent: string
   model_pct: number
   market_pct: number
+  model_ll: number
+  mkt_ll: number
+  ll_diff: number   // mkt_ll - model_ll (positive = model won)
   is_blue: boolean
   league: string
   series_type: string | null
@@ -42,6 +45,7 @@ interface ChartPoint {
 }
 
 const TIME_FRAMES = ['1M', '3M', '6M', '1Y', 'All']
+const CLAMP = (p: number) => Math.max(1e-6, Math.min(1 - 1e-6, p))
 
 function cutoff(frame: string): number {
   const now = Date.now()
@@ -57,11 +61,17 @@ function fmtTs(ts: number) {
   return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
 
+function avgLL(pts: ChartPoint[], key: 'model_ll' | 'mkt_ll') {
+  if (!pts.length) return null
+  return pts.reduce((s, p) => s + p[key], 0) / pts.length
+}
+
 function CustomTooltip({ active, payload }: { active?: boolean; payload?: { payload: ChartPoint }[] }) {
   if (!active || !payload?.length) return null
   const pt = payload[0].payload
+  const llColor = pt.ll_diff > 0 ? 'text-green-400' : pt.ll_diff < 0 ? 'text-red-400' : 'text-gray-400'
   return (
-    <div className="bg-gray-900 border border-gray-700 rounded p-3 text-xs shadow-xl" style={{ minWidth: 180 }}>
+    <div className="bg-gray-900 border border-gray-700 rounded p-3 text-xs shadow-xl" style={{ minWidth: 200 }}>
       <div className="font-semibold text-gray-200 mb-1">
         {new Date(pt.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit', timeZone: 'UTC' })}
         {' · '}{pt.league}
@@ -71,7 +81,9 @@ function CustomTooltip({ active, payload }: { active?: boolean; payload?: { payl
         vs <span className="text-gray-200">{pt.opponent}</span>{' '}
         <span className="text-gray-600">({pt.is_blue ? 'Blue' : 'Red'} side)</span>
       </div>
-      <div className="space-y-0.5">
+
+      {/* Win probabilities */}
+      <div className="space-y-0.5 mb-2">
         <div className="flex justify-between gap-8">
           <span className="text-gray-500">Model</span>
           <span className="text-gray-200">{(pt.model_pct * 100).toFixed(1)}%</span>
@@ -80,13 +92,33 @@ function CustomTooltip({ active, payload }: { active?: boolean; payload?: { payl
           <span className="text-gray-500">Market</span>
           <span className="text-gray-200">{(pt.market_pct * 100).toFixed(1)}%</span>
         </div>
-        <div className="flex justify-between gap-8 border-t border-gray-700 pt-1 mt-1">
+        <div className="flex justify-between gap-8 border-t border-gray-700 pt-1">
           <span className="text-gray-500">Model − Market</span>
           <span className={pt.diff >= 0 ? 'text-blue-400 font-semibold' : 'text-red-400 font-semibold'}>
             {pt.diff >= 0 ? '+' : ''}{(pt.diff * 100).toFixed(1)}pp
           </span>
         </div>
       </div>
+
+      {/* Log loss */}
+      <div className="border-t border-gray-700 pt-2 space-y-0.5">
+        <div className="text-gray-600 mb-0.5 uppercase tracking-wide" style={{ fontSize: 10 }}>Log loss</div>
+        <div className="flex justify-between gap-8">
+          <span className="text-gray-500">Model LL</span>
+          <span className="text-gray-200">{pt.model_ll.toFixed(3)}</span>
+        </div>
+        <div className="flex justify-between gap-8">
+          <span className="text-gray-500">Market LL</span>
+          <span className="text-gray-200">{pt.mkt_ll.toFixed(3)}</span>
+        </div>
+        <div className="flex justify-between gap-8 border-t border-gray-700 pt-1">
+          <span className="text-gray-500">Mkt LL − Mdl LL</span>
+          <span className={`font-semibold ${llColor}`}>
+            {pt.ll_diff >= 0 ? '+' : ''}{pt.ll_diff.toFixed(3)}
+          </span>
+        </div>
+      </div>
+
       <div className={`mt-2 font-bold ${pt.won ? 'text-green-400' : 'text-red-400'}`}>
         {pt.won ? 'WIN' : 'LOSS'}
       </div>
@@ -118,7 +150,6 @@ export default function ChartPage() {
     return [...s].sort()
   }, [games])
 
-  // Pick a default team once loaded
   useEffect(() => {
     if (!selectedTeam && teams.length) setSelectedTeam(teams[0])
   }, [teams, selectedTeam])
@@ -136,14 +167,20 @@ export default function ChartPage() {
       if (!isBlue && !isRed) continue
       const model_pct  = isBlue ? g.model_pred  : 1 - g.model_pred
       const market_pct = isBlue ? g.q_blue_win  : 1 - g.q_blue_win
+      const won        = isBlue ? g.blue_win === 1 : g.blue_win === 0
+      const model_ll   = won ? -Math.log(CLAMP(model_pct))  : -Math.log(CLAMP(1 - model_pct))
+      const mkt_ll     = won ? -Math.log(CLAMP(market_pct)) : -Math.log(CLAMP(1 - market_pct))
       pts.push({
         ts,
-        diff:  model_pct - market_pct,
-        won:   isBlue ? g.blue_win === 1 : g.blue_win === 0,
-        date:  g.date,
+        diff: model_pct - market_pct,
+        won,
+        date: g.date,
         opponent: isBlue ? g.red_team : g.blue_team,
         model_pct,
         market_pct,
+        model_ll,
+        mkt_ll,
+        ll_diff: mkt_ll - model_ll,
         is_blue: isBlue,
         league: g.league,
         series_type:    g.series_type,
@@ -161,8 +198,11 @@ export default function ChartPage() {
     return {
       modelMore: modelMore.length, modelMoreWR: wr(modelMore),
       mktMore:   mktMore.length,   mktMoreWR:   wr(mktMore),
-      total: chartData.length,
-      totalWR: chartData.filter(p => p.won).length / chartData.length,
+      total:     chartData.length,
+      totalWR:   chartData.filter(p => p.won).length / chartData.length,
+      avgModelLL: avgLL(chartData, 'model_ll'),
+      avgMktLL:   avgLL(chartData, 'mkt_ll'),
+      avgLLDiff:  chartData.reduce((s, p) => s + p.ll_diff, 0) / chartData.length,
     }
   }, [chartData])
 
@@ -224,38 +264,51 @@ export default function ChartPage() {
             {/* Summary cards */}
             {summary && (
               <div className="flex gap-4 mb-6 flex-wrap">
-                {[
-                  {
-                    label: 'Model > Market (>5pp)',
-                    count: summary.modelMore,
-                    wr: summary.modelMoreWR,
-                    color: 'text-blue-400',
-                  },
-                  {
-                    label: 'Market > Model (>5pp)',
-                    count: summary.mktMore,
-                    wr: summary.mktMoreWR,
-                    color: 'text-red-400',
-                  },
-                  {
-                    label: 'Total games',
-                    count: summary.total,
-                    wr: summary.totalWR,
-                    color: 'text-gray-200',
-                  },
-                ].map(card => (
-                  <div key={card.label} className="bg-gray-900 rounded px-4 py-3 border border-gray-800 text-sm">
-                    <div className="text-gray-500 text-xs mb-1">{card.label}</div>
-                    <div className={`font-semibold ${card.color}`}>{card.count} games</div>
-                    {card.wr != null && (
-                      <div className="text-xs text-gray-400">
-                        Win rate: <span className={card.wr >= 0.5 ? 'text-green-400' : 'text-red-400'}>
-                          {(card.wr * 100).toFixed(0)}%
-                        </span>
-                      </div>
-                    )}
+                <div className="bg-gray-900 rounded px-4 py-3 border border-gray-800 text-sm">
+                  <div className="text-gray-500 text-xs mb-1">Avg Model LL</div>
+                  <div className="font-mono font-semibold text-gray-200">{summary.avgModelLL?.toFixed(3)}</div>
+                </div>
+                <div className="bg-gray-900 rounded px-4 py-3 border border-gray-800 text-sm">
+                  <div className="text-gray-500 text-xs mb-1">Avg Market LL</div>
+                  <div className="font-mono font-semibold text-gray-200">{summary.avgMktLL?.toFixed(3)}</div>
+                </div>
+                <div className="bg-gray-900 rounded px-4 py-3 border border-gray-800 text-sm">
+                  <div className="text-gray-500 text-xs mb-1">Avg Mkt LL − Mdl LL</div>
+                  <div className={`font-mono font-semibold ${summary.avgLLDiff > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {summary.avgLLDiff >= 0 ? '+' : ''}{summary.avgLLDiff.toFixed(3)}
                   </div>
-                ))}
+                </div>
+                <div className="bg-gray-900 rounded px-4 py-3 border border-gray-800 text-sm">
+                  <div className="text-gray-500 text-xs mb-1">Model &gt; Market (&gt;5pp)</div>
+                  <div className="font-semibold text-blue-400">{summary.modelMore} games</div>
+                  {summary.modelMoreWR != null && (
+                    <div className="text-xs text-gray-400">
+                      WR: <span className={summary.modelMoreWR >= 0.5 ? 'text-green-400' : 'text-red-400'}>
+                        {(summary.modelMoreWR * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                  )}
+                </div>
+                <div className="bg-gray-900 rounded px-4 py-3 border border-gray-800 text-sm">
+                  <div className="text-gray-500 text-xs mb-1">Market &gt; Model (&gt;5pp)</div>
+                  <div className="font-semibold text-red-400">{summary.mktMore} games</div>
+                  {summary.mktMoreWR != null && (
+                    <div className="text-xs text-gray-400">
+                      WR: <span className={summary.mktMoreWR >= 0.5 ? 'text-green-400' : 'text-red-400'}>
+                        {(summary.mktMoreWR * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                  )}
+                </div>
+                <div className="bg-gray-900 rounded px-4 py-3 border border-gray-800 text-sm">
+                  <div className="text-gray-500 text-xs mb-1">Total games</div>
+                  <div className="font-semibold text-gray-200">{summary.total}</div>
+                  <div className="text-xs text-gray-400">
+                    WR: <span className={summary.totalWR >= 0.5 ? 'text-green-400' : 'text-red-400'}>
+                      {(summary.totalWR * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -297,11 +350,7 @@ export default function ChartPage() {
                 />
                 <Scatter data={chartData} isAnimationActive={false}>
                   {chartData.map((pt, i) => (
-                    <Cell
-                      key={i}
-                      fill={pt.won ? '#4ade80' : '#f87171'}
-                      fillOpacity={0.8}
-                    />
+                    <Cell key={i} fill={pt.won ? '#4ade80' : '#f87171'} fillOpacity={0.8} />
                   ))}
                 </Scatter>
               </ScatterChart>
@@ -310,8 +359,8 @@ export default function ChartPage() {
             <p className="text-xs text-gray-600 mt-2">
               <span className="text-green-400">Green</span> = win ·{' '}
               <span className="text-red-400">Red</span> = loss.
-              Y-axis shows model win probability minus market win probability for {selectedTeam}.
-              Positive = model was more bullish than market.
+              Y-axis: model win% minus market win% for {selectedTeam}.
+              Hover a dot for full log loss breakdown.
             </p>
           </>
         )}
