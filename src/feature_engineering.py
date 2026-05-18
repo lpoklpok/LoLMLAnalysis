@@ -6,9 +6,14 @@ ELO is computed globally across all leagues (so players carry ELO when
 they switch leagues), then the output is filtered to LEC/LPL/LCK for
 model training.
 
+Supports incremental mode (default): on subsequent runs only processes
+games newer than the last checkpoint, saving a ~10x speedup on the
+daily pipeline.
+
 Output: data/processed/features.csv
 """
 
+import json
 import os
 from pathlib import Path
 from collections import defaultdict
@@ -16,7 +21,8 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
-PROCESSED_DIR = Path(os.path.dirname(__file__)) / '..' / 'data' / 'processed'
+PROCESSED_DIR   = Path(os.path.dirname(__file__)) / '..' / 'data' / 'processed'
+CHECKPOINT_PATH = PROCESSED_DIR / 'fe_checkpoint.json'
 
 MAJOR_LEAGUES = {'LEC', 'LPL', 'LCK'}
 
@@ -81,6 +87,90 @@ def _rolling_winrate(history: list[int], n: int = 10) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Checkpoint serialisation
+# ---------------------------------------------------------------------------
+
+class _NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        return super().default(obj)
+
+
+def _save_checkpoint(
+        elo_map, player_last_played, player_last_split,
+        team_history, h2h, player_gd15, team_gd20,
+        team_outperf, team_outperf_elo, team_outperf_staleness,
+        team_stats, series_record, roster_state, last_processed_date):
+
+    def ts(v):
+        return v.isoformat() if hasattr(v, 'isoformat') else str(v)
+
+    checkpoint = {
+        'last_processed_date':    ts(last_processed_date),
+        'elo_map':                elo_map,
+        'player_last_played':     {p: ts(v) for p, v in player_last_played.items()},
+        'player_last_split':      {k: list(v) for k, v in player_last_split.items()},
+        'team_history':           dict(team_history),
+        'h2h':                    {'|||'.join(k): v for k, v in h2h.items()},
+        'player_gd15':            dict(player_gd15),
+        'team_gd20':              dict(team_gd20),
+        'team_outperf':           dict(team_outperf),
+        'team_outperf_elo':       dict(team_outperf_elo),
+        'team_outperf_staleness': dict(team_outperf_staleness),
+        'team_stats':             {t: dict(d) for t, d in team_stats.items()},
+        'series_record': {
+            json.dumps([list(k[0])] + list(k[1:]), cls=_NumpyEncoder): v
+            for k, v in series_record.items()
+        },
+        'roster_state': roster_state,
+    }
+    with open(CHECKPOINT_PATH, 'w') as f:
+        json.dump(checkpoint, f, cls=_NumpyEncoder)
+
+
+def _load_checkpoint():
+    if not CHECKPOINT_PATH.exists():
+        return None
+    with open(CHECKPOINT_PATH) as f:
+        c = json.load(f)
+
+    elo_map            = c['elo_map']
+    player_last_played = {p: pd.Timestamp(v) for p, v in c['player_last_played'].items()}
+    player_last_split  = {k: tuple(v) for k, v in c['player_last_split'].items()}
+    team_history       = defaultdict(list, {k: list(v) for k, v in c['team_history'].items()})
+    h2h                = defaultdict(list, {tuple(k.split('|||')): list(v) for k, v in c['h2h'].items()})
+    player_gd15        = defaultdict(list, {k: list(v) for k, v in c['player_gd15'].items()})
+    team_gd20          = defaultdict(list, {k: list(v) for k, v in c['team_gd20'].items()})
+    team_outperf       = defaultdict(list, {k: list(v) for k, v in c['team_outperf'].items()})
+    team_outperf_elo   = defaultdict(list, {k: list(v) for k, v in c['team_outperf_elo'].items()})
+    team_outperf_staleness = defaultdict(int, c['team_outperf_staleness'])
+
+    team_stats: dict = defaultdict(lambda: defaultdict(list))
+    for t, d in c['team_stats'].items():
+        team_stats[t] = defaultdict(list, {k: list(v) for k, v in d.items()})
+
+    series_record: dict = {}
+    for s, v in c['series_record'].items():
+        parts = json.loads(s)
+        key = (tuple(parts[0]),) + tuple(parts[1:])
+        series_record[key] = v
+
+    roster_state = c.get('roster_state', {})
+
+    last_date = pd.Timestamp(c['last_processed_date'])
+    if last_date.tzinfo is None:
+        last_date = last_date.tz_localize('UTC')
+
+    return (last_date, elo_map, player_last_played, player_last_split,
+            team_history, h2h, player_gd15, team_gd20, team_outperf,
+            team_outperf_elo, team_outperf_staleness, team_stats, series_record,
+            roster_state)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -138,36 +228,61 @@ def _apply_elo_decay(players: list[str], elo_map: dict, league: str,
 
 
 def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
-                   split_reset_factor: float | None = None) -> pd.DataFrame:
+                   split_reset_factor: float | None = None,
+                   incremental: bool = True) -> pd.DataFrame:
     """
     decay_halflife:     continuous time-based ELO decay (days). None = off.
     split_reset_factor: one-time fraction of deviation lost at each split
                         boundary (e.g. 0.5 = halve deviation on first game
-                        of each new split). None = off. Applied instead of
-                        or in addition to halflife decay.
+                        of each new split). None = off.
+    incremental:        if True, load checkpoint and process only new games.
     """
     path = PROCESSED_DIR / 'games_with_odds.csv'
     df = pd.read_csv(path, low_memory=False)
     df['date'] = pd.to_datetime(df['date'], utc=True)
     df = df.sort_values('date').reset_index(drop=True)
 
-    elo_map: dict[str, float] = {}
-    player_last_played: dict[str, object] = {}   # player -> last game date (for ELO decay)
-    player_last_split: dict[str, tuple] = {}      # player -> (year, split) of last game
-    team_history: dict[str, list[int]] = defaultdict(list)
-    h2h: dict[tuple, list[int]] = defaultdict(list)
-    player_gd15: dict[str, list[float]] = defaultdict(list)
-    team_gd20: dict[str, list[float]] = defaultdict(list)
-    team_outperf: dict[str, list[float]] = defaultdict(list)
-    team_outperf_elo: dict[str, list[float]] = defaultdict(list)
-    # Games played since last odds-based outperf update (staleness guard)
-    team_outperf_staleness: dict[str, int] = defaultdict(int)
-    # Objective / margin-of-victory histories (from each team's perspective)
-    team_stats: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
-    # Series score tracker: series_key -> {team: wins}
-    series_record: dict[tuple, dict[str, int]] = {}
+    ckpt = _load_checkpoint() if incremental else None
+    existing_features_all   = None
+    existing_features_major = None
+    roster_state: dict[str, list[str]] = {}
 
-    rows = []
+    if ckpt is not None:
+        (last_date, elo_map, player_last_played, player_last_split,
+         team_history, h2h, player_gd15, team_gd20, team_outperf,
+         team_outperf_elo, team_outperf_staleness, team_stats, series_record,
+         roster_state) = ckpt
+
+        new_df = df[df['date'] > last_date]
+        if new_df.empty:
+            print(f"No new games since {last_date.date()} — skipping feature engineering.")
+            return pd.read_csv(PROCESSED_DIR / 'features.csv', low_memory=False)
+
+        print(f"Incremental: processing {len(new_df)} new games after {last_date.date()}")
+        df = new_df.reset_index(drop=True)
+
+        feat_all_path = PROCESSED_DIR / 'features_all.csv'
+        feat_path     = PROCESSED_DIR / 'features.csv'
+        if feat_all_path.exists():
+            existing_features_all   = pd.read_csv(feat_all_path, low_memory=False)
+        if feat_path.exists():
+            existing_features_major = pd.read_csv(feat_path, low_memory=False)
+    else:
+        elo_map                = {}
+        player_last_played     = {}
+        player_last_split      = {}
+        team_history           = defaultdict(list)
+        h2h                    = defaultdict(list)
+        player_gd15            = defaultdict(list)
+        team_gd20              = defaultdict(list)
+        team_outperf           = defaultdict(list)
+        team_outperf_elo       = defaultdict(list)
+        team_outperf_staleness = defaultdict(int)
+        team_stats             = defaultdict(lambda: defaultdict(list))
+        series_record          = {}
+
+    rows: list[dict] = []
+    last_processed_date = None
 
     for g in df.itertuples(index=False):
         blue_players = [getattr(g, f'blue_{p}_playername') for p in POSITIONS]
@@ -181,7 +296,7 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
         red_team  = str(g.red_team_teamname)
         blue_win  = int(g.blue_team_result)
 
-        league = g.league
+        league       = g.league
         current_date = g.date
 
         # --- ELO decay (mean reversion during inactivity, applied before snapshot) ---
@@ -386,6 +501,11 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
             player_last_played[p] = current_date
             player_last_split[p]  = (g.year, g.split)
 
+        # Update roster state with this game's lineup
+        roster_state[blue_team] = blue_players
+        roster_state[red_team]  = red_players
+        last_processed_date     = current_date
+
         team_history[blue_team].append(blue_win)
         team_history[red_team].append(1 - blue_win)
 
@@ -472,52 +592,47 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
             if red_vals[key] is not None:
                 team_stats[red_team][key].append(red_vals[key])
 
-    features = pd.DataFrame(rows)
+    # --- Merge new rows with existing features ---
+    new_rows = pd.DataFrame(rows)
 
-    # Filter to major leagues for modeling
-    features_major = features[features['league'].isin(MAJOR_LEAGUES)].copy()
+    if existing_features_all is not None:
+        features_all = pd.concat([existing_features_all, new_rows], ignore_index=True)
+    else:
+        features_all = new_rows
 
-    features.to_csv(PROCESSED_DIR / 'features_all.csv', index=False)
+    new_major        = new_rows[new_rows['league'].isin(MAJOR_LEAGUES)]
+    if existing_features_major is not None:
+        features_major = pd.concat([existing_features_major, new_major], ignore_index=True)
+    else:
+        features_major = features_all[features_all['league'].isin(MAJOR_LEAGUES)].copy()
+
+    features_all.to_csv(PROCESSED_DIR / 'features_all.csv', index=False)
     features_major.to_csv(PROCESSED_DIR / 'features.csv', index=False)
 
-    # Save ELO state and last-known roster for future game prediction
-    import json
+    # --- Save checkpoint for next incremental run ---
+    if last_processed_date is not None:
+        _save_checkpoint(
+            elo_map, player_last_played, player_last_split,
+            team_history, h2h, player_gd15, team_gd20,
+            team_outperf, team_outperf_elo, team_outperf_staleness,
+            team_stats, series_record, roster_state, last_processed_date)
+
+    # --- Save ELO state for predict_upcoming.py ---
     elo_state = {
-        'elo_map': elo_map,
+        'elo_map':          elo_map,
         'player_last_split': {k: list(v) for k, v in player_last_split.items()},
     }
     with open(PROCESSED_DIR / 'elo_state.json', 'w') as f:
-        json.dump(elo_state, f)
+        json.dump(elo_state, f, cls=_NumpyEncoder)
 
-    # Save most recent 5-man lineup per team (for upcoming game roster lookup)
-    roster_map: dict[str, list[str]] = {}
-    for g in features.itertuples(index=False):
-        bp = [g.blue_team]  # placeholder — actual players not in features
-        roster_map[g.blue_team] = getattr(g, 'blue_team', None)
-        roster_map[g.red_team]  = getattr(g, 'red_team', None)
-
-    # Build from raw data instead
-    raw = pd.read_csv(PROCESSED_DIR / 'games_with_odds.csv', low_memory=False)
-    raw['date'] = pd.to_datetime(raw['date'], utc=True)
-    raw = raw.sort_values('date')
-    roster_rows = []
-    for _, g in raw.iterrows():
-        bp = [g.get(f'blue_{p}_playername') for p in POSITIONS]
-        rp = [g.get(f'red_{p}_playername')  for p in POSITIONS]
-        if any(pd.isna(x) for x in bp + rp):
-            continue
-        roster_rows.append({'team': str(g['blue_team_teamname']), 'players': bp, 'date': str(g['date'])})
-        roster_rows.append({'team': str(g['red_team_teamname']),  'players': rp, 'date': str(g['date'])})
-
-    # Keep latest roster per team
-    latest: dict[str, dict] = {}
-    for row in roster_rows:
-        latest[row['team']] = row
+    # --- Save roster state for predict_upcoming.py ---
     with open(PROCESSED_DIR / 'roster_state.json', 'w') as f:
-        json.dump({t: r['players'] for t, r in latest.items()}, f, indent=2)
+        json.dump(roster_state, f, indent=2)
 
-    print(f"All leagues:    {len(features):,} games")
-    print(f"Major leagues:  {len(features_major):,} games")
+    n_new = len(new_rows)
+    print(f"New games processed: {n_new:,}")
+    print(f"All leagues total:   {len(features_all):,} games")
+    print(f"Major leagues total: {len(features_major):,} games")
     print(f"\nFeature columns: {list(features_major.columns)}")
     print(f"\nMissing values:\n{features_major.isna().sum()}")
 

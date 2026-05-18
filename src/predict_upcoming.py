@@ -1,16 +1,14 @@
 """
 predict_upcoming.py
-Fetches upcoming LCK/LEC matches from Leaguepedia, infers current rosters
-from the last known OE game per team, applies current ELO state, and
-generates model predictions for games not yet played.
+Fetches upcoming LCK/LEC matches from the lolesports.com schedule API,
+infers current rosters from the last known OE game per team, applies
+current ELO state, and generates model predictions for games not yet played.
 
 Output: data/processed/upcoming_predictions.csv
 """
 
 import json
-import math
 import os
-import time
 from pathlib import Path
 
 import numpy as np
@@ -18,7 +16,6 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import log_loss
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from supabase import create_client
@@ -28,7 +25,6 @@ load_dotenv(Path(os.path.dirname(__file__)) / '..' / '.env')
 PROCESSED_DIR = Path(os.path.dirname(__file__)) / '..' / 'data' / 'processed'
 
 POSITIONS      = ['top', 'jng', 'mid', 'bot', 'sup']
-TARGET_LEAGUES = {'LCK', 'LEC'}
 _ELO_TIER      = {'LCK': 1620, 'LPL': 1620, 'LEC': 1500,
                   'LCS': 1380, 'LTA': 1380, 'LTA N': 1380, 'LTA S': 1380, 'LCKC': 1380}
 
@@ -36,29 +32,41 @@ FEATS = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_dif
 FILL  = {'elo_diff': 0.0, 'rwr_diff': 0.0, 'h2h_wr': 0.5,
          'playoffs': 0, 'gd15_diff': 0.0, 'outperf_diff': 0.0}
 
-# Match any 2026 LCK or LEC tab (avoids hardcoding split names)
-LEAGUEPEDIA_TAB_FILTER = "(Tab LIKE '%LCK/2026%' OR Tab LIKE '%LEC/2026%')"
+# lolesports.com schedule API
+_LS_URL     = 'https://esports-api.lolesports.com/persisted/gw/getSchedule'
+_LS_API_KEY = '0TvQnueqKa5mxJntVWt0w4LpLfEkrV1Ta8rQBb9Z'
+_LS_LEAGUES = {
+    'LCK': '98767991302996019',
+    'LEC': '98767991310872058',
+}
 
-# Team name normalisation: Leaguepedia → OE canonical
+# Team name normalisation: lolesports display name → OE canonical
 _TEAM_NORM = {
-    'Kiwoom DRX':      'Kiwoom DRX',
-    'DRX':             'Kiwoom DRX',
-    'Gen.G':           'Gen.G',
-    'T1':              'T1',
-    'KT Rolster':      'KT Rolster',
-    'Hanwha Life Esports': 'Hanwha Life Esports',
-    'BNK FEARX':       'BNK FEARX',
-    'Nongshim RedForce': 'Nongshim RedForce',
-    'DN SOOPers':      'DN SOOPers',
-    'G2 Esports':      'G2 Esports',
-    'Fnatic':          'Fnatic',
-    'Team Vitality':   'Team Vitality',
-    'Karmine Corp':    'Karmine Corp',
-    'Movistar KOI':    'Movistar KOI',
-    'Natus Vincere':   'Natus Vincere',
-    'SK Gaming':       'SK Gaming',
-    'GiantX':          'GiantX',
-    'Shifters':        'Shifters',
+    # LCK
+    'T1':                       'T1',
+    'Gen.G':                    'Gen.G',
+    'KT Rolster':               'KT Rolster',
+    'Hanwha Life Esports':      'Hanwha Life Esports',
+    'Kiwoom DRX':               'Kiwoom DRX',
+    'DRX':                      'Kiwoom DRX',
+    'BNK FearX':                'BNK FEARX',
+    'BNK FEARX':                'BNK FEARX',
+    'Nongshim RedForce':        'Nongshim RedForce',
+    'DN Freecs':                'DN SOOPers',
+    'DN SOOPers':               'DN SOOPers',
+    'OK BRION':                 'OK BRION',
+    'Dplus KIA':                'Dplus KIA',
+    # LEC
+    'G2 Esports':               'G2 Esports',
+    'Fnatic':                   'Fnatic',
+    'Team Vitality':            'Team Vitality',
+    'Karmine Corp':             'Karmine Corp',
+    'Movistar KOI':             'Movistar KOI',
+    'Natus Vincere':            'Natus Vincere',
+    'SK Gaming':                'SK Gaming',
+    'GiantX':                   'GiantX',
+    'Team Heretics':            'Team Heretics',
+    'Shifters':                 'Shifters',
 }
 
 
@@ -71,51 +79,75 @@ def _starting_elo(league: str) -> float:
 
 
 def fetch_upcoming(days_ahead: int = 14) -> pd.DataFrame:
-    """Query Leaguepedia for upcoming LCK/LEC matches."""
-    now = pd.Timestamp.utcnow()
+    """Query the lolesports schedule API for upcoming LCK/LEC matches."""
+    now    = pd.Timestamp.utcnow()
     cutoff = now + pd.Timedelta(days=days_ahead)
-    params = {
-        'action':  'cargoquery',
-        'tables':  'MatchSchedule',
-        'fields':  'Team1,Team2,DateTime_UTC,BestOf,Tab,Winner',
-        'where':   f"DateTime_UTC > '{now.strftime('%Y-%m-%d %H:%M:%S')}' "
-                   f"AND DateTime_UTC < '{cutoff.strftime('%Y-%m-%d %H:%M:%S')}' "
-                   f"AND {LEAGUEPEDIA_TAB_FILTER}",
-        'limit':   '100',
-        'format':  'json',
-    }
+    rows   = []
 
-    delays = [60, 120, 180, 240, 300]
-    for attempt, delay in enumerate(delays):
-        try:
-            r = requests.get(
-                'https://lol.fandom.com/api.php', params=params,
-                headers={'User-Agent': 'LoLMLAnalysis/1.0'}, timeout=15
-            )
-            data = r.json()
-            if 'cargoquery' in data:
-                rows = [d['title'] for d in data['cargoquery']]
-                if not rows:
-                    print("  No results — schedule may not be posted yet")
-                    return pd.DataFrame()
-                df = pd.DataFrame(rows)
-                df['DateTime_UTC'] = pd.to_datetime(df['DateTime_UTC'], utc=True, errors='coerce')
-                df = df[df['Winner'].isna() | (df['Winner'] == '')]
-                df['league'] = df['Tab'].str.split('/').str[0]
-                print(f"  Found tabs: {df['Tab'].unique().tolist()}")
-                return df
-            if 'error' in data and data['error']['code'] == 'ratelimited':
-                print(f"Rate limited, waiting {delay}s (attempt {attempt+1}/{len(delays)})...")
-                time.sleep(delay)
-            else:
-                print(f"Unexpected API response: {data}")
+    for league, league_id in _LS_LEAGUES.items():
+        page_token = None
+        while True:
+            params = {'hl': 'en-US', 'leagueId': league_id}
+            if page_token:
+                params['pageToken'] = page_token
+
+            try:
+                r = requests.get(
+                    _LS_URL, params=params,
+                    headers={'x-api-key': _LS_API_KEY},
+                    timeout=15,
+                )
+                r.raise_for_status()
+                data = r.json()
+            except Exception as e:
+                print(f"  Error fetching {league} schedule: {e}")
                 break
-        except Exception as e:
-            print(f"Request error: {e}")
-            time.sleep(delay)
 
-    print("Leaguepedia rate limit not cleared after all retries — skipping upcoming predictions.")
-    return pd.DataFrame()
+            schedule = data.get('data', {}).get('schedule', {})
+            events   = schedule.get('events', [])
+
+            past_window = False
+            for event in events:
+                if event.get('type') != 'match':
+                    continue
+
+                start = pd.Timestamp(event['startTime'])
+
+                # Stop paging if we've gone past our window
+                if start > cutoff:
+                    past_window = True
+                    break
+
+                if event.get('state') != 'unstarted' or start <= now:
+                    continue
+
+                match = event.get('match', {})
+                teams = match.get('teams', [])
+                if len(teams) < 2:
+                    continue
+
+                rows.append({
+                    'Team1':        teams[0]['name'],
+                    'Team2':        teams[1]['name'],
+                    'DateTime_UTC': start,
+                    'BestOf':       match.get('strategy', {}).get('count', 1),
+                    'league':       league,
+                })
+
+            # Follow newer-events page if we haven't reached the cutoff yet
+            newer = schedule.get('pages', {}).get('newer')
+            if newer and not past_window:
+                page_token = newer
+            else:
+                break
+
+    if not rows:
+        print("  No upcoming matches found in the lolesports schedule.")
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows).sort_values('DateTime_UTC').reset_index(drop=True)
+    print(f"  Found {len(df)} upcoming games across {df['league'].nunique()} league(s)")
+    return df
 
 
 def load_state() -> tuple[dict, dict, pd.DataFrame]:
@@ -147,26 +179,26 @@ def predict_game(blue_team: str, red_team: str, league: str,
         print(f"  No roster found for {blue_team} or {red_team}")
         return None
 
-    start = _starting_elo(league)
+    start     = _starting_elo(league)
     blue_elos = [elo_map.get(p, start) for p in blue_players]
     red_elos  = [elo_map.get(p, start) for p in red_players]
     elo_diff  = float(np.mean(blue_elos) - np.mean(red_elos))
 
     # Pull latest rolling features from last known game for each team
     def latest_feat(team, col):
-        rows = features[(features['blue_team'] == team) | (features['red_team'] == team)]
-        if rows.empty:
+        mask = (features['blue_team'] == team) | (features['red_team'] == team)
+        team_rows = features[mask]
+        if team_rows.empty:
             return np.nan
-        last = rows.iloc[-1]
+        last = team_rows.iloc[-1]
         if last['blue_team'] == team:
             return last[col]
         # flip sign for diff features when team was on red side
-        flip_cols = {'rwr_diff', 'h2h_wr', 'gd15_diff', 'outperf_diff'}
-        if col in flip_cols:
+        if col in {'rwr_diff', 'h2h_wr', 'gd15_diff', 'outperf_diff'}:
             return -last[col] if not pd.isna(last[col]) else np.nan
         return last[col]
 
-    rwr_diff     = latest_feat(blue_team, 'rwr_diff')   # approximate
+    rwr_diff     = latest_feat(blue_team, 'rwr_diff')
     h2h_wr       = latest_feat(blue_team, 'h2h_wr')
     gd15_diff    = latest_feat(blue_team, 'gd15_diff')
     outperf_diff = latest_feat(blue_team, 'outperf_diff')
@@ -182,13 +214,13 @@ def predict_game(blue_team: str, red_team: str, league: str,
     pred = float(model.predict_proba(row.fillna(FILL))[:, 1][0])
 
     return {
-        'blue_team':    blue_team,
-        'red_team':     red_team,
-        'league':       league,
-        'blue_elo':     round(np.mean(blue_elos), 1),
-        'red_elo':      round(np.mean(red_elos), 1),
-        'elo_diff':     round(elo_diff, 1),
-        'pred_blue_win': round(pred, 4),
+        'blue_team':      blue_team,
+        'red_team':       red_team,
+        'league':         league,
+        'blue_elo':       round(np.mean(blue_elos), 1),
+        'red_elo':        round(np.mean(red_elos), 1),
+        'elo_diff':       round(elo_diff, 1),
+        'pred_blue_win':  round(pred, 4),
     }
 
 
@@ -199,21 +231,19 @@ def run():
     print("Training model on 2024-2025...")
     model = train_model(features)
 
-    print("Fetching upcoming matches from Leaguepedia...")
+    print("Fetching upcoming matches from lolesports...")
     upcoming = fetch_upcoming(days_ahead=14)
 
     if upcoming.empty:
         print("No upcoming matches found.")
         return
 
-    print(f"Found {len(upcoming)} upcoming games\n")
-
     results = []
     for _, row in upcoming.iterrows():
-        blue = _norm_team(row['Team1'])
-        red  = _norm_team(row['Team2'])
+        blue   = _norm_team(row['Team1'])
+        red    = _norm_team(row['Team2'])
         league = row['league']
-        dt = row['DateTime_UTC']
+        dt     = row['DateTime_UTC']
 
         pred = predict_game(blue, red, league, elo_map, roster_state, features, model)
         if pred:
