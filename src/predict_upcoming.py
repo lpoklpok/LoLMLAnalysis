@@ -80,7 +80,7 @@ def _starting_elo(league: str) -> float:
 
 def fetch_upcoming(days_ahead: int = 14) -> pd.DataFrame:
     """Query the lolesports schedule API for upcoming LCK/LEC matches."""
-    now    = pd.Timestamp.utcnow()
+    now    = pd.Timestamp.now('UTC')
     cutoff = now + pd.Timedelta(days=days_ahead)
     rows   = []
 
