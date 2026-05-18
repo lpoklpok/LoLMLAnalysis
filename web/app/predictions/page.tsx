@@ -49,6 +49,16 @@ interface Prediction {
   role_h2h: RoleH2H[] | null
   poly_prob: number | null
   poly_volume: number | null
+  poly_event_slug: string | null
+  poly_team1: string | null
+}
+
+interface LiveOdds {
+  slug: string
+  prob_team1: number
+  team1: string
+  team2: string
+  volume: number
 }
 
 // ---------- helpers ----------
@@ -161,11 +171,23 @@ function RoleH2HTable({ rows }: { rows: RoleH2H[] }) {
   )
 }
 
-function MatchCard({ game }: { game: Prediction }) {
+function MatchCard({ game, liveOdds }: { game: Prediction; liveOdds: Record<string, LiveOdds> }) {
   const p       = game.pred_blue_win
   const sp      = seriesProb(p, game.best_of)
   const blueWin = p >= 0.5
   const sePct   = game.pred_se != null ? Math.round(game.pred_se * 100) : null
+
+  // Resolve live Polymarket odds: prefer live fetch, fall back to stored poly_prob
+  const live = game.poly_event_slug ? liveOdds[game.poly_event_slug] : null
+  let polyProb: number | null = null
+  let polyVol: number | null = null
+  if (live) {
+    polyProb = live.team1 === game.blue_team ? live.prob_team1 : 1 - live.prob_team1
+    polyVol  = live.volume
+  } else if (game.poly_prob != null) {
+    polyProb = game.poly_prob
+    polyVol  = game.poly_volume
+  }
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 hover:border-gray-700 transition-colors flex flex-col gap-3">
@@ -204,16 +226,18 @@ function MatchCard({ game }: { game: Prediction }) {
       </div>
 
       {/* Polymarket comparison */}
-      {game.poly_prob != null && (
+      {polyProb != null && (
         <div className="border-t border-gray-800 pt-3">
           <div className="flex items-center justify-between mb-1.5">
-            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Polymarket</span>
-            <span className="text-xs text-gray-600">${(game.poly_volume ?? 0).toLocaleString(undefined, {maximumFractionDigits: 0})} vol</span>
+            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              Polymarket{live ? ' (live)' : ''}
+            </span>
+            <span className="text-xs text-gray-600">${(polyVol ?? 0).toLocaleString(undefined, {maximumFractionDigits: 0})} vol</span>
           </div>
           <div className="flex items-center gap-3 text-xs">
             <div className="flex items-center gap-1.5">
               <span className="text-gray-500">Market</span>
-              <span className="font-mono font-semibold text-white">{Math.round(game.poly_prob * 100)}%</span>
+              <span className="font-mono font-semibold text-white">{Math.round(polyProb * 100)}%</span>
             </div>
             <span className="text-gray-700">·</span>
             <div className="flex items-center gap-1.5">
@@ -222,7 +246,7 @@ function MatchCard({ game }: { game: Prediction }) {
             </div>
             <span className="text-gray-700">·</span>
             {(() => {
-              const delta = Math.round((sp - game.poly_prob) * 100)
+              const delta = Math.round((sp - polyProb) * 100)
               const color = Math.abs(delta) >= 5
                 ? (delta > 0 ? 'text-blue-400' : 'text-red-400')
                 : 'text-gray-500'
@@ -346,16 +370,19 @@ export default function PredictionsPage() {
   const [predictions, setPredictions] = useState<Prediction[]>([])
   const [modelInfo,   setModelInfo]   = useState<ModelInfo | null>(null)
   const [loading,     setLoading]     = useState(true)
+  const [liveOdds,    setLiveOdds]    = useState<Record<string, LiveOdds>>({})
 
   useEffect(() => {
     async function load() {
       setLoading(true)
-      const [predsRes, infoRes] = await Promise.all([
+      const [predsRes, infoRes, oddsRes] = await Promise.all([
         supabase.from('upcoming_predictions').select('*').order('date', { ascending: true }),
         supabase.from('model_info').select('*').eq('id', 1).single(),
+        fetch('/api/polymarket').then(r => r.ok ? r.json() : {}),
       ])
       setPredictions(predsRes.data ?? [])
       if (infoRes.data) setModelInfo(infoRes.data as ModelInfo)
+      setLiveOdds(oddsRes as Record<string, LiveOdds>)
       setLoading(false)
     }
     load()
@@ -414,7 +441,7 @@ export default function PredictionsPage() {
                         <div key={date}>
                           <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">{date}</h3>
                           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                            {games.map((g, i) => <MatchCard key={i} game={g} />)}
+                            {games.map((g, i) => <MatchCard key={i} game={g} liveOdds={liveOdds} />)}
                           </div>
                         </div>
                       ))}
