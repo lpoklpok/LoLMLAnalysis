@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
 
+export const revalidate = 120 // cache for 2 minutes server-side
+
 const POLY_URL = 'https://gamma-api.polymarket.com/events'
 
 // OE canonical name normalisation (mirrors predict_upcoming.py _TEAM_NORM)
@@ -62,7 +64,7 @@ export async function GET() {
       url.searchParams.set('limit', '100')
       url.searchParams.set('offset', String(offset))
 
-      const r = await fetch(url.toString(), { next: { revalidate: 0 } })
+      const r = await fetch(url.toString(), { next: { revalidate: 120 } })
       if (!r.ok) break
       const page: unknown = await r.json()
       if (!Array.isArray(page)) break
