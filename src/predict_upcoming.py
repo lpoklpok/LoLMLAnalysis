@@ -156,6 +156,7 @@ def fetch_polymarket_odds() -> dict:
         t2 = _norm_team(outcomes[1])
         result[frozenset([t1, t2])] = {
             'prob_team1': prob1, 'team1': t1, 'team2': t2, 'volume': vol,
+            'slug': event.get('slug', ''),
         }
 
     print(f"  Polymarket: found {len(result)} active LoL match markets")
@@ -363,6 +364,21 @@ def _safe(v) -> float | None:
         return None
 
 
+def _matchup_h2h_wr(blue_team: str, red_team: str, features: pd.DataFrame) -> float:
+    """Blue team's historical win rate against red team, looked up from their shared game history."""
+    mask = (
+        ((features['blue_team'] == blue_team) & (features['red_team'] == red_team)) |
+        ((features['blue_team'] == red_team)  & (features['red_team'] == blue_team))
+    )
+    rows = features[mask].dropna(subset=['h2h_wr'])
+    if len(rows) < 2:
+        return np.nan
+    last = rows.iloc[-1]
+    if last['blue_team'] == blue_team:
+        return float(last['h2h_wr'])
+    return 1.0 - float(last['h2h_wr'])  # invert: stored from the other team's blue perspective
+
+
 def predict_game(blue_team: str, red_team: str, league: str,
                  elo_map: dict, roster_state: dict, features: pd.DataFrame,
                  model: Pipeline, fim_inv: np.ndarray | None,
@@ -387,12 +403,12 @@ def predict_game(blue_team: str, red_team: str, league: str,
         last = team_rows.iloc[-1]
         if last['blue_team'] == team:
             return last[col]
-        if col in {'rwr_diff', 'h2h_wr', 'gd15_diff', 'outperf_diff'}:
+        if col in {'rwr_diff', 'gd15_diff', 'outperf_diff'}:
             return -last[col] if not pd.isna(last[col]) else np.nan
         return last[col]
 
     rwr_diff     = latest_feat(blue_team, 'rwr_diff')
-    h2h_wr       = latest_feat(blue_team, 'h2h_wr')
+    h2h_wr       = _matchup_h2h_wr(blue_team, red_team, features)  # specific to this matchup
     gd15_diff    = latest_feat(blue_team, 'gd15_diff')
     outperf_diff = latest_feat(blue_team, 'outperf_diff')
 
@@ -462,11 +478,15 @@ def run():
             pm = poly_odds.get(frozenset([blue, red]))
             if pm:
                 blue_prob = pm['prob_team1'] if pm['team1'] == blue else 1 - pm['prob_team1']
-                pred['poly_prob']   = round(blue_prob, 4)
-                pred['poly_volume'] = round(pm['volume'], 0)
+                pred['poly_prob']        = round(blue_prob, 4)
+                pred['poly_volume']      = round(pm['volume'], 0)
+                pred['poly_event_slug']  = pm['slug']
+                pred['poly_team1']       = pm['team1']
             else:
-                pred['poly_prob']   = None
-                pred['poly_volume'] = None
+                pred['poly_prob']        = None
+                pred['poly_volume']      = None
+                pred['poly_event_slug']  = None
+                pred['poly_team1']       = None
 
             results.append(pred)
             poly_str = f"  poly={pred['poly_prob']:.3f}" if pred['poly_prob'] else ''
