@@ -36,11 +36,8 @@ FEATS = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_dif
 FILL  = {'elo_diff': 0.0, 'rwr_diff': 0.0, 'h2h_wr': 0.5,
          'playoffs': 0, 'gd15_diff': 0.0, 'outperf_diff': 0.0}
 
-# Leaguepedia tab names for current splits
-LEAGUEPEDIA_TABS = [
-    'LCK/2026 Season/Summer Season',
-    'LEC/2026 Season/Summer Season',
-]
+# Match any 2026 LCK or LEC tab (avoids hardcoding split names)
+LEAGUEPEDIA_TAB_FILTER = "(Tab LIKE '%LCK/2026%' OR Tab LIKE '%LEC/2026%')"
 
 # Team name normalisation: Leaguepedia → OE canonical
 _TEAM_NORM = {
@@ -77,15 +74,13 @@ def fetch_upcoming(days_ahead: int = 14) -> pd.DataFrame:
     """Query Leaguepedia for upcoming LCK/LEC matches."""
     now = pd.Timestamp.utcnow()
     cutoff = now + pd.Timedelta(days=days_ahead)
-    tab_filter = ' OR '.join(f"Tab='{t}'" for t in LEAGUEPEDIA_TABS)
-
     params = {
         'action':  'cargoquery',
         'tables':  'MatchSchedule',
         'fields':  'Team1,Team2,DateTime_UTC,BestOf,Tab,Winner',
         'where':   f"DateTime_UTC > '{now.strftime('%Y-%m-%d %H:%M:%S')}' "
                    f"AND DateTime_UTC < '{cutoff.strftime('%Y-%m-%d %H:%M:%S')}' "
-                   f"AND ({tab_filter})",
+                   f"AND {LEAGUEPEDIA_TAB_FILTER}",
         'limit':   '100',
         'format':  'json',
     }
@@ -99,11 +94,15 @@ def fetch_upcoming(days_ahead: int = 14) -> pd.DataFrame:
             data = r.json()
             if 'cargoquery' in data:
                 rows = [d['title'] for d in data['cargoquery']]
+                if not rows:
+                    print("  No results — schedule may not be posted yet")
+                    return pd.DataFrame()
                 df = pd.DataFrame(rows)
-                df['DateTime_UTC'] = pd.to_datetime(df['DateTime_UTC'], utc=True)
+                df['DateTime_UTC'] = pd.to_datetime(df['DateTime_UTC'], utc=True, errors='coerce')
                 # Drop completed games (Winner already set)
                 df = df[df['Winner'].isna() | (df['Winner'] == '')]
                 df['league'] = df['Tab'].str.split('/').str[0]
+                print(f"  Found tabs: {df['Tab'].unique().tolist()}")
                 return df
             if 'error' in data and data['error']['code'] == 'ratelimited':
                 print(f"Rate limited, waiting 30s (attempt {attempt+1}/5)...")
