@@ -41,6 +41,7 @@ jobs:
 
       - name: Generate upcoming game predictions
         run: python src/predict_upcoming.py
+        continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

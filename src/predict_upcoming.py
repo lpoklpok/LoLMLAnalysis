@@ -85,7 +85,8 @@ def fetch_upcoming(days_ahead: int = 14) -> pd.DataFrame:
         'format':  'json',
     }
 
-    for attempt in range(5):
+    delays = [60, 120, 180, 240, 300]
+    for attempt, delay in enumerate(delays):
         try:
             r = requests.get(
                 'https://lol.fandom.com/api.php', params=params,
@@ -99,21 +100,21 @@ def fetch_upcoming(days_ahead: int = 14) -> pd.DataFrame:
                     return pd.DataFrame()
                 df = pd.DataFrame(rows)
                 df['DateTime_UTC'] = pd.to_datetime(df['DateTime_UTC'], utc=True, errors='coerce')
-                # Drop completed games (Winner already set)
                 df = df[df['Winner'].isna() | (df['Winner'] == '')]
                 df['league'] = df['Tab'].str.split('/').str[0]
                 print(f"  Found tabs: {df['Tab'].unique().tolist()}")
                 return df
             if 'error' in data and data['error']['code'] == 'ratelimited':
-                print(f"Rate limited, waiting 30s (attempt {attempt+1}/5)...")
-                time.sleep(30)
+                print(f"Rate limited, waiting {delay}s (attempt {attempt+1}/{len(delays)})...")
+                time.sleep(delay)
             else:
                 print(f"Unexpected API response: {data}")
                 break
         except Exception as e:
             print(f"Request error: {e}")
-            time.sleep(10)
+            time.sleep(delay)
 
+    print("Leaguepedia rate limit not cleared after all retries — skipping upcoming predictions.")
     return pd.DataFrame()
 
 
