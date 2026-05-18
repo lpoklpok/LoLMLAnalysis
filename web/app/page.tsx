@@ -87,6 +87,9 @@ export default function Dashboard() {
         <Link href="/games" className="text-sm text-yellow-400 hover:text-yellow-300 transition-colors">
           Game Explorer →
         </Link>
+        <Link href="/chart" className="text-sm text-purple-400 hover:text-purple-300 transition-colors">
+          Model vs Market →
+        </Link>
         <span className="text-xs text-gray-500">
           {loading ? 'Loading…' : `${(stats?.total_games ?? 0).toLocaleString()} games`}
         </span>

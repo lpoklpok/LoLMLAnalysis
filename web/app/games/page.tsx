@@ -234,6 +234,7 @@ export default function GamesPage() {
         <Link href="/players"     className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Player Lookup</Link>
         <Link href="/model"       className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Model</Link>
         <Link href="/predictions" className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Predictions</Link>
+        <Link href="/chart"       className="text-sm text-purple-400 hover:text-purple-300 transition-colors">Model vs Market</Link>
         <span className="text-sm text-yellow-400 font-medium">Game Explorer</span>
       </div>
 
