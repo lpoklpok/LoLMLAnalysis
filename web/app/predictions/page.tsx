@@ -217,12 +217,12 @@ function MatchCard({ game }: { game: Prediction }) {
             </div>
             <span className="text-gray-700">·</span>
             <div className="flex items-center gap-1.5">
-              <span className="text-gray-500">Model</span>
-              <span className="font-mono font-semibold text-white">{Math.round(game.pred_blue_win * 100)}%</span>
+              <span className="text-gray-500">Model (series)</span>
+              <span className="font-mono font-semibold text-white">{Math.round(sp * 100)}%</span>
             </div>
             <span className="text-gray-700">·</span>
             {(() => {
-              const delta = Math.round((game.pred_blue_win - game.poly_prob) * 100)
+              const delta = Math.round((sp - game.poly_prob) * 100)
               const color = Math.abs(delta) >= 5
                 ? (delta > 0 ? 'text-blue-400' : 'text-red-400')
                 : 'text-gray-500'
