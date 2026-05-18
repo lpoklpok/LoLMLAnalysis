@@ -4,6 +4,23 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import Link from 'next/link'
 
+// ---------- types ----------
+
+interface ModelFeature {
+  name: string
+  label: string
+  coef: number
+  se: number
+  r2: number
+}
+
+interface ModelInfo {
+  features: ModelFeature[]
+  mcfadden_r2: number
+  n_train: number
+  updated_at: string
+}
+
 interface Prediction {
   blue_team: string
   red_team: string
@@ -12,13 +29,18 @@ interface Prediction {
   red_elo: number
   elo_diff: number
   pred_blue_win: number
-  pred_se: number
+  pred_se: number | null
   best_of: number
-  model_name: string
+  model_name: string | null
   date: string
+  feat_rwr_diff: number | null
+  feat_h2h_wr: number | null
+  feat_gd15_diff: number | null
+  feat_outperf_diff: number | null
 }
 
-/** Probability that blue side wins a BO series, assuming i.i.d. games. */
+// ---------- helpers ----------
+
 function seriesProb(p: number, bestOf: number): number {
   if (bestOf === 1) return p
   if (bestOf === 3) return p * p * (3 - 2 * p)
@@ -26,7 +48,9 @@ function seriesProb(p: number, bestOf: number): number {
   return p
 }
 
-function pct(n: number) { return Math.round(n * 100) }
+function fmt(n: number, decimals = 0) {
+  return (n >= 0 ? '+' : '') + n.toFixed(decimals)
+}
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', {
@@ -40,19 +64,46 @@ function formatTime(iso: string) {
   }) + ' UTC'
 }
 
+// ---------- sub-components ----------
+
 function ProbBar({ blueP, label }: { blueP: number; label: string }) {
-  const b = pct(blueP)
-  const r = 100 - b
+  const b = Math.round(blueP * 100)
   return (
     <div>
       <div className="flex text-xs text-gray-400 mb-1">
         <span>{label}</span>
-        <span className="ml-auto">{b}% · {r}%</span>
+        <span className="ml-auto">{b}% · {100 - b}%</span>
       </div>
       <div className="h-1.5 rounded-full overflow-hidden bg-gray-700 flex">
         <div className="h-full bg-blue-500" style={{ width: `${b}%` }} />
-        <div className="h-full bg-red-500"  style={{ width: `${r}%` }} />
+        <div className="h-full bg-red-500"  style={{ width: `${100 - b}%` }} />
       </div>
+    </div>
+  )
+}
+
+function FeatureVal({
+  label, value, format, neutralAt,
+}: {
+  label: string
+  value: number | null
+  format: (v: number) => string
+  neutralAt?: number
+}) {
+  const missing = value === null || value === undefined
+  const neutral = neutralAt !== undefined ? neutralAt : 0
+  const positive = !missing && value! > neutral
+  const negative = !missing && value! < neutral
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-gray-500 truncate">{label}</span>
+      <span className={`font-mono text-xs shrink-0 ${
+        missing   ? 'text-gray-600' :
+        positive  ? 'text-green-400' :
+        negative  ? 'text-red-400' : 'text-gray-400'
+      }`}>
+        {missing ? '—' : format(value!)}
+      </span>
     </div>
   )
 }
@@ -61,12 +112,13 @@ function MatchCard({ game }: { game: Prediction }) {
   const p       = game.pred_blue_win
   const sp      = seriesProb(p, game.best_of)
   const blueWin = p >= 0.5
-  const sePct   = game.pred_se ? Math.round(game.pred_se * 100) : null
+  const sePct   = game.pred_se != null ? Math.round(game.pred_se * 100) : null
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 hover:border-gray-700 transition-colors">
-      {/* Header row */}
-      <div className="flex items-center justify-between mb-3">
+    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 hover:border-gray-700 transition-colors flex flex-col gap-3">
+
+      {/* Time + BO badge */}
+      <div className="flex items-center justify-between">
         <span className="text-xs text-gray-500">{formatTime(game.date)}</span>
         <span className="text-xs font-mono text-yellow-400 bg-yellow-400/10 border border-yellow-400/20 px-2 py-0.5 rounded">
           BO{game.best_of}
@@ -74,16 +126,14 @@ function MatchCard({ game }: { game: Prediction }) {
       </div>
 
       {/* Teams */}
-      <div className="flex items-start gap-2 mb-4">
+      <div className="flex items-start gap-2">
         <div className="flex-1 text-right">
           <p className={`font-semibold text-sm ${blueWin ? 'text-white' : 'text-gray-400'}`}>
             {game.blue_team}
           </p>
           <p className="text-xs text-blue-500 mt-0.5">Blue · {Math.round(game.blue_elo)}</p>
         </div>
-
         <span className="text-gray-600 text-xs mt-1 shrink-0">vs</span>
-
         <div className="flex-1">
           <p className={`font-semibold text-sm ${!blueWin ? 'text-white' : 'text-gray-400'}`}>
             {game.red_team}
@@ -100,56 +150,140 @@ function MatchCard({ game }: { game: Prediction }) {
         )}
       </div>
 
-      {/* Footer: SE + model */}
-      <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-800">
-        <span className="text-xs text-gray-600">
-          {game.model_name ?? 'Logistic Regression'}
-        </span>
-        {sePct !== null && (
-          <span className="text-xs text-gray-500">
-            ±{sePct}% SE
-          </span>
+      {/* Feature values */}
+      <div className="border-t border-gray-800 pt-3 grid grid-cols-2 gap-x-4 gap-y-1.5">
+        <FeatureVal
+          label="ELO Diff"
+          value={game.elo_diff}
+          format={v => fmt(v, 0)}
+        />
+        <FeatureVal
+          label="Win Rate Diff"
+          value={game.feat_rwr_diff}
+          format={v => fmt(v * 100, 1) + '%'}
+        />
+        <FeatureVal
+          label="H2H (Team 1)"
+          value={game.feat_h2h_wr}
+          format={v => (v * 100).toFixed(0) + '%'}
+          neutralAt={0.5}
+        />
+        <FeatureVal
+          label="GD@15 Diff"
+          value={game.feat_gd15_diff}
+          format={v => fmt(v, 0)}
+        />
+        <FeatureVal
+          label="Mkt Outperf"
+          value={game.feat_outperf_diff}
+          format={v => fmt(v * 100, 1) + '%'}
+        />
+      </div>
+
+      {/* Model + SE footer */}
+      <div className="flex items-center justify-between border-t border-gray-800 pt-3">
+        <span className="text-xs text-gray-600">{game.model_name ?? 'Logistic Regression'}</span>
+        {sePct != null && (
+          <span className="text-xs text-gray-500">±{sePct}% SE</span>
         )}
       </div>
     </div>
   )
 }
 
+function EquationPanel({ info }: { info: ModelInfo }) {
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-8">
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 mb-3">
+        <h2 className="text-sm font-semibold text-gray-200">Logistic Regression</h2>
+        <span className="text-xs text-gray-500">
+          McFadden R² = {info.mcfadden_r2.toFixed(3)} · trained on {info.n_train.toLocaleString()} games (2024–2025)
+        </span>
+      </div>
+
+      <p className="text-xs font-mono text-gray-400 mb-4">
+        log-odds(Team 1 wins) = β₁·x₁ + β₂·x₂ + …
+        <span className="text-gray-600 ml-2">[intercept excluded — side-neutral]</span>
+      </p>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-gray-500 border-b border-gray-800">
+              <th className="text-left pb-2 pr-4 font-medium">Feature</th>
+              <th className="text-right pb-2 pr-4 font-medium">Coef (std)</th>
+              <th className="text-right pb-2 pr-4 font-medium">±SE</th>
+              <th className="text-right pb-2 font-medium">R²</th>
+            </tr>
+          </thead>
+          <tbody>
+            {info.features.map(f => (
+              <tr key={f.name} className="border-b border-gray-800/40">
+                <td className="py-1.5 pr-4 text-gray-300">{f.label}</td>
+                <td className={`py-1.5 pr-4 text-right font-mono ${
+                  f.coef > 0 ? 'text-green-400' : f.coef < 0 ? 'text-red-400' : 'text-gray-400'
+                }`}>
+                  {f.coef >= 0 ? '+' : ''}{f.coef.toFixed(3)}
+                </td>
+                <td className="py-1.5 pr-4 text-right font-mono text-gray-500">
+                  {f.se.toFixed(3)}
+                </td>
+                <td className="py-1.5 text-right font-mono text-gray-400">
+                  {f.r2.toFixed(3)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <p className="text-xs text-gray-600 mt-3">
+        Coefficients on standardised scale (1 unit = 1 SD of feature). SE from Fisher information matrix. R² = squared Pearson correlation with outcome.
+      </p>
+    </div>
+  )
+}
+
+// ---------- page ----------
+
+const LEAGUE_STYLE: Record<string, string> = {
+  LCK: 'text-blue-400 border-blue-700',
+  LEC: 'text-purple-400 border-purple-700',
+}
+
 export default function PredictionsPage() {
   const [predictions, setPredictions] = useState<Prediction[]>([])
-  const [loading, setLoading]         = useState(true)
+  const [modelInfo,   setModelInfo]   = useState<ModelInfo | null>(null)
+  const [loading,     setLoading]     = useState(true)
 
   useEffect(() => {
     async function load() {
       setLoading(true)
-      const { data } = await supabase
-        .from('upcoming_predictions')
-        .select('*')
-        .order('date', { ascending: true })
-      setPredictions(data ?? [])
+      const [predsRes, infoRes] = await Promise.all([
+        supabase.from('upcoming_predictions').select('*').order('date', { ascending: true }),
+        supabase.from('model_info').select('*').eq('id', 1).single(),
+      ])
+      setPredictions(predsRes.data ?? [])
+      if (infoRes.data) setModelInfo(infoRes.data as ModelInfo)
       setLoading(false)
     }
     load()
   }, [])
 
-  // Group: league → date → games
   const leagues = ['LCK', 'LEC']
+
   const byLeagueDate = leagues.reduce<Record<string, Record<string, Prediction[]>>>(
     (acc, lg) => {
-      const lgGames = predictions.filter(p => p.league === lg)
-      acc[lg] = lgGames.reduce<Record<string, Prediction[]>>((inner, p) => {
-        const key = formatDate(p.date)
-        ;(inner[key] ??= []).push(p)
-        return inner
-      }, {})
+      acc[lg] = predictions
+        .filter(p => p.league === lg)
+        .reduce<Record<string, Prediction[]>>((inner, p) => {
+          const key = formatDate(p.date)
+          ;(inner[key] ??= []).push(p)
+          return inner
+        }, {})
       return acc
     }, {}
   )
-
-  const LEAGUE_STYLE: Record<string, string> = {
-    LCK: 'text-blue-400 border-blue-700',
-    LEC: 'text-purple-400 border-purple-700',
-  }
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
@@ -159,56 +293,54 @@ export default function PredictionsPage() {
       </header>
 
       <div className="px-6 py-4 border-b border-gray-800 flex gap-6 flex-wrap items-center">
-        <Link href="/"           className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Dashboard</Link>
-        <Link href="/players"    className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Player Lookup</Link>
-        <Link href="/model"      className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Model</Link>
+        <Link href="/"        className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Dashboard</Link>
+        <Link href="/players" className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Player Lookup</Link>
+        <Link href="/model"   className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Model</Link>
         <span className="text-sm text-green-400 font-medium">Predictions</span>
       </div>
 
       <div className="px-6 py-3 bg-gray-900/50 border-b border-gray-800 text-xs text-gray-500">
-        Side-neutral predictions — the model intercept (blue-side advantage ≈ +2%) is removed so probabilities reflect team quality only, not unknown side assignments. Team 1 is shown on the left.
+        Side-neutral predictions — blue-side advantage (~+2%) removed from intercept so probabilities reflect team quality only, not unknown side assignments.
+        Team 1 (left) = first team listed by lolesports.
       </div>
 
       <main className="px-6 py-6 max-w-5xl mx-auto">
         {loading ? (
-          <p className="text-gray-500 text-sm">Loading predictions…</p>
+          <p className="text-gray-500 text-sm">Loading…</p>
         ) : (
-          <div className="space-y-10">
-            {leagues.map(lg => {
-              const dateMap = byLeagueDate[lg]
-              if (!dateMap || Object.keys(dateMap).length === 0) return null
-              return (
-                <section key={lg}>
-                  <h2 className={`text-lg font-bold mb-4 pb-2 border-b ${LEAGUE_STYLE[lg]}`}>
-                    {lg}
-                  </h2>
-                  <div className="space-y-6">
-                    {Object.entries(dateMap).map(([date, games]) => (
-                      <div key={date}>
-                        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-                          {date}
-                        </h3>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                          {games.map((g, i) => <MatchCard key={i} game={g} />)}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              )
-            })}
+          <>
+            {modelInfo && <EquationPanel info={modelInfo} />}
 
-            {predictions.length === 0 && (
-              <p className="text-gray-500 text-sm">No upcoming predictions available.</p>
-            )}
-          </div>
+            <div className="space-y-10">
+              {leagues.map(lg => {
+                const dateMap = byLeagueDate[lg]
+                if (!dateMap || Object.keys(dateMap).length === 0) return null
+                return (
+                  <section key={lg}>
+                    <h2 className={`text-lg font-bold mb-4 pb-2 border-b ${LEAGUE_STYLE[lg]}`}>{lg}</h2>
+                    <div className="space-y-6">
+                      {Object.entries(dateMap).map(([date, games]) => (
+                        <div key={date}>
+                          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">{date}</h3>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                            {games.map((g, i) => <MatchCard key={i} game={g} />)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )
+              })}
+
+              {predictions.length === 0 && (
+                <p className="text-gray-500 text-sm">No upcoming predictions available.</p>
+              )}
+            </div>
+          </>
         )}
 
         <p className="mt-10 text-xs text-gray-600">
-          Per-game probability from logistic regression trained on 2024–2025 LCK/LEC/LPL.
-          Series probability assumes i.i.d. games at the same per-game rate.
-          SE computed via the delta method on the logistic regression fit.
-          Updated daily.
+          Series probability assumes i.i.d. games at the same per-game rate. Updated daily.
         </p>
       </main>
     </div>
