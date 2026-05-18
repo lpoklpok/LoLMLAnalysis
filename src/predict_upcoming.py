@@ -228,20 +228,36 @@ def fetch_upcoming(days_ahead: int = 14) -> pd.DataFrame:
     return df
 
 
-def load_state() -> tuple[dict, dict, pd.DataFrame, dict]:
+def load_state() -> tuple[dict, dict, pd.DataFrame, dict, dict, dict, dict]:
     with open(PROCESSED_DIR / 'elo_state.json') as f:
         elo_state = json.load(f)
     with open(PROCESSED_DIR / 'roster_state.json') as f:
         roster_state = json.load(f)
     features = pd.read_csv(PROCESSED_DIR / 'features.csv', low_memory=False)
     features['date'] = pd.to_datetime(features['date'], utc=True)
-    player_h2h_path = PROCESSED_DIR / 'player_h2h.json'
+
     player_h2h: dict = {}
+    player_h2h_path = PROCESSED_DIR / 'player_h2h.json'
     if player_h2h_path.exists():
         with open(player_h2h_path) as f:
             raw = json.load(f)
         player_h2h = {tuple(k.split('|||')): v for k, v in raw.items()}
-    return elo_state['elo_map'], roster_state, features, player_h2h
+
+    # Load per-player GD@15 and per-team outperf histories from checkpoint
+    # so diffs can be computed against the actual upcoming opponent
+    player_gd15: dict = {}
+    team_outperf: dict = {}
+    team_outperf_staleness: dict = {}
+    ckpt_path = PROCESSED_DIR / 'fe_checkpoint.json'
+    if ckpt_path.exists():
+        with open(ckpt_path) as f:
+            ckpt = json.load(f)
+        player_gd15            = ckpt.get('player_gd15', {})
+        team_outperf           = ckpt.get('team_outperf', {})
+        team_outperf_staleness = ckpt.get('team_outperf_staleness', {})
+
+    return (elo_state['elo_map'], roster_state, features, player_h2h,
+            player_gd15, team_outperf, team_outperf_staleness)
 
 
 def _role_h2h_info(blue_players: list, red_players: list, player_h2h: dict) -> list[dict]:
@@ -364,6 +380,40 @@ def _safe(v) -> float | None:
         return None
 
 
+GD15_ROLL  = 5
+OUTPERF_N  = 5
+
+
+def _team_rwr(team: str, features: pd.DataFrame) -> float:
+    """Team's rolling win rate from their most recent game."""
+    mask = (features['blue_team'] == team) | (features['red_team'] == team)
+    rows = features[mask].dropna(subset=['blue_rwr', 'red_rwr'])
+    if rows.empty:
+        return float('nan')
+    last = rows.iloc[-1]
+    return float(last['blue_rwr']) if last['blue_team'] == team else float(last['red_rwr'])
+
+
+def _team_gd15(players: list, player_gd15: dict) -> float:
+    """Mean rolling GD@15 for a lineup, matching feature_engineering constants."""
+    vals = []
+    for p in players:
+        hist = player_gd15.get(p, [])
+        if len(hist) >= 2:
+            vals.append(float(np.mean(hist[-GD15_ROLL:])))
+    return float(np.nanmean(vals)) if vals else float('nan')
+
+
+def _team_outperf(team: str, team_outperf: dict, staleness: dict) -> float:
+    """Rolling outperformance vs market for a team, NaN if stale."""
+    if staleness.get(team, 0) >= OUTPERF_N:
+        return float('nan')
+    hist = team_outperf.get(team, [])
+    if len(hist) < 3:
+        return float('nan')
+    return float(np.mean(hist[-OUTPERF_N:]))
+
+
 def _matchup_h2h_wr(blue_team: str, red_team: str, features: pd.DataFrame) -> float:
     """Blue team's historical win rate against red team, looked up from their shared game history."""
     mask = (
@@ -382,7 +432,10 @@ def _matchup_h2h_wr(blue_team: str, red_team: str, features: pd.DataFrame) -> fl
 def predict_game(blue_team: str, red_team: str, league: str,
                  elo_map: dict, roster_state: dict, features: pd.DataFrame,
                  model: Pipeline, fim_inv: np.ndarray | None,
-                 player_h2h: dict | None = None) -> dict | None:
+                 player_h2h: dict | None = None,
+                 player_gd15: dict | None = None,
+                 team_outperf: dict | None = None,
+                 team_outperf_staleness: dict | None = None) -> dict | None:
     blue_players = roster_state.get(blue_team)
     red_players  = roster_state.get(red_team)
 
@@ -395,22 +448,24 @@ def predict_game(blue_team: str, red_team: str, league: str,
     red_elos  = [elo_map.get(p, start) for p in red_players]
     elo_diff  = float(np.mean(blue_elos) - np.mean(red_elos))
 
-    def latest_feat(team, col):
-        mask      = (features['blue_team'] == team) | (features['red_team'] == team)
-        team_rows = features[mask]
-        if team_rows.empty:
-            return np.nan
-        last = team_rows.iloc[-1]
-        if last['blue_team'] == team:
-            return last[col]
-        if col in {'rwr_diff', 'gd15_diff', 'outperf_diff'}:
-            return -last[col] if not pd.isna(last[col]) else np.nan
-        return last[col]
+    # Each feature computed from each team's own recent history,
+    # then diff'd against the actual upcoming opponent (not last game's opponent)
+    blue_rwr     = _team_rwr(blue_team, features)
+    red_rwr      = _team_rwr(red_team,  features)
+    rwr_diff     = blue_rwr - red_rwr if not (np.isnan(blue_rwr) or np.isnan(red_rwr)) else np.nan
 
-    rwr_diff     = latest_feat(blue_team, 'rwr_diff')
-    h2h_wr       = _matchup_h2h_wr(blue_team, red_team, features)  # specific to this matchup
-    gd15_diff    = latest_feat(blue_team, 'gd15_diff')
-    outperf_diff = latest_feat(blue_team, 'outperf_diff')
+    h2h_wr       = _matchup_h2h_wr(blue_team, red_team, features)
+
+    _pg = player_gd15 or {}
+    blue_gd15    = _team_gd15(blue_players, _pg)
+    red_gd15     = _team_gd15(red_players,  _pg)
+    gd15_diff    = blue_gd15 - red_gd15 if not (np.isnan(blue_gd15) or np.isnan(red_gd15)) else np.nan
+
+    _to = team_outperf or {}
+    _ts = team_outperf_staleness or {}
+    blue_op      = _team_outperf(blue_team, _to, _ts)
+    red_op       = _team_outperf(red_team,  _to, _ts)
+    outperf_diff = blue_op - red_op if not (np.isnan(blue_op) or np.isnan(red_op)) else np.nan
 
     row_filled = pd.DataFrame([{
         'elo_diff':     elo_diff,
@@ -446,7 +501,7 @@ def predict_game(blue_team: str, red_team: str, league: str,
 
 def run():
     print("Loading ELO + roster state...")
-    elo_map, roster_state, features, player_h2h = load_state()
+    elo_map, roster_state, features, player_h2h, player_gd15, team_outperf, team_outperf_staleness = load_state()
 
     print("Training model on 2024-2025...")
     model, fim_inv, model_stats = train_model(features)
@@ -469,7 +524,8 @@ def run():
         dt      = row['DateTime_UTC']
         best_of = int(row['BestOf'])
 
-        pred = predict_game(blue, red, league, elo_map, roster_state, features, model, fim_inv, player_h2h)
+        pred = predict_game(blue, red, league, elo_map, roster_state, features, model, fim_inv,
+                            player_h2h, player_gd15, team_outperf, team_outperf_staleness)
         if pred:
             pred['date']    = dt.isoformat()
             pred['best_of'] = best_of
