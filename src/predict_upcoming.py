@@ -37,6 +37,7 @@ FEATS    = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_
 FILL     = {'elo_diff': 0.0, 'rwr_diff': 0.0, 'h2h_wr': 0.5,
             'playoffs': 0, 'gd15_diff': 0.0, 'outperf_diff': 0.0, 'draft_advantage': 0}
 MODEL_NAME = 'Logistic Regression'
+ALPHA_G2   = 0.85  # shrink G2 log-odds toward 50% for 2025+ series games
 
 FEAT_LABELS = {
     'elo_diff':        'ELO Diff',
@@ -371,12 +372,18 @@ def _compute_model_stats(model: Pipeline, fim_inv: np.ndarray | None,
     }
 
 
-def _predict_side_neutral(model: Pipeline, row_filled: pd.DataFrame) -> float:
-    """Win probability with intercept zeroed out (side-neutral)."""
+def _predict_side_neutral(model: Pipeline, row_filled: pd.DataFrame,
+                          game_in_series: int = 1, year: int = 2026) -> float:
+    """Win probability with intercept zeroed out (side-neutral).
+    Applies G2 shrinkage (alpha=0.85) for 2025+ series to account for
+    regression-to-mean after game 1 result.
+    """
     scaler = model.named_steps['s']
     lr     = model.named_steps['lr']
     X_sc   = scaler.transform(row_filled)
     z      = float(X_sc[0] @ lr.coef_.ravel())
+    if game_in_series == 2 and year >= 2025:
+        z *= ALPHA_G2
     return float(1.0 / (1.0 + np.exp(-z)))
 
 
@@ -457,10 +464,13 @@ def predict_game(blue_team: str, red_team: str, league: str,
                  player_gd15: dict | None = None,
                  team_outperf: dict | None = None,
                  team_outperf_staleness: dict | None = None,
-                 draft_advantage: int = 0) -> dict | None:
+                 draft_advantage: int = 0,
+                 game_in_series: int = 1,
+                 year: int = 2026) -> dict | None:
     """
-    draft_advantage: +1 if blue team lost the previous game (blue has pick/side choice),
-                     -1 if blue won prev game (red has choice), 0 for game 1 or a bo1.
+    draft_advantage: +1 if blue lost prev game (blue has pick/side choice),
+                     -1 if blue won prev game (red has choice), 0 for G1/bo1.
+    game_in_series: 1 for G1/bo1, 2 for G2, etc. Used to apply G2 shrinkage.
     """
     blue_players = roster_state.get(blue_team)
     red_players  = roster_state.get(red_team)
@@ -503,7 +513,7 @@ def predict_game(blue_team: str, red_team: str, league: str,
         'draft_advantage': draft_advantage,
     }]).fillna(FILL)
 
-    pred = _predict_side_neutral(model, row_filled)
+    pred = _predict_side_neutral(model, row_filled, game_in_series=game_in_series, year=year)
     se   = _pred_se_side_neutral(fim_inv, model, row_filled, pred)
 
     return {

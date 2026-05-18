@@ -27,6 +27,11 @@ FEATS = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_dif
 FILL  = {'elo_diff': 0., 'rwr_diff': 0., 'h2h_wr': 0.5,
          'playoffs': 0, 'gd15_diff': 0., 'outperf_diff': 0., 'draft_advantage': 0}
 
+# G2 shrinkage: in 2025+, predictions for game 2 are shrunk toward 50%
+# because the G1 result provides information that regresses team quality toward the mean.
+# Alpha fitted via leave-one-year-out CV on 2025-2026 G2 games.
+ALPHA_G2 = 0.85
+
 
 def _safe(v):
     try:
@@ -43,7 +48,17 @@ def run():
     model = Pipeline([('s', StandardScaler()), ('lr', LogisticRegression(max_iter=1000))])
     model.fit(train[FEATS].fillna(FILL), train['blue_win'].values)
 
-    preds = model.predict_proba(df[FEATS].fillna(FILL))[:, 1]
+    # Raw log-odds for all games
+    scaler = model.named_steps['s']
+    lr     = model.named_steps['lr']
+    X_sc   = scaler.transform(df[FEATS].fillna(FILL))
+    logodds = X_sc @ lr.coef_.ravel() + lr.intercept_[0]
+
+    # Apply G2 shrinkage for 2025+ games
+    shrink_mask = (df['game'] == 2) & (df['year'] >= 2025)
+    logodds_adj = logodds.copy()
+    logodds_adj[shrink_mask] *= ALPHA_G2
+    preds = 1 / (1 + np.exp(-logodds_adj))
 
     # Compute series metadata: group same matchup on same calendar day
     df['_date_day'] = df['date'].dt.date
