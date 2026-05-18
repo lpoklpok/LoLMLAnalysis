@@ -47,6 +47,8 @@ interface Prediction {
   feat_gd15_diff: number | null
   feat_outperf_diff: number | null
   role_h2h: RoleH2H[] | null
+  poly_prob: number | null
+  poly_volume: number | null
 }
 
 // ---------- helpers ----------
@@ -200,6 +202,39 @@ function MatchCard({ game }: { game: Prediction }) {
           <ProbBar blueP={sp} label={`Series (BO${game.best_of})`} />
         )}
       </div>
+
+      {/* Polymarket comparison */}
+      {game.poly_prob != null && (
+        <div className="border-t border-gray-800 pt-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Polymarket</span>
+            <span className="text-xs text-gray-600">${(game.poly_volume ?? 0).toLocaleString(undefined, {maximumFractionDigits: 0})} vol</span>
+          </div>
+          <div className="flex items-center gap-3 text-xs">
+            <div className="flex items-center gap-1.5">
+              <span className="text-gray-500">Market</span>
+              <span className="font-mono font-semibold text-white">{Math.round(game.poly_prob * 100)}%</span>
+            </div>
+            <span className="text-gray-700">·</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-gray-500">Model</span>
+              <span className="font-mono font-semibold text-white">{Math.round(game.pred_blue_win * 100)}%</span>
+            </div>
+            <span className="text-gray-700">·</span>
+            {(() => {
+              const delta = Math.round((game.pred_blue_win - game.poly_prob) * 100)
+              const color = Math.abs(delta) >= 5
+                ? (delta > 0 ? 'text-blue-400' : 'text-red-400')
+                : 'text-gray-500'
+              return (
+                <span className={`font-mono font-semibold ${color}`}>
+                  {delta > 0 ? '+' : ''}{delta}pp
+                </span>
+              )
+            })()}
+          </div>
+        </div>
+      )}
 
       {/* Feature values */}
       <div className="border-t border-gray-800 pt-3 grid grid-cols-2 gap-x-4 gap-y-1.5">

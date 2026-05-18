@@ -71,10 +71,12 @@ _TEAM_NORM = {
     'BNK FEARX':                'BNK FEARX',
     'Nongshim RedForce':        'Nongshim RedForce',
     'NONGSHIM RED FORCE':       'Nongshim RedForce',
+    'Nongshim Red Force':       'Nongshim RedForce',
     'DN Freecs':                'DN SOOPers',
     'DN SOOPers':               'DN SOOPers',
     'Dplus KIA':                'Dplus Kia',
     'Dplus Kia':                'Dplus Kia',
+    'DPLUS KIA':                'Dplus Kia',
     'HANJIN BRION':             'HANJIN BRION',
     'OK BRION':                 'HANJIN BRION',
     # LEC
@@ -98,6 +100,66 @@ def _norm_team(name: str) -> str:
 
 def _starting_elo(league: str) -> float:
     return _ELO_TIER.get(league, 1260)
+
+
+_POLY_URL = 'https://gamma-api.polymarket.com/events'
+
+
+def fetch_polymarket_odds() -> dict:
+    """
+    Fetch all active LoL match markets from Polymarket.
+    Returns dict mapping frozenset({team1, team2}) ->
+        {'prob_team1': float, 'team1': str, 'team2': str, 'volume': float}
+    where team1/team2 are OE-canonical names and prob_team1 is the win
+    probability for outcomes[0].
+    """
+    try:
+        events = []
+        for offset in range(0, 500, 100):
+            r = requests.get(_POLY_URL, params={
+                'tag_slug': 'league-of-legends',
+                'active': 'true', 'closed': 'false',
+                'limit': 100, 'offset': offset,
+            }, timeout=15)
+            r.raise_for_status()
+            page = r.json() if isinstance(r.json(), list) else []
+            events.extend(page)
+            if len(page) < 100:
+                break
+    except Exception as e:
+        print(f"  Polymarket fetch error: {e}")
+        return {}
+
+    result = {}
+    for event in events:
+        if 'vs' not in event.get('title', '').lower():
+            continue
+        markets = event.get('markets', [])
+        winner = next((m for m in markets if m.get('question', '') == event['title']), None)
+        if not winner:
+            continue
+
+        prices   = winner.get('outcomePrices', [])
+        outcomes = winner.get('outcomes', [])
+        if isinstance(prices,   str): prices   = json.loads(prices)
+        if isinstance(outcomes, str): outcomes = json.loads(outcomes)
+        if len(prices) < 2 or len(outcomes) < 2:
+            continue
+
+        try:
+            prob1 = float(prices[0])
+            vol   = float(winner.get('volume') or 0)
+        except (ValueError, TypeError):
+            continue
+
+        t1 = _norm_team(outcomes[0])
+        t2 = _norm_team(outcomes[1])
+        result[frozenset([t1, t2])] = {
+            'prob_team1': prob1, 'team1': t1, 'team2': t2, 'volume': vol,
+        }
+
+    print(f"  Polymarket: found {len(result)} active LoL match markets")
+    return result
 
 
 def fetch_upcoming(days_ahead: int = 14) -> pd.DataFrame:
@@ -380,6 +442,9 @@ def run():
         print("No upcoming matches found.")
         return
 
+    print("Fetching Polymarket odds...")
+    poly_odds = fetch_polymarket_odds()
+
     results = []
     for _, row in upcoming.iterrows():
         blue    = _norm_team(row['Team1'])
@@ -392,10 +457,22 @@ def run():
         if pred:
             pred['date']    = dt.isoformat()
             pred['best_of'] = best_of
+
+            # Attach Polymarket odds if market exists for this matchup
+            pm = poly_odds.get(frozenset([blue, red]))
+            if pm:
+                blue_prob = pm['prob_team1'] if pm['team1'] == blue else 1 - pm['prob_team1']
+                pred['poly_prob']   = round(blue_prob, 4)
+                pred['poly_volume'] = round(pm['volume'], 0)
+            else:
+                pred['poly_prob']   = None
+                pred['poly_volume'] = None
+
             results.append(pred)
+            poly_str = f"  poly={pred['poly_prob']:.3f}" if pred['poly_prob'] else ''
             print(f"  {dt.strftime('%m-%d %H:%M')} UTC  {blue:<25} vs {red:<25}  "
                   f"pred={pred['pred_blue_win']:.3f} ±{pred['pred_se'] or 0:.3f}  "
-                  f"elo={pred['elo_diff']:+.0f}  BO{best_of}")
+                  f"elo={pred['elo_diff']:+.0f}  BO{best_of}{poly_str}")
 
     if not results:
         print("No predictions generated.")
