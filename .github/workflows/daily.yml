@@ -1,0 +1,46 @@
+name: Daily pipeline
+
+on:
+  schedule:
+    - cron: '0 14 * * *'   # 2pm UTC daily (after LCK morning games finish)
+  workflow_dispatch:         # allow manual trigger from GitHub UI
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Pull latest Oracle's Elixir data
+        run: python src/PullOEData.py
+
+      - name: Merge game + odds data
+        run: python src/merge_data.py
+
+      - name: Build features + ELO state
+        run: python src/feature_engineering.py
+
+      - name: Train model + save predictions
+        run: python src/train_model.py
+
+      - name: Upload predictions to Supabase
+        run: python src/upload_predictions.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
+      - name: Generate upcoming game predictions
+        run: python src/predict_upcoming.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

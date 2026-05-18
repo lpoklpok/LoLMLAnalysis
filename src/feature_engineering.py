@@ -480,6 +480,42 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
     features.to_csv(PROCESSED_DIR / 'features_all.csv', index=False)
     features_major.to_csv(PROCESSED_DIR / 'features.csv', index=False)
 
+    # Save ELO state and last-known roster for future game prediction
+    import json
+    elo_state = {
+        'elo_map': elo_map,
+        'player_last_split': {k: list(v) for k, v in player_last_split.items()},
+    }
+    with open(PROCESSED_DIR / 'elo_state.json', 'w') as f:
+        json.dump(elo_state, f)
+
+    # Save most recent 5-man lineup per team (for upcoming game roster lookup)
+    roster_map: dict[str, list[str]] = {}
+    for g in features.itertuples(index=False):
+        bp = [g.blue_team]  # placeholder — actual players not in features
+        roster_map[g.blue_team] = getattr(g, 'blue_team', None)
+        roster_map[g.red_team]  = getattr(g, 'red_team', None)
+
+    # Build from raw data instead
+    raw = pd.read_csv(PROCESSED_DIR / 'games_with_odds.csv', low_memory=False)
+    raw['date'] = pd.to_datetime(raw['date'], utc=True)
+    raw = raw.sort_values('date')
+    roster_rows = []
+    for _, g in raw.iterrows():
+        bp = [g.get(f'blue_{p}_playername') for p in POSITIONS]
+        rp = [g.get(f'red_{p}_playername')  for p in POSITIONS]
+        if any(pd.isna(x) for x in bp + rp):
+            continue
+        roster_rows.append({'team': str(g['blue_team_teamname']), 'players': bp, 'date': str(g['date'])})
+        roster_rows.append({'team': str(g['red_team_teamname']),  'players': rp, 'date': str(g['date'])})
+
+    # Keep latest roster per team
+    latest: dict[str, dict] = {}
+    for row in roster_rows:
+        latest[row['team']] = row
+    with open(PROCESSED_DIR / 'roster_state.json', 'w') as f:
+        json.dump({t: r['players'] for t, r in latest.items()}, f, indent=2)
+
     print(f"All leagues:    {len(features):,} games")
     print(f"Major leagues:  {len(features_major):,} games")
     print(f"\nFeature columns: {list(features_major.columns)}")
