@@ -24,13 +24,14 @@ load_dotenv(Path(os.path.dirname(__file__)) / '..' / '.env')
 
 PROCESSED_DIR = Path(os.path.dirname(__file__)) / '..' / 'data' / 'processed'
 
-POSITIONS      = ['top', 'jng', 'mid', 'bot', 'sup']
-_ELO_TIER      = {'LCK': 1620, 'LPL': 1620, 'LEC': 1500,
-                  'LCS': 1380, 'LTA': 1380, 'LTA N': 1380, 'LTA S': 1380, 'LCKC': 1380}
+POSITIONS = ['top', 'jng', 'mid', 'bot', 'sup']
+_ELO_TIER = {'LCK': 1620, 'LPL': 1620, 'LEC': 1500,
+              'LCS': 1380, 'LTA': 1380, 'LTA N': 1380, 'LTA S': 1380, 'LCKC': 1380}
 
-FEATS = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff']
-FILL  = {'elo_diff': 0.0, 'rwr_diff': 0.0, 'h2h_wr': 0.5,
-         'playoffs': 0, 'gd15_diff': 0.0, 'outperf_diff': 0.0}
+FEATS    = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff']
+FILL     = {'elo_diff': 0.0, 'rwr_diff': 0.0, 'h2h_wr': 0.5,
+            'playoffs': 0, 'gd15_diff': 0.0, 'outperf_diff': 0.0}
+MODEL_NAME = 'Logistic Regression'
 
 # lolesports.com schedule API
 _LS_URL     = 'https://esports-api.lolesports.com/persisted/gw/getSchedule'
@@ -120,7 +121,6 @@ def fetch_upcoming(days_ahead: int = 14) -> pd.DataFrame:
 
                 start = pd.Timestamp(event['startTime'])
 
-                # Stop paging if we've gone past our window
                 if start > cutoff:
                     past_window = True
                     break
@@ -137,11 +137,10 @@ def fetch_upcoming(days_ahead: int = 14) -> pd.DataFrame:
                     'Team1':        teams[0]['name'],
                     'Team2':        teams[1]['name'],
                     'DateTime_UTC': start,
-                    'BestOf':       match.get('strategy', {}).get('count', 1),
+                    'BestOf':       int(match.get('strategy', {}).get('count', 1)),
                     'league':       league,
                 })
 
-            # Follow newer-events page if we haven't reached the cutoff yet
             newer = schedule.get('pages', {}).get('newer')
             if newer and not past_window:
                 page_token = newer
@@ -158,7 +157,6 @@ def fetch_upcoming(days_ahead: int = 14) -> pd.DataFrame:
 
 
 def load_state() -> tuple[dict, dict, pd.DataFrame]:
-    """Load ELO state, roster state, and training features."""
     with open(PROCESSED_DIR / 'elo_state.json') as f:
         elo_state = json.load(f)
     with open(PROCESSED_DIR / 'roster_state.json') as f:
@@ -168,17 +166,60 @@ def load_state() -> tuple[dict, dict, pd.DataFrame]:
     return elo_state['elo_map'], roster_state, features
 
 
-def train_model(features: pd.DataFrame) -> Pipeline:
-    train = features[features['year'].isin([2024, 2025])]
-    m = Pipeline([('s', StandardScaler()), ('lr', LogisticRegression(max_iter=1000))])
-    m.fit(train[FEATS].fillna(FILL), train['blue_win'].values)
-    return m
+def train_model(features: pd.DataFrame) -> tuple[Pipeline, np.ndarray | None]:
+    """Returns (fitted pipeline, inverse Fisher information matrix)."""
+    train      = features[features['year'].isin([2024, 2025])]
+    X_train    = train[FEATS].fillna(FILL)
+    y_train    = train['blue_win'].values
+
+    model = Pipeline([('s', StandardScaler()), ('lr', LogisticRegression(max_iter=1000))])
+    model.fit(X_train, y_train)
+
+    fim_inv = _compute_fim_inv(model, X_train)
+    return model, fim_inv
+
+
+def _compute_fim_inv(model: Pipeline, X_train: pd.DataFrame) -> np.ndarray | None:
+    """
+    Inverse Fisher information matrix for the logistic regression fit.
+    Used to compute standard errors of predicted probabilities via the delta method.
+    """
+    scaler = model.named_steps['s']
+    lr     = model.named_steps['lr']
+
+    X_sc   = scaler.transform(X_train)
+    p      = lr.predict_proba(X_sc)[:, 1]
+    W      = p * (1 - p)
+
+    # Augment with intercept column
+    X_aug  = np.column_stack([np.ones(len(X_sc)), X_sc])
+    FIM    = X_aug.T @ (W[:, None] * X_aug)
+
+    try:
+        return np.linalg.inv(FIM)
+    except np.linalg.LinAlgError:
+        return None
+
+
+def _pred_se(model: Pipeline, fim_inv: np.ndarray | None, row_filled: pd.DataFrame) -> float:
+    """
+    Standard error of the predicted blue-win probability at a given feature vector,
+    using the delta method: SE(p) ≈ p(1-p) · sqrt(x'·FIM⁻¹·x).
+    """
+    if fim_inv is None:
+        return float('nan')
+
+    scaler = model.named_steps['s']
+    X_sc   = scaler.transform(row_filled)
+    x_aug  = np.hstack([[1.0], X_sc[0]])
+    var_z  = float(x_aug @ fim_inv @ x_aug)
+    p      = float(model.predict_proba(row_filled)[:, 1][0])
+    return round(p * (1 - p) * np.sqrt(max(0.0, var_z)), 4)
 
 
 def predict_game(blue_team: str, red_team: str, league: str,
-                 elo_map: dict, roster_state: dict,
-                 features: pd.DataFrame, model: Pipeline) -> dict | None:
-    """Generate a pre-game prediction for one upcoming match."""
+                 elo_map: dict, roster_state: dict, features: pd.DataFrame,
+                 model: Pipeline, fim_inv: np.ndarray | None) -> dict | None:
     blue_players = roster_state.get(blue_team)
     red_players  = roster_state.get(red_team)
 
@@ -191,16 +232,14 @@ def predict_game(blue_team: str, red_team: str, league: str,
     red_elos  = [elo_map.get(p, start) for p in red_players]
     elo_diff  = float(np.mean(blue_elos) - np.mean(red_elos))
 
-    # Pull latest rolling features from last known game for each team
     def latest_feat(team, col):
-        mask = (features['blue_team'] == team) | (features['red_team'] == team)
+        mask      = (features['blue_team'] == team) | (features['red_team'] == team)
         team_rows = features[mask]
         if team_rows.empty:
             return np.nan
         last = team_rows.iloc[-1]
         if last['blue_team'] == team:
             return last[col]
-        # flip sign for diff features when team was on red side
         if col in {'rwr_diff', 'h2h_wr', 'gd15_diff', 'outperf_diff'}:
             return -last[col] if not pd.isna(last[col]) else np.nan
         return last[col]
@@ -210,24 +249,28 @@ def predict_game(blue_team: str, red_team: str, league: str,
     gd15_diff    = latest_feat(blue_team, 'gd15_diff')
     outperf_diff = latest_feat(blue_team, 'outperf_diff')
 
-    row = pd.DataFrame([{
+    row_filled = pd.DataFrame([{
         'elo_diff':     elo_diff,
         'rwr_diff':     rwr_diff,
         'h2h_wr':       h2h_wr,
         'playoffs':     0,
         'gd15_diff':    gd15_diff,
         'outperf_diff': outperf_diff,
-    }])
-    pred = float(model.predict_proba(row.fillna(FILL))[:, 1][0])
+    }]).fillna(FILL)
+
+    pred = float(model.predict_proba(row_filled)[:, 1][0])
+    se   = _pred_se(model, fim_inv, row_filled)
 
     return {
-        'blue_team':      blue_team,
-        'red_team':       red_team,
-        'league':         league,
-        'blue_elo':       round(np.mean(blue_elos), 1),
-        'red_elo':        round(np.mean(red_elos), 1),
-        'elo_diff':       round(elo_diff, 1),
-        'pred_blue_win':  round(pred, 4),
+        'blue_team':     blue_team,
+        'red_team':      red_team,
+        'league':        league,
+        'blue_elo':      round(float(np.mean(blue_elos)), 1),
+        'red_elo':       round(float(np.mean(red_elos)), 1),
+        'elo_diff':      round(elo_diff, 1),
+        'pred_blue_win': round(pred, 4),
+        'pred_se':       se,
+        'model_name':    MODEL_NAME,
     }
 
 
@@ -236,7 +279,7 @@ def run():
     elo_map, roster_state, features = load_state()
 
     print("Training model on 2024-2025...")
-    model = train_model(features)
+    model, fim_inv = train_model(features)
 
     print("Fetching upcoming matches from lolesports...")
     upcoming = fetch_upcoming(days_ahead=14)
@@ -251,13 +294,16 @@ def run():
         red    = _norm_team(row['Team2'])
         league = row['league']
         dt     = row['DateTime_UTC']
+        best_of = int(row['BestOf'])
 
-        pred = predict_game(blue, red, league, elo_map, roster_state, features, model)
+        pred = predict_game(blue, red, league, elo_map, roster_state, features, model, fim_inv)
         if pred:
-            pred['date'] = dt.isoformat()
+            pred['date']    = dt.isoformat()
+            pred['best_of'] = best_of
             results.append(pred)
             print(f"  {dt.strftime('%m-%d %H:%M')} UTC  {blue:<25} vs {red:<25}  "
-                  f"pred_blue={pred['pred_blue_win']:.3f}  elo_diff={pred['elo_diff']:+.0f}")
+                  f"pred_blue={pred['pred_blue_win']:.3f} ±{pred['pred_se']:.3f}  "
+                  f"elo_diff={pred['elo_diff']:+.0f}  BO{best_of}")
 
     if not results:
         print("No predictions generated.")
@@ -267,7 +313,6 @@ def run():
     out.to_csv(PROCESSED_DIR / 'upcoming_predictions.csv', index=False)
     print(f"\nSaved {len(out)} predictions to upcoming_predictions.csv")
 
-    # Upload to Supabase
     supabase_url = os.environ.get('SUPABASE_URL')
     supabase_key = os.environ.get('SUPABASE_SERVICE_KEY')
     if supabase_url and supabase_key:
