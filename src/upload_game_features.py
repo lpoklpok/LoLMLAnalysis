@@ -45,16 +45,30 @@ def run():
 
     preds = model.predict_proba(df[FEATS].fillna(FILL))[:, 1]
 
+    # Compute series_type: group same matchup on same calendar day
+    df['_date_day'] = df['date'].dt.date
+    df['_team_key'] = df.apply(
+        lambda r: '|'.join(sorted([str(r['blue_team']), str(r['red_team'])])), axis=1
+    )
+    df['_series_max'] = df.groupby(['_date_day', 'league', '_team_key'])['game'].transform('max')
+    def _series_type(row):
+        if row['playoffs']:
+            return 'bo5'
+        return 'bo1' if row['_series_max'] == 1 else 'bo3'
+    df['_series_type'] = df.apply(_series_type, axis=1)
+
     records = []
     for i, (_, row) in enumerate(df.iterrows()):
         records.append({
-            'date':         row['date'].isoformat(),
-            'league':       str(row['league']),
-            'year':         int(row['year']),
-            'playoffs':     int(row['playoffs']),
-            'blue_team':    str(row['blue_team']),
-            'red_team':     str(row['red_team']),
-            'blue_win':     int(row['blue_win']),
+            'date':           row['date'].isoformat(),
+            'league':         str(row['league']),
+            'year':           int(row['year']),
+            'playoffs':       int(row['playoffs']),
+            'blue_team':      str(row['blue_team']),
+            'red_team':       str(row['red_team']),
+            'blue_win':       int(row['blue_win']),
+            'game_in_series': int(row['game']),
+            'series_type':    str(row['_series_type']),
             'blue_elo':     _safe(row.get('blue_elo')),
             'red_elo':      _safe(row.get('red_elo')),
             'elo_diff':     _safe(row.get('elo_diff')),

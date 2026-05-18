@@ -22,6 +22,8 @@ interface Game {
   outperf_diff: number | null
   q_blue_win: number | null
   model_pred: number | null
+  game_in_series: number | null
+  series_type: string | null
   mkt_model_abs: number | null  // |market - model|, computed client-side
   ll_diff: number | null        // mkt_ll - model_ll (positive = model won)
 }
@@ -34,7 +36,9 @@ const COLS: { key: SortKey; label: string; fmt?: (v: number) => string; width?: 
   { key: 'league',       label: 'League',     width: 'w-14' },
   { key: 'blue_team',    label: 'Blue',       width: 'w-36' },
   { key: 'red_team',     label: 'Red',        width: 'w-36' },
-  { key: 'blue_win',     label: 'Result',     width: 'w-16' },
+  { key: 'blue_win',      label: 'Result',     width: 'w-16' },
+  { key: 'series_type',   label: 'Series',     width: 'w-12' },
+  { key: 'game_in_series', label: 'Game',      width: 'w-10' },
   { key: 'model_pred',   label: 'Model',      fmt: v => `${(v*100).toFixed(0)}%` },
   { key: 'q_blue_win',   label: 'Market',     fmt: v => `${(v*100).toFixed(0)}%` },
   { key: 'elo_diff',     label: 'ELO Δ',      fmt: v => (v>=0?'+':'')+v.toFixed(0) },
