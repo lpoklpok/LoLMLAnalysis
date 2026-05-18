@@ -165,6 +165,10 @@ export default function PredictionsPage() {
         <span className="text-sm text-green-400 font-medium">Predictions</span>
       </div>
 
+      <div className="px-6 py-3 bg-gray-900/50 border-b border-gray-800 text-xs text-gray-500">
+        Side-neutral predictions — the model intercept (blue-side advantage ≈ +2%) is removed so probabilities reflect team quality only, not unknown side assignments. Team 1 is shown on the left.
+      </div>
+
       <main className="px-6 py-6 max-w-5xl mx-auto">
         {loading ? (
           <p className="text-gray-500 text-sm">Loading predictions…</p>

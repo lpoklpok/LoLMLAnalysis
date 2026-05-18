@@ -201,19 +201,34 @@ def _compute_fim_inv(model: Pipeline, X_train: pd.DataFrame) -> np.ndarray | Non
         return None
 
 
-def _pred_se(model: Pipeline, fim_inv: np.ndarray | None, row_filled: pd.DataFrame) -> float:
+def _predict_side_neutral(model: Pipeline, row_filled: pd.DataFrame) -> float:
     """
-    Standard error of the predicted blue-win probability at a given feature vector,
-    using the delta method: SE(p) ≈ p(1-p) · sqrt(x'·FIM⁻¹·x).
+    Win probability with the intercept zeroed out.
+    The intercept encodes baseline blue-side advantage (~52%); since we don't
+    know side assignments for future games we remove it so equal teams → 50%.
+    """
+    scaler = model.named_steps['s']
+    lr     = model.named_steps['lr']
+    X_sc   = scaler.transform(row_filled)
+    z      = float(X_sc @ lr.coef_.T)   # coef only, no intercept
+    return float(1.0 / (1.0 + np.exp(-z)))
+
+
+def _pred_se_side_neutral(fim_inv: np.ndarray | None,
+                          model: Pipeline, row_filled: pd.DataFrame,
+                          p: float) -> float:
+    """
+    SE of the side-neutral probability via the delta method.
+    Uses only the feature sub-block of FIM⁻¹ (row/col 0 = intercept, excluded).
+    SE(p) ≈ p(1-p) · sqrt(x_sc · FIM_feat⁻¹ · x_sc).
     """
     if fim_inv is None:
         return float('nan')
 
-    scaler = model.named_steps['s']
-    X_sc   = scaler.transform(row_filled)
-    x_aug  = np.hstack([[1.0], X_sc[0]])
-    var_z  = float(x_aug @ fim_inv @ x_aug)
-    p      = float(model.predict_proba(row_filled)[:, 1][0])
+    scaler      = model.named_steps['s']
+    X_sc        = scaler.transform(row_filled)
+    FIM_feat_inv = fim_inv[1:, 1:]               # drop intercept row/col
+    var_z       = float(X_sc[0] @ FIM_feat_inv @ X_sc[0])
     return round(p * (1 - p) * np.sqrt(max(0.0, var_z)), 4)
 
 
@@ -258,8 +273,8 @@ def predict_game(blue_team: str, red_team: str, league: str,
         'outperf_diff': outperf_diff,
     }]).fillna(FILL)
 
-    pred = float(model.predict_proba(row_filled)[:, 1][0])
-    se   = _pred_se(model, fim_inv, row_filled)
+    pred = _predict_side_neutral(model, row_filled)
+    se   = _pred_se_side_neutral(fim_inv, model, row_filled, pred)
 
     return {
         'blue_team':     blue_team,
