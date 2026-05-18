@@ -22,6 +22,8 @@ interface Game {
   outperf_diff: number | null
   q_blue_win: number | null
   model_pred: number | null
+  mkt_model_abs: number | null  // |market - model|, computed client-side
+  ll_diff: number | null        // mkt_ll - model_ll (positive = model won)
 }
 
 type SortKey = keyof Game
@@ -40,6 +42,8 @@ const COLS: { key: SortKey; label: string; fmt?: (v: number) => string; width?: 
   { key: 'rwr_diff',     label: 'WR Δ',       fmt: v => (v>=0?'+':'')+`${(v*100).toFixed(0)}%` },
   { key: 'gd15_diff',    label: 'GD15 Δ',     fmt: v => (v>=0?'+':'')+v.toFixed(0) },
   { key: 'outperf_diff', label: 'Outperf Δ',  fmt: v => (v>=0?'+':'')+`${(v*100).toFixed(1)}%` },
+  { key: 'mkt_model_abs', label: '|Mkt−Model|', fmt: v => `${(v*100).toFixed(0)}pp` },
+  { key: 'll_diff',       label: 'MktLL−MdlLL', fmt: v => (v>=0?'+':'')+v.toFixed(3) },
 ]
 
 function fmt(col: typeof COLS[0], val: unknown): string {
@@ -60,6 +64,7 @@ function cellColor(col: typeof COLS[0], val: unknown, row: Game): string {
     return v > 0 ? 'text-blue-400' : v < 0 ? 'text-red-400' : 'text-gray-400'
   }
   if (col.key === 'h2h_wr') return v > 0.5 ? 'text-blue-400' : v < 0.5 ? 'text-red-400' : 'text-gray-400'
+  if (col.key === 'll_diff') return v > 0 ? 'text-green-400' : v < 0 ? 'text-red-400' : 'text-gray-400'
   return 'text-gray-300'
 }
 
@@ -82,7 +87,22 @@ export default function GamesPage() {
         .from('game_features')
         .select('*')
         .order('date', { ascending: false })
-      setGames(data ?? [])
+      setGames((data ?? []).map(g => {
+        const outcome = g.blue_win
+        const mkt = g.q_blue_win
+        const mdl = g.model_pred
+        const mkt_model_abs = (mkt != null && mdl != null)
+          ? Math.round(Math.abs(mkt - mdl) * 100) / 100
+          : null
+        let ll_diff: number | null = null
+        if (mkt != null && mdl != null) {
+          const clamp = (p: number) => Math.max(1e-6, Math.min(1 - 1e-6, p))
+          const mkt_ll  = outcome === 1 ? -Math.log(clamp(mkt)) : -Math.log(clamp(1 - mkt))
+          const mdl_ll  = outcome === 1 ? -Math.log(clamp(mdl)) : -Math.log(clamp(1 - mdl))
+          ll_diff = Math.round((mkt_ll - mdl_ll) * 1000) / 1000
+        }
+        return { ...g, mkt_model_abs, ll_diff }
+      }))
       setLoading(false)
     }
     load()
