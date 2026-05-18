@@ -33,18 +33,19 @@ POSITIONS = ['top', 'jng', 'mid', 'bot', 'sup']
 _ELO_TIER = {'LCK': 1620, 'LPL': 1620, 'LEC': 1500,
               'LCS': 1380, 'LTA': 1380, 'LTA N': 1380, 'LTA S': 1380, 'LCKC': 1380}
 
-FEATS    = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff']
+FEATS    = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff', 'series_momentum']
 FILL     = {'elo_diff': 0.0, 'rwr_diff': 0.0, 'h2h_wr': 0.5,
-            'playoffs': 0, 'gd15_diff': 0.0, 'outperf_diff': 0.0}
+            'playoffs': 0, 'gd15_diff': 0.0, 'outperf_diff': 0.0, 'series_momentum': 0}
 MODEL_NAME = 'Logistic Regression'
 
 FEAT_LABELS = {
-    'elo_diff':     'ELO Diff',
-    'rwr_diff':     'Win Rate Diff (10g)',
-    'h2h_wr':       'H2H Win Rate (Team 1)',
-    'playoffs':     'Playoffs',
-    'gd15_diff':    'GD@15 Diff',
-    'outperf_diff': 'Market Outperf Diff',
+    'elo_diff':        'ELO Diff',
+    'rwr_diff':        'Win Rate Diff (10g)',
+    'h2h_wr':          'H2H Win Rate (Team 1)',
+    'playoffs':        'Playoffs',
+    'gd15_diff':       'GD@15 Diff',
+    'outperf_diff':    'Market Outperf Diff',
+    'series_momentum': 'Series Momentum (+1 won prev, -1 lost prev)',
 }
 
 # lolesports.com schedule API
@@ -228,6 +229,24 @@ def fetch_upcoming(days_ahead: int = 14) -> pd.DataFrame:
     return df
 
 
+def _add_series_momentum(df: pd.DataFrame) -> pd.DataFrame:
+    """Add series_momentum column: +1 blue won prev game, -1 lost, 0 if G1 or bo1."""
+    df = df.copy()
+    df['_date_day'] = df['date'].dt.date
+    df['_team_key'] = df.apply(
+        lambda r: '|'.join(sorted([str(r['blue_team']), str(r['red_team'])])), axis=1
+    )
+    df = df.sort_values(['_date_day', 'league', '_team_key', 'game'])
+    def _momentum(grp):
+        grp = grp.sort_values('game')
+        prev = grp['blue_win'].shift(1)
+        grp['series_momentum'] = prev.apply(
+            lambda x: 0 if pd.isna(x) else (1 if x == 1 else -1)
+        ).astype(int)
+        return grp
+    return df.groupby(['_date_day', 'league', '_team_key'], group_keys=False).apply(_momentum)
+
+
 def load_state() -> tuple[dict, dict, pd.DataFrame, dict, dict, dict, dict]:
     with open(PROCESSED_DIR / 'elo_state.json') as f:
         elo_state = json.load(f)
@@ -235,6 +254,7 @@ def load_state() -> tuple[dict, dict, pd.DataFrame, dict, dict, dict, dict]:
         roster_state = json.load(f)
     features = pd.read_csv(PROCESSED_DIR / 'features.csv', low_memory=False)
     features['date'] = pd.to_datetime(features['date'], utc=True)
+    features = _add_series_momentum(features)
 
     player_h2h: dict = {}
     player_h2h_path = PROCESSED_DIR / 'player_h2h.json'
@@ -435,7 +455,12 @@ def predict_game(blue_team: str, red_team: str, league: str,
                  player_h2h: dict | None = None,
                  player_gd15: dict | None = None,
                  team_outperf: dict | None = None,
-                 team_outperf_staleness: dict | None = None) -> dict | None:
+                 team_outperf_staleness: dict | None = None,
+                 series_momentum: int = 0) -> dict | None:
+    """
+    series_momentum: +1 if blue team won the previous game in this series,
+                     -1 if they lost, 0 for game 1 or a bo1.
+    """
     blue_players = roster_state.get(blue_team)
     red_players  = roster_state.get(red_team)
 
@@ -468,12 +493,13 @@ def predict_game(blue_team: str, red_team: str, league: str,
     outperf_diff = blue_op - red_op if not (np.isnan(blue_op) or np.isnan(red_op)) else np.nan
 
     row_filled = pd.DataFrame([{
-        'elo_diff':     elo_diff,
-        'rwr_diff':     rwr_diff,
-        'h2h_wr':       h2h_wr,
-        'playoffs':     0,
-        'gd15_diff':    gd15_diff,
-        'outperf_diff': outperf_diff,
+        'elo_diff':        elo_diff,
+        'rwr_diff':        rwr_diff,
+        'h2h_wr':          h2h_wr,
+        'playoffs':        0,
+        'gd15_diff':       gd15_diff,
+        'outperf_diff':    outperf_diff,
+        'series_momentum': series_momentum,
     }]).fillna(FILL)
 
     pred = _predict_side_neutral(model, row_filled)
@@ -490,10 +516,11 @@ def predict_game(blue_team: str, red_team: str, league: str,
         'pred_se':            round(se, 4) if not np.isnan(se) else None,
         'model_name':         MODEL_NAME,
         # per-game feature values shown on the predictions page
-        'feat_rwr_diff':      _safe(rwr_diff),
-        'feat_h2h_wr':        _safe(h2h_wr),
-        'feat_gd15_diff':     _safe(gd15_diff),
-        'feat_outperf_diff':  _safe(outperf_diff),
+        'feat_rwr_diff':       _safe(rwr_diff),
+        'feat_h2h_wr':         _safe(h2h_wr),
+        'feat_gd15_diff':      _safe(gd15_diff),
+        'feat_outperf_diff':   _safe(outperf_diff),
+        'feat_series_momentum': int(series_momentum),
         # per-role player head-to-head records (informational only)
         'role_h2h':           _role_h2h_info(blue_players, red_players, player_h2h or {}),
     }

@@ -23,9 +23,9 @@ load_dotenv(Path(os.path.dirname(__file__)) / '..' / '.env')
 
 PROCESSED_DIR = Path(os.path.dirname(__file__)) / '..' / 'data' / 'processed'
 
-FEATS = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff']
+FEATS = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff', 'series_momentum']
 FILL  = {'elo_diff': 0., 'rwr_diff': 0., 'h2h_wr': 0.5,
-         'playoffs': 0, 'gd15_diff': 0., 'outperf_diff': 0.}
+         'playoffs': 0, 'gd15_diff': 0., 'outperf_diff': 0., 'series_momentum': 0}
 
 
 def _safe(v):
@@ -45,17 +45,29 @@ def run():
 
     preds = model.predict_proba(df[FEATS].fillna(FILL))[:, 1]
 
-    # Compute series_type: group same matchup on same calendar day
+    # Compute series metadata: group same matchup on same calendar day
     df['_date_day'] = df['date'].dt.date
     df['_team_key'] = df.apply(
         lambda r: '|'.join(sorted([str(r['blue_team']), str(r['red_team'])])), axis=1
     )
     df['_series_max'] = df.groupby(['_date_day', 'league', '_team_key'])['game'].transform('max')
+
     def _series_type(row):
         if row['playoffs']:
             return 'bo5'
         return 'bo1' if row['_series_max'] == 1 else 'bo3'
     df['_series_type'] = df.apply(_series_type, axis=1)
+
+    # series_momentum: +1 if blue won previous game, -1 if lost, 0 if game 1 or bo1
+    df = df.sort_values(['_date_day', 'league', '_team_key', 'game'])
+    def _add_momentum(grp):
+        grp = grp.sort_values('game')
+        prev = grp['blue_win'].shift(1)
+        grp['series_momentum'] = prev.apply(
+            lambda x: 0 if pd.isna(x) else (1 if x == 1 else -1)
+        ).astype(int)
+        return grp
+    df = df.groupby(['_date_day', 'league', '_team_key'], group_keys=False).apply(_add_momentum)
 
     records = []
     for i, (_, row) in enumerate(df.iterrows()):
@@ -67,8 +79,9 @@ def run():
             'blue_team':      str(row['blue_team']),
             'red_team':       str(row['red_team']),
             'blue_win':       int(row['blue_win']),
-            'game_in_series': int(row['game']),
-            'series_type':    str(row['_series_type']),
+            'game_in_series':   int(row['game']),
+            'series_type':      str(row['_series_type']),
+            'series_momentum':  int(row['series_momentum']),
             'blue_elo':     _safe(row.get('blue_elo')),
             'red_elo':      _safe(row.get('red_elo')),
             'elo_diff':     _safe(row.get('elo_diff')),
