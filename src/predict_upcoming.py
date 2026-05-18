@@ -210,7 +210,7 @@ def _predict_side_neutral(model: Pipeline, row_filled: pd.DataFrame) -> float:
     scaler = model.named_steps['s']
     lr     = model.named_steps['lr']
     X_sc   = scaler.transform(row_filled)
-    z      = float(X_sc @ lr.coef_.T)   # coef only, no intercept
+    z      = float(X_sc[0] @ lr.coef_.ravel())   # coef only, no intercept
     return float(1.0 / (1.0 + np.exp(-z)))
 
 
