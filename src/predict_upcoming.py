@@ -37,8 +37,8 @@ MODEL_NAME = 'Logistic Regression'
 _LS_URL     = 'https://esports-api.lolesports.com/persisted/gw/getSchedule'
 _LS_API_KEY = '0TvQnueqKa5mxJntVWt0w4LpLfEkrV1Ta8rQBb9Z'
 _LS_LEAGUES = {
-    'LCK': '98767991302996019',
-    'LEC': '98767991310872058',
+    'LCK': '98767991310872058',
+    'LEC': '98767991302996019',
 }
 
 # Team name normalisation: lolesports display name → OE canonical
