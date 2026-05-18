@@ -24,30 +24,51 @@ interface Game {
   model_pred: number | null
   game_in_series: number | null
   series_type: string | null
-  mkt_model_abs: number | null  // |market - model|, computed client-side
-  ll_diff: number | null        // mkt_ll - model_ll (positive = model won)
+  mkt_model_abs: number | null
+  ll_diff: number | null
+}
+
+interface PivotRow {
+  team: string
+  games: number
+  wins: number
+  win_rate: number
+  odds_games: number
+  avg_ll_diff: number | null
+  avg_mkt_model_abs: number | null
 }
 
 type SortKey = keyof Game
 type SortDir = 'asc' | 'desc'
+type PivotSortKey = keyof PivotRow
+type Mode = 'games' | 'pivot'
 
 const COLS: { key: SortKey; label: string; fmt?: (v: number) => string; width?: string }[] = [
-  { key: 'date',         label: 'Date',       width: 'w-24' },
-  { key: 'league',       label: 'League',     width: 'w-14' },
-  { key: 'blue_team',    label: 'Blue',       width: 'w-36' },
-  { key: 'red_team',     label: 'Red',        width: 'w-36' },
-  { key: 'blue_win',      label: 'Result',     width: 'w-16' },
-  { key: 'series_type',   label: 'Series',     width: 'w-12' },
-  { key: 'game_in_series', label: 'Game',      width: 'w-10' },
-  { key: 'model_pred',   label: 'Model',      fmt: v => `${(v*100).toFixed(0)}%` },
-  { key: 'q_blue_win',   label: 'Market',     fmt: v => `${(v*100).toFixed(0)}%` },
-  { key: 'elo_diff',     label: 'ELO Δ',      fmt: v => (v>=0?'+':'')+v.toFixed(0) },
-  { key: 'h2h_wr',       label: 'H2H',        fmt: v => `${(v*100).toFixed(0)}%` },
-  { key: 'rwr_diff',     label: 'WR Δ',       fmt: v => (v>=0?'+':'')+`${(v*100).toFixed(0)}%` },
-  { key: 'gd15_diff',    label: 'GD15 Δ',     fmt: v => (v>=0?'+':'')+v.toFixed(0) },
-  { key: 'outperf_diff', label: 'Outperf Δ',  fmt: v => (v>=0?'+':'')+`${(v*100).toFixed(1)}%` },
-  { key: 'mkt_model_abs', label: '|Mkt−Model|', fmt: v => `${(v*100).toFixed(0)}pp` },
-  { key: 'll_diff',       label: 'MktLL−MdlLL', fmt: v => (v>=0?'+':'')+v.toFixed(3) },
+  { key: 'date',           label: 'Date',        width: 'w-24' },
+  { key: 'league',         label: 'League',      width: 'w-14' },
+  { key: 'blue_team',      label: 'Blue',        width: 'w-36' },
+  { key: 'red_team',       label: 'Red',         width: 'w-36' },
+  { key: 'blue_win',       label: 'Result',      width: 'w-16' },
+  { key: 'series_type',    label: 'Series',      width: 'w-12' },
+  { key: 'game_in_series', label: 'Game',        width: 'w-10' },
+  { key: 'model_pred',     label: 'Model',       fmt: v => `${(v*100).toFixed(0)}%` },
+  { key: 'q_blue_win',     label: 'Market',      fmt: v => `${(v*100).toFixed(0)}%` },
+  { key: 'elo_diff',       label: 'ELO Δ',       fmt: v => (v>=0?'+':'')+v.toFixed(0) },
+  { key: 'h2h_wr',         label: 'H2H',         fmt: v => `${(v*100).toFixed(0)}%` },
+  { key: 'rwr_diff',       label: 'WR Δ',        fmt: v => (v>=0?'+':'')+`${(v*100).toFixed(0)}%` },
+  { key: 'gd15_diff',      label: 'GD15 Δ',      fmt: v => (v>=0?'+':'')+v.toFixed(0) },
+  { key: 'outperf_diff',   label: 'Outperf Δ',   fmt: v => (v>=0?'+':'')+`${(v*100).toFixed(1)}%` },
+  { key: 'mkt_model_abs',  label: '|Mkt−Model|', fmt: v => `${(v*100).toFixed(0)}pp` },
+  { key: 'll_diff',        label: 'MktLL−MdlLL', fmt: v => (v>=0?'+':'')+v.toFixed(3) },
+]
+
+const PIVOT_COLS: { key: PivotSortKey; label: string; fmt: (v: number) => string; tip: string }[] = [
+  { key: 'team',             label: 'Team',         fmt: v => String(v),                          tip: 'Team name' },
+  { key: 'games',            label: 'Games',        fmt: v => v.toFixed(0),                       tip: 'Total games in filtered set' },
+  { key: 'win_rate',         label: 'Win %',        fmt: v => `${(v*100).toFixed(1)}%`,           tip: 'Win rate' },
+  { key: 'odds_games',       label: 'W/ Odds',      fmt: v => v.toFixed(0),                       tip: 'Games with Polymarket odds' },
+  { key: 'avg_ll_diff',      label: 'Avg MktLL−MdlLL', fmt: v => (v>=0?'+':'')+v.toFixed(3),    tip: 'Avg per-game (market LL − model LL). Positive = model outperformed market.' },
+  { key: 'avg_mkt_model_abs', label: 'Avg |Mkt−Model|', fmt: v => `${(v*100).toFixed(1)}pp`,   tip: 'Average absolute market vs model disagreement' },
 ]
 
 function fmt(col: typeof COLS[0], val: unknown): string {
@@ -58,7 +79,7 @@ function fmt(col: typeof COLS[0], val: unknown): string {
   return String(val)
 }
 
-function cellColor(col: typeof COLS[0], val: unknown, row: Game): string {
+function cellColor(col: typeof COLS[0], val: unknown): string {
   if (val === null || val === undefined) return 'text-gray-600'
   const v = val as number
   if (col.key === 'blue_win') return v === 1 ? 'text-blue-400 font-semibold' : 'text-red-400 font-semibold'
@@ -72,17 +93,31 @@ function cellColor(col: typeof COLS[0], val: unknown, row: Game): string {
   return 'text-gray-300'
 }
 
+function pivotCellColor(key: PivotSortKey, val: number | null): string {
+  if (val === null) return 'text-gray-600'
+  if (key === 'avg_ll_diff') return val > 0.01 ? 'text-green-400' : val < -0.01 ? 'text-red-400' : 'text-gray-400'
+  if (key === 'win_rate') return val >= 0.6 ? 'text-blue-400' : val <= 0.4 ? 'text-red-400' : 'text-gray-300'
+  return 'text-gray-300'
+}
+
 export default function GamesPage() {
   const [games, setGames]       = useState<Game[]>([])
   const [loading, setLoading]   = useState(true)
+  const [mode, setMode]         = useState<Mode>('games')
   const [search, setSearch]     = useState('')
   const [league, setLeague]     = useState('All')
   const [year, setYear]         = useState('All')
   const [playoffs, setPlayoffs] = useState('All')
+
+  // Game table sort
   const [sortKey, setSortKey]   = useState<SortKey>('date')
   const [sortDir, setSortDir]   = useState<SortDir>('desc')
   const [page, setPage]         = useState(0)
   const PAGE_SIZE = 100
+
+  // Pivot sort
+  const [pivotSort, setPivotSort] = useState<PivotSortKey>('avg_ll_diff')
+  const [pivotDir, setPivotDir]   = useState<SortDir>('desc')
 
   useEffect(() => {
     async function load() {
@@ -101,8 +136,8 @@ export default function GamesPage() {
         let ll_diff: number | null = null
         if (mkt != null && mdl != null) {
           const clamp = (p: number) => Math.max(1e-6, Math.min(1 - 1e-6, p))
-          const mkt_ll  = outcome === 1 ? -Math.log(clamp(mkt)) : -Math.log(clamp(1 - mkt))
-          const mdl_ll  = outcome === 1 ? -Math.log(clamp(mdl)) : -Math.log(clamp(1 - mdl))
+          const mkt_ll = outcome === 1 ? -Math.log(clamp(mkt)) : -Math.log(clamp(1 - mkt))
+          const mdl_ll = outcome === 1 ? -Math.log(clamp(mdl)) : -Math.log(clamp(1 - mdl))
           ll_diff = Math.round((mkt_ll - mdl_ll) * 1000) / 1000
         }
         return { ...g, mkt_model_abs, ll_diff }
@@ -134,6 +169,40 @@ export default function GamesPage() {
     })
   }, [filtered, sortKey, sortDir])
 
+  const pivotRows = useMemo<PivotRow[]>(() => {
+    const map = new Map<string, { games: number; wins: number; ll: number[]; abs: number[] }>()
+    for (const g of filtered) {
+      const sides: [string, boolean][] = [
+        [g.blue_team, g.blue_win === 1],
+        [g.red_team,  g.blue_win === 0],
+      ]
+      for (const [team, won] of sides) {
+        if (!map.has(team)) map.set(team, { games: 0, wins: 0, ll: [], abs: [] })
+        const r = map.get(team)!
+        r.games++
+        if (won) r.wins++
+        if (g.ll_diff != null) r.ll.push(g.ll_diff)
+        if (g.mkt_model_abs != null) r.abs.push(g.mkt_model_abs)
+      }
+    }
+    const rows: PivotRow[] = [...map.entries()].map(([team, r]) => ({
+      team,
+      games: r.games,
+      wins: r.wins,
+      win_rate: r.wins / r.games,
+      odds_games: r.ll.length,
+      avg_ll_diff: r.ll.length ? r.ll.reduce((a, b) => a + b, 0) / r.ll.length : null,
+      avg_mkt_model_abs: r.abs.length ? r.abs.reduce((a, b) => a + b, 0) / r.abs.length : null,
+    }))
+    return rows.sort((a, b) => {
+      const av = a[pivotSort], bv = b[pivotSort]
+      if (av === null) return 1
+      if (bv === null) return -1
+      const cmp = (av as number) < (bv as number) ? -1 : (av as number) > (bv as number) ? 1 : 0
+      return pivotDir === 'asc' ? cmp : -cmp
+    })
+  }, [filtered, pivotSort, pivotDir])
+
   const paged = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
   const totalPages = Math.ceil(sorted.length / PAGE_SIZE)
 
@@ -141,6 +210,11 @@ export default function GamesPage() {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortKey(key); setSortDir('desc') }
     setPage(0)
+  }
+
+  function togglePivotSort(key: PivotSortKey) {
+    if (pivotSort === key) setPivotDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setPivotSort(key); setPivotDir('desc') }
   }
 
   function handleFilter() { setPage(0) }
@@ -156,9 +230,9 @@ export default function GamesPage() {
       </header>
 
       <div className="px-6 py-4 border-b border-gray-800 flex gap-6 flex-wrap items-center">
-        <Link href="/"           className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Dashboard</Link>
-        <Link href="/players"    className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Player Lookup</Link>
-        <Link href="/model"      className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Model</Link>
+        <Link href="/"            className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Dashboard</Link>
+        <Link href="/players"     className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Player Lookup</Link>
+        <Link href="/model"       className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Model</Link>
         <Link href="/predictions" className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Predictions</Link>
         <span className="text-sm text-yellow-400 font-medium">Game Explorer</span>
       </div>
@@ -173,9 +247,9 @@ export default function GamesPage() {
           className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-100 w-44 focus:outline-none focus:border-blue-500"
         />
         {[
-          { label: 'League',   value: league,   set: setLeague,   opts: leagues },
-          { label: 'Year',     value: year,     set: setYear,     opts: years },
-          { label: 'Stage',    value: playoffs, set: setPlayoffs, opts: ['All', 'Regular', 'Playoffs'] },
+          { label: 'League', value: league,   set: setLeague,   opts: leagues },
+          { label: 'Year',   value: year,     set: setYear,     opts: years },
+          { label: 'Stage',  value: playoffs, set: setPlayoffs, opts: ['All', 'Regular', 'Playoffs'] },
         ].map(({ label, value, set, opts }) => (
           <div key={label} className="flex items-center gap-2">
             <label className="text-sm text-gray-400">{label}</label>
@@ -188,15 +262,34 @@ export default function GamesPage() {
             </select>
           </div>
         ))}
-        <span className="text-xs text-gray-500 ml-auto">
-          {loading ? 'Loading…' : `${sorted.length.toLocaleString()} games`}
+
+        {/* Mode toggle */}
+        <div className="ml-auto flex rounded overflow-hidden border border-gray-700 text-xs">
+          <button
+            onClick={() => setMode('games')}
+            className={`px-3 py-1.5 ${mode === 'games' ? 'bg-yellow-500 text-gray-900 font-semibold' : 'bg-gray-800 text-gray-400 hover:text-gray-200'}`}
+          >
+            Games
+          </button>
+          <button
+            onClick={() => setMode('pivot')}
+            className={`px-3 py-1.5 ${mode === 'pivot' ? 'bg-yellow-500 text-gray-900 font-semibold' : 'bg-gray-800 text-gray-400 hover:text-gray-200'}`}
+          >
+            Team Pivot
+          </button>
+        </div>
+
+        <span className="text-xs text-gray-500">
+          {loading ? 'Loading…' : mode === 'games'
+            ? `${sorted.length.toLocaleString()} games`
+            : `${pivotRows.length} teams`}
         </span>
       </div>
 
       <main className="px-6 py-4 overflow-x-auto">
         {loading ? (
           <p className="text-gray-500 text-sm mt-8">Loading…</p>
-        ) : (
+        ) : mode === 'games' ? (
           <>
             <table className="w-full text-xs whitespace-nowrap">
               <thead>
@@ -224,7 +317,7 @@ export default function GamesPage() {
                     }`}
                   >
                     {COLS.map(col => (
-                      <td key={col.key} className={`py-1.5 pr-4 font-mono ${cellColor(col, row[col.key], row)}`}>
+                      <td key={col.key} className={`py-1.5 pr-4 font-mono ${cellColor(col, row[col.key])}`}>
                         {fmt(col, row[col.key])}
                       </td>
                     ))}
@@ -233,7 +326,6 @@ export default function GamesPage() {
               </tbody>
             </table>
 
-            {/* Pagination */}
             {totalPages > 1 && (
               <div className="flex items-center gap-3 mt-4 text-sm">
                 <button
@@ -255,6 +347,51 @@ export default function GamesPage() {
                 </button>
               </div>
             )}
+          </>
+        ) : (
+          /* Pivot table */
+          <>
+            <p className="text-xs text-gray-500 mb-3">
+              Each row aggregates all filtered games for that team.
+              <span className="ml-2 text-green-400">Green Avg MktLL−MdlLL</span> = model beat market on average for those games.
+            </p>
+            <table className="text-xs whitespace-nowrap">
+              <thead>
+                <tr className="border-b border-gray-800">
+                  {PIVOT_COLS.map(col => (
+                    <th
+                      key={col.key}
+                      onClick={() => togglePivotSort(col.key)}
+                      title={col.tip}
+                      className="text-left py-2 pr-6 font-medium text-gray-500 cursor-pointer hover:text-gray-300 select-none"
+                    >
+                      {col.label}
+                      {pivotSort === col.key && (
+                        <span className="ml-1 text-gray-400">{pivotDir === 'asc' ? '↑' : '↓'}</span>
+                      )}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {pivotRows.map(row => (
+                  <tr key={row.team} className="border-b border-gray-800/30 hover:bg-gray-900/50">
+                    <td className="py-1.5 pr-6 font-medium text-gray-200">{row.team}</td>
+                    <td className="py-1.5 pr-6 font-mono text-gray-300">{row.games}</td>
+                    <td className={`py-1.5 pr-6 font-mono ${pivotCellColor('win_rate', row.win_rate)}`}>
+                      {(row.win_rate * 100).toFixed(1)}%
+                    </td>
+                    <td className="py-1.5 pr-6 font-mono text-gray-400">{row.odds_games}</td>
+                    <td className={`py-1.5 pr-6 font-mono ${pivotCellColor('avg_ll_diff', row.avg_ll_diff)}`}>
+                      {row.avg_ll_diff != null ? (row.avg_ll_diff >= 0 ? '+' : '') + row.avg_ll_diff.toFixed(3) : '—'}
+                    </td>
+                    <td className="py-1.5 pr-6 font-mono text-gray-300">
+                      {row.avg_mkt_model_abs != null ? `${(row.avg_mkt_model_abs * 100).toFixed(1)}pp` : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </>
         )}
       </main>
