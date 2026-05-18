@@ -81,6 +81,9 @@ export default function Dashboard() {
         <Link href="/model" className="text-sm text-purple-400 hover:text-purple-300 transition-colors">
           Model →
         </Link>
+        <Link href="/predictions" className="text-sm text-green-400 hover:text-green-300 transition-colors">
+          Predictions →
+        </Link>
         <span className="text-xs text-gray-500">
           {loading ? 'Loading…' : `${(stats?.total_games ?? 0).toLocaleString()} games`}
         </span>
