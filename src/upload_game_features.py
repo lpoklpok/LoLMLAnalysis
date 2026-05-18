@@ -23,9 +23,9 @@ load_dotenv(Path(os.path.dirname(__file__)) / '..' / '.env')
 
 PROCESSED_DIR = Path(os.path.dirname(__file__)) / '..' / 'data' / 'processed'
 
-FEATS = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff', 'series_momentum']
+FEATS = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff', 'draft_advantage']
 FILL  = {'elo_diff': 0., 'rwr_diff': 0., 'h2h_wr': 0.5,
-         'playoffs': 0, 'gd15_diff': 0., 'outperf_diff': 0., 'series_momentum': 0}
+         'playoffs': 0, 'gd15_diff': 0., 'outperf_diff': 0., 'draft_advantage': 0}
 
 
 def _safe(v):
@@ -58,16 +58,17 @@ def run():
         return 'bo1' if row['_series_max'] == 1 else 'bo3'
     df['_series_type'] = df.apply(_series_type, axis=1)
 
-    # series_momentum: +1 if blue won previous game, -1 if lost, 0 if game 1 or bo1
+    # draft_advantage: the loser of the previous game chooses side/pick order next game.
+    # +1 = blue team lost prev game (blue has draft choice), -1 = blue won prev (red has choice), 0 = G1/bo1
     df = df.sort_values(['_date_day', 'league', '_team_key', 'game'])
-    def _add_momentum(grp):
+    def _add_draft_advantage(grp):
         grp = grp.sort_values('game')
         prev = grp['blue_win'].shift(1)
-        grp['series_momentum'] = prev.apply(
-            lambda x: 0 if pd.isna(x) else (1 if x == 1 else -1)
+        grp['draft_advantage'] = prev.apply(
+            lambda x: 0 if pd.isna(x) else (-1 if x == 1 else 1)
         ).astype(int)
         return grp
-    df = df.groupby(['_date_day', 'league', '_team_key'], group_keys=False).apply(_add_momentum)
+    df = df.groupby(['_date_day', 'league', '_team_key'], group_keys=False).apply(_add_draft_advantage)
 
     records = []
     for i, (_, row) in enumerate(df.iterrows()):
@@ -81,7 +82,7 @@ def run():
             'blue_win':       int(row['blue_win']),
             'game_in_series':   int(row['game']),
             'series_type':      str(row['_series_type']),
-            'series_momentum':  int(row['series_momentum']),
+            'draft_advantage':  int(row['draft_advantage']),
             'blue_elo':     _safe(row.get('blue_elo')),
             'red_elo':      _safe(row.get('red_elo')),
             'elo_diff':     _safe(row.get('elo_diff')),

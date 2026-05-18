@@ -33,9 +33,9 @@ POSITIONS = ['top', 'jng', 'mid', 'bot', 'sup']
 _ELO_TIER = {'LCK': 1620, 'LPL': 1620, 'LEC': 1500,
               'LCS': 1380, 'LTA': 1380, 'LTA N': 1380, 'LTA S': 1380, 'LCKC': 1380}
 
-FEATS    = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff', 'series_momentum']
+FEATS    = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff', 'draft_advantage']
 FILL     = {'elo_diff': 0.0, 'rwr_diff': 0.0, 'h2h_wr': 0.5,
-            'playoffs': 0, 'gd15_diff': 0.0, 'outperf_diff': 0.0, 'series_momentum': 0}
+            'playoffs': 0, 'gd15_diff': 0.0, 'outperf_diff': 0.0, 'draft_advantage': 0}
 MODEL_NAME = 'Logistic Regression'
 
 FEAT_LABELS = {
@@ -45,7 +45,7 @@ FEAT_LABELS = {
     'playoffs':        'Playoffs',
     'gd15_diff':       'GD@15 Diff',
     'outperf_diff':    'Market Outperf Diff',
-    'series_momentum': 'Series Momentum (+1 won prev, -1 lost prev)',
+    'draft_advantage': 'Draft Advantage (+1 blue lost prev/has pick choice, -1 red lost prev)',
 }
 
 # lolesports.com schedule API
@@ -237,14 +237,15 @@ def _add_series_momentum(df: pd.DataFrame) -> pd.DataFrame:
         lambda r: '|'.join(sorted([str(r['blue_team']), str(r['red_team'])])), axis=1
     )
     df = df.sort_values(['_date_day', 'league', '_team_key', 'game'])
-    def _momentum(grp):
+    def _draft_adv(grp):
         grp = grp.sort_values('game')
         prev = grp['blue_win'].shift(1)
-        grp['series_momentum'] = prev.apply(
-            lambda x: 0 if pd.isna(x) else (1 if x == 1 else -1)
+        # Loser of prev game gets draft choice: +1 if blue lost (blue picks), -1 if blue won (red picks)
+        grp['draft_advantage'] = prev.apply(
+            lambda x: 0 if pd.isna(x) else (-1 if x == 1 else 1)
         ).astype(int)
         return grp
-    return df.groupby(['_date_day', 'league', '_team_key'], group_keys=False).apply(_momentum)
+    return df.groupby(['_date_day', 'league', '_team_key'], group_keys=False).apply(_draft_adv)
 
 
 def load_state() -> tuple[dict, dict, pd.DataFrame, dict, dict, dict, dict]:
@@ -456,10 +457,10 @@ def predict_game(blue_team: str, red_team: str, league: str,
                  player_gd15: dict | None = None,
                  team_outperf: dict | None = None,
                  team_outperf_staleness: dict | None = None,
-                 series_momentum: int = 0) -> dict | None:
+                 draft_advantage: int = 0) -> dict | None:
     """
-    series_momentum: +1 if blue team won the previous game in this series,
-                     -1 if they lost, 0 for game 1 or a bo1.
+    draft_advantage: +1 if blue team lost the previous game (blue has pick/side choice),
+                     -1 if blue won prev game (red has choice), 0 for game 1 or a bo1.
     """
     blue_players = roster_state.get(blue_team)
     red_players  = roster_state.get(red_team)
@@ -499,7 +500,7 @@ def predict_game(blue_team: str, red_team: str, league: str,
         'playoffs':        0,
         'gd15_diff':       gd15_diff,
         'outperf_diff':    outperf_diff,
-        'series_momentum': series_momentum,
+        'draft_advantage': draft_advantage,
     }]).fillna(FILL)
 
     pred = _predict_side_neutral(model, row_filled)
@@ -520,7 +521,7 @@ def predict_game(blue_team: str, red_team: str, league: str,
         'feat_h2h_wr':         _safe(h2h_wr),
         'feat_gd15_diff':      _safe(gd15_diff),
         'feat_outperf_diff':   _safe(outperf_diff),
-        'feat_series_momentum': int(series_momentum),
+        'feat_draft_advantage':  int(draft_advantage),
         # per-role player head-to-head records (informational only)
         'role_h2h':           _role_h2h_info(blue_players, red_players, player_h2h or {}),
     }
@@ -552,7 +553,8 @@ def run():
         best_of = int(row['BestOf'])
 
         pred = predict_game(blue, red, league, elo_map, roster_state, features, model, fim_inv,
-                            player_h2h, player_gd15, team_outperf, team_outperf_staleness)
+                            player_h2h, player_gd15, team_outperf, team_outperf_staleness,
+                            draft_advantage=0)
         if pred:
             pred['date']    = dt.isoformat()
             pred['best_of'] = best_of
