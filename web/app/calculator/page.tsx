@@ -53,16 +53,14 @@ function getH2H(params: ModelParams, t1: string, t2: string): number {
   return params.fill['h2h_wr'] ?? 0.5
 }
 
-function computeGameProbs(
+function rawZ(
   params: ModelParams,
   t1: string,
   t2: string,
   playoffs: boolean,
-): GameProbs | null {
-  const s1 = params.teams[t1]
-  const s2 = params.teams[t2]
-  if (!s1 || !s2) return null
-
+): number {
+  const s1   = params.teams[t1]
+  const s2   = params.teams[t2]
   const fill = params.fill
   const mean  = params.scaler.mean
   const scale = params.scaler.scale
@@ -83,13 +81,26 @@ function computeGameProbs(
                     : fill['outperf_diff'],
   }
 
-  const feats = params.features
-  // scaled dot product (no intercept — side-neutral)
-  let z_base = 0
-  for (let i = 0; i < feats.length; i++) {
-    const v = (raw[feats[i]] - mean[i]) / scale[i]
-    z_base += v * coef[i]
+  let z = 0
+  for (let i = 0; i < params.features.length; i++) {
+    z += ((raw[params.features[i]] - mean[i]) / scale[i]) * coef[i]
   }
+  return z
+}
+
+function computeGameProbs(
+  params: ModelParams,
+  t1: string,
+  t2: string,
+  playoffs: boolean,
+): GameProbs | null {
+  const s1 = params.teams[t1]
+  const s2 = params.teams[t2]
+  if (!s1 || !s2) return null
+
+  // Average forward and reverse logits to cancel scaler mean bias,
+  // making predictions symmetric when teams are swapped.
+  const z_base = (rawZ(params, t1, t2, playoffs) - rawZ(params, t2, t1, playoffs)) / 2
 
   const po_net       = playoffs ? (s1.po_adj - s2.po_adj) : 0
   const coaching_net = s1.coaching_adj - s2.coaching_adj
@@ -98,9 +109,9 @@ function computeGameProbs(
   const g1       = sigmoid(z_adj)
   const alpha    = params.alpha_g2
   const beta     = params.beta_da
-  // draft_advantage = -1 when t1 won prev game (t1 disadvantaged), +1 when t1 lost
-  const g2_t1won = sigmoid(alpha * z_adj + beta * (-1))  // t1 won G1 → t2 gets draft
-  const g2_t2won = sigmoid(alpha * z_adj + beta * (+1))  // t2 won G1 → t1 gets draft
+  // G2: loser of G1 gets blue side (standard LoL series rule)
+  const g2_t1won = sigmoid(alpha * z_adj + beta * (-1))  // t1 won G1 → t2 gets blue
+  const g2_t2won = sigmoid(alpha * z_adj + beta * (+1))  // t2 won G1 → t1 gets blue
   const g2_avg   = g1 * g2_t1won + (1 - g1) * g2_t2won
   const g3plus   = g1
 
