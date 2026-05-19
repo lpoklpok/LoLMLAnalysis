@@ -219,14 +219,14 @@ export default function GamesPage() {
 
   function handleFilter() { setPage(0) }
 
-  const leagues = ['All', 'LCK', 'LEC', 'LPL']
-  const years   = ['All', '2024', '2025', '2026']
+  const leagues = useMemo(() => ['All', ...Array.from(new Set(games.map(g => g.league))).sort()], [games])
+  const years   = useMemo(() => ['All', ...Array.from(new Set(games.map(g => String(g.year)))).sort().reverse()], [games])
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
       <header className="border-b border-gray-800 px-6 py-4">
         <h1 className="text-2xl font-bold text-blue-400">LoL Esports Analytics</h1>
-        <p className="text-sm text-gray-400 mt-1">LCK · LEC · LCS · LPL · 2024–2026</p>
+        <p className="text-sm text-gray-400 mt-1">All leagues · 2024–2026</p>
       </header>
 
       <div className="px-6 py-4 border-b border-gray-800 flex gap-6 flex-wrap items-center">
