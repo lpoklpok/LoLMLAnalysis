@@ -60,6 +60,18 @@ const FILTER_COLORS: Record<string, string> = {
   kelly_5pct:   '#8b5cf6',
 }
 
+const KELLY_COLORS: Record<string, string> = {
+  quarter: '#fbbf24',
+  half:    '#8b5cf6',
+  full:    '#ef4444',
+}
+
+const KELLY_FRACTIONS: { key: string; label: string; frac: number }[] = [
+  { key: 'quarter', label: '¼ Kelly', frac: 0.5 },
+  { key: 'half',    label: '½ Kelly', frac: 1.0 },
+  { key: 'full',    label: 'Full Kelly', frac: 2.0 },
+]
+
 const fmt$ = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n)
 
@@ -189,6 +201,51 @@ export default function BacktestPage() {
     })
   }, [data])
 
+  const kellyComparison = useMemo(() => {
+    if (!data) return []
+    return KELLY_FRACTIONS.map(({ key, label, frac }) => {
+      let bankroll = data.starting_bankroll
+      let peak = bankroll
+      let mdd = 0
+      const curve: { date: string; bankroll: number }[] = []
+
+      for (const bet of data.bets) {
+        const mp = bet.side === 'blue' ? bet.market_q : 1 - bet.market_q
+        const odds = (1 - mp) / mp
+        const f = Math.min(bet.kelly_f * frac, 0.20)
+        bankroll += bet.won ? f * bankroll * odds * (1 - data.fee_pct) : -f * bankroll
+        if (bankroll > peak) peak = bankroll
+        mdd = Math.max(mdd, peak - bankroll)
+
+        const last = curve[curve.length - 1]
+        if (last?.date === bet.date) last.bankroll = Math.round(bankroll)
+        else curve.push({ date: bet.date, bankroll: Math.round(bankroll) })
+      }
+
+      return {
+        key, label,
+        final: Math.round(bankroll),
+        pct: ((bankroll - data.starting_bankroll) / data.starting_bankroll) * 100,
+        mdd: Math.round(mdd),
+        curve,
+      }
+    })
+  }, [data])
+
+  const kellyCurveData = useMemo(() => {
+    if (!kellyComparison.length) return []
+    const allDates = new Set<string>()
+    kellyComparison.forEach(k => k.curve.forEach(p => allDates.add(p.date)))
+    return [...allDates].sort().map(date => {
+      const row: Record<string, string | number> = { date }
+      for (const k of kellyComparison) {
+        const pt = k.curve.find(p => p.date === date)
+        if (pt) row[k.key] = pt.bankroll
+      }
+      return row
+    })
+  }, [kellyComparison])
+
   const bets = data?.bets ?? []
   const pageBets = bets.slice(betPage * BET_PAGE_SIZE, (betPage + 1) * BET_PAGE_SIZE)
   const totalPages = Math.ceil(bets.length / BET_PAGE_SIZE)
@@ -313,6 +370,94 @@ export default function BacktestPage() {
           </ResponsiveContainer>
           <p className="text-xs text-gray-600 mt-2">Dashed line = $10k starting bankroll.</p>
         </div>
+
+        {/* Kelly Fraction Comparison */}
+        {kellyComparison.length > 0 && (
+          <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
+            <div className="mb-4">
+              <h3 className="text-sm font-semibold text-gray-200">Kelly Fraction Comparison</h3>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Same bets (Half-Kelly &gt; 5% filter, 290 bets), different stake sizing. All start at $10k.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3 mb-5">
+              {kellyComparison.map(k => (
+                <div key={k.key} className="bg-gray-800/50 rounded-lg p-3 border border-gray-700">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: KELLY_COLORS[k.key] }} />
+                    <span className="text-xs font-semibold text-gray-300">{k.label}</span>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-gray-500">Final</span>
+                      <span className="font-mono text-gray-200">{fmt$(k.final)}</span>
+                    </div>
+                    <div className="flex justify-between text-xs">
+                      <span className="text-gray-500">Return</span>
+                      <span className={`font-mono font-semibold ${k.pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        {k.pct >= 0 ? '+' : ''}{k.pct.toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-xs">
+                      <span className="text-gray-500">Max DD</span>
+                      <span className="font-mono text-red-400">{fmt$(k.mdd)}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={kellyCurveData} margin={{ top: 5, right: 20, bottom: 5, left: 60 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+                <XAxis
+                  dataKey="date"
+                  tickFormatter={fmtDateShort}
+                  tick={{ fill: '#6b7280', fontSize: 11 }}
+                  axisLine={{ stroke: '#374151' }}
+                  tickLine={false}
+                  interval={15}
+                />
+                <YAxis
+                  tickFormatter={v => `$${(v / 1000).toFixed(0)}k`}
+                  tick={{ fill: '#6b7280', fontSize: 11 }}
+                  axisLine={{ stroke: '#374151' }}
+                  tickLine={false}
+                />
+                <ReferenceLine y={10000} stroke="#374151" strokeDasharray="4 4" />
+                <Tooltip content={<CurveTooltip />} />
+                {kellyComparison.map(k => (
+                  <Line
+                    key={k.key}
+                    type="monotone"
+                    dataKey={k.key}
+                    name={k.label}
+                    stroke={KELLY_COLORS[k.key]}
+                    strokeWidth={k.key === 'half' ? 2.5 : 1.5}
+                    dot={false}
+                    connectNulls
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+
+            <div className="mt-4 grid grid-cols-3 gap-3 text-xs">
+              <div className="bg-amber-950/30 border border-amber-900/50 rounded p-3">
+                <p className="font-semibold text-amber-400 mb-1">¼ Kelly — Conservative</p>
+                <p className="text-gray-400">Smallest drawdowns and variance. Good if you're uncertain about model calibration or want smoother equity. Grows slowest.</p>
+              </div>
+              <div className="bg-purple-950/30 border border-purple-900/50 rounded p-3">
+                <p className="font-semibold text-purple-400 mb-1">½ Kelly — Balanced</p>
+                <p className="text-gray-400">~75% of full Kelly geometric growth with significantly lower variance. The standard practical recommendation.</p>
+              </div>
+              <div className="bg-red-950/30 border border-red-900/50 rounded p-3">
+                <p className="font-semibold text-red-400 mb-1">Full Kelly — Aggressive</p>
+                <p className="text-gray-400">Maximises log-growth in theory but is highly sensitive to model miscalibration. Drawdowns are severe; ruin risk is real.</p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Monthly P&L bar chart */}
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
