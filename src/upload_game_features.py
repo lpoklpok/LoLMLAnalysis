@@ -99,16 +99,9 @@ def run():
 
     # draft_advantage: loser of prev game chooses side/pick order independently.
     # +1 = blue lost prev (blue has draft choice), -1 = blue won (red has choice), 0 = G1/bo1
-    df = df.sort_values(['_date_day', 'league', '_team_key', 'game'])
-    def _add_draft_advantage(grp):
-        grp = grp.sort_values('game')
-        prev = grp['blue_win'].shift(1)
-        grp['draft_advantage'] = prev.apply(
-            lambda x: 0 if pd.isna(x) else (-1 if x == 1 else 1)
-        ).astype(int)
-        return grp
-    df = df.groupby(['_date_day', 'league', '_team_key'], group_keys=False).apply(_add_draft_advantage)
-    df = df.reset_index(drop=True)
+    df = df.sort_values(['_date_day', 'league', '_team_key', 'game']).reset_index(drop=True)
+    shifted = df.groupby(['_date_day', 'league', '_team_key'])['blue_win'].shift(1)
+    df['draft_advantage'] = shifted.map(lambda x: 0 if pd.isna(x) else (-1 if x == 1 else 1)).astype(int)
 
     train = df[df['year'].isin([2024, 2025])]
     model = Pipeline([('s', StandardScaler()), ('lr', LogisticRegression(max_iter=1000))])
