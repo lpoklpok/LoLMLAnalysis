@@ -41,13 +41,22 @@ interface Bet {
   won: boolean
 }
 
+interface RegionStat {
+  league: string
+  n_bets: number
+  win_rate: number
+  pnl: number
+}
+
 interface BacktestData {
   generated: string
   starting_bankroll: number
   fee_pct: number
   filters: FilterStats[]
   bets: Bet[]
+  lcs_bets?: Bet[]
   curves: Record<string, CurvePoint[]>
+  region_stats?: RegionStat[]
 }
 
 // ---------- constants ----------
@@ -58,6 +67,15 @@ const FILTER_COLORS: Record<string, string> = {
   prob_5pct:    '#3b82f6',
   kelly_3pct:   '#a78bfa',
   kelly_5pct:   '#8b5cf6',
+  lcs_only:     '#34d399',
+  with_lcs:     '#f97316',
+}
+
+const LEAGUE_COLORS: Record<string, string> = {
+  LCK: '#60a5fa',
+  LEC: '#a78bfa',
+  LPL: '#facc15',
+  LCS: '#34d399',
 }
 
 const KELLY_COLORS: Record<string, string> = {
@@ -117,7 +135,7 @@ function FilterSummaryTable({ filters }: { filters: FilterStats[] }) {
     <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
       <div className="px-5 py-3 border-b border-gray-800">
         <h3 className="text-sm font-semibold text-gray-300">Filter Comparison — 2026 Backtest</h3>
-        <p className="text-xs text-gray-500 mt-0.5">$10k starting, 2% Polymarket fee, half-Kelly sizing, 20% max bet, OOS playoff adjustments</p>
+        <p className="text-xs text-gray-500 mt-0.5">$10k starting, half-Kelly sizing, 20% max bet, OOS playoff adjustments. LCS uses OddsPortal odds (0% fee).</p>
       </div>
       <table className="w-full text-sm">
         <thead>
@@ -156,7 +174,7 @@ function FilterSummaryTable({ filters }: { filters: FilterStats[] }) {
 
 export default function BacktestPage() {
   const [data, setData]               = useState<BacktestData | null>(null)
-  const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set(['prob_5pct', 'kelly_5pct', 'no_threshold']))
+  const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set(['kelly_5pct', 'with_lcs', 'lcs_only']))
   const [betPage, setBetPage]         = useState(0)
   const BET_PAGE_SIZE = 50
 
@@ -309,6 +327,30 @@ export default function BacktestPage() {
 
         {/* Filter comparison table */}
         <FilterSummaryTable filters={data.filters} />
+
+        {/* P&L by Region */}
+        {data.region_stats && (
+          <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
+            <div className="px-5 py-3 border-b border-gray-800">
+              <h3 className="text-sm font-semibold text-gray-300">P&L by Region — Combined Portfolio</h3>
+              <p className="text-xs text-gray-500 mt-0.5">LCK/LEC/LPL use Polymarket odds (2% fee). LCS uses OddsPortal vigfree odds (0% fee), model trained on major leagues only.</p>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 divide-x divide-gray-800">
+              {data.region_stats.map(r => (
+                <div key={r.league} className="px-5 py-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: LEAGUE_COLORS[r.league] ?? '#6b7280' }} />
+                    <span className="text-sm font-bold" style={{ color: LEAGUE_COLORS[r.league] ?? '#9ca3af' }}>{r.league}</span>
+                  </div>
+                  <p className={`text-xl font-bold font-mono ${r.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {r.pnl >= 0 ? '+' : ''}{fmt$(r.pnl)}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">{r.n_bets} bets · {r.win_rate.toFixed(1)}% WR</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Bankroll curve chart */}
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
