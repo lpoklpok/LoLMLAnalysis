@@ -1,0 +1,7 @@
+[
+  {
+    "_comment": "Add EWC or other non-lolesports games here. Remove this entry and add real ones when needed.",
+    "_format": "date (ISO UTC), team1, team2, league, best_of",
+    "_example": {"date": "2026-07-15T10:00:00Z", "team1": "T1", "team2": "Gen.G", "league": "EWC", "best_of": 5}
+  }
+]

@@ -95,7 +95,14 @@ _LS_API_KEY = '0TvQnueqKa5mxJntVWt0w4LpLfEkrV1Ta8rQBb9Z'
 _LS_LEAGUES = {
     'LCK': '98767991310872058',
     'LEC': '98767991302996019',
+    'LPL': '98767991314006698',
+    'MSI': '98767991325878492',
 }
+
+# Manual schedule fallback for tournaments not on lolesports (e.g. EWC).
+# Path: data/manual_upcoming.json
+# Format: [{"date": "2026-07-15T10:00:00Z", "team1": "T1", "team2": "Gen.G", "league": "EWC", "best_of": 5}, ...]
+_MANUAL_SCHEDULE_PATH = Path(os.path.dirname(__file__)) / '..' / 'data' / 'manual_upcoming.json'
 
 # Team name normalisation: lolesports display name → OE canonical
 _TEAM_NORM = {
@@ -133,6 +140,33 @@ _TEAM_NORM = {
     'GIANTX':                   'GiantX',
     'Team Heretics':            'Team Heretics',
     'Shifters':                 'Shifters',
+    # LPL
+    "Anyone's Legend":          "Anyone's Legend",
+    'BILIBILI GAMING':          'Bilibili Gaming',
+    'Bilibili Gaming':          'Bilibili Gaming',
+    'Beijing JDG Esports':      'JD Gaming',
+    'JD Gaming':                'JD Gaming',
+    'EDWARD GAMING':            'EDward Gaming',
+    'EDward Gaming':            'EDward Gaming',
+    'Invictus Gaming':          'Invictus Gaming',
+    'LGD GAMING':               'LGD Gaming',
+    'Oh My God':                'Oh My God',
+    'Shenzhen NINJAS IN PYJAMAS': 'Ninjas in Pyjamas',
+    'Ninjas in Pyjamas':        'Ninjas in Pyjamas',
+    'Suzhou LNG Esports':       'LNG Esports',
+    'LNG Esports':              'LNG Esports',
+    'THUNDER TALK GAMING':      'ThunderTalk Gaming',
+    'ThunderTalk Gaming':       'ThunderTalk Gaming',
+    'TOP ESPORTS':              'Top Esports',
+    'Top Esports':              'Top Esports',
+    'Ultra Prime':              'Ultra Prime',
+    'WeiboGaming':              'Weibo Gaming',
+    'Weibo Gaming':             'Weibo Gaming',
+    "Xi'an Team WE":            'Team WE',
+    'Team WE':                  'Team WE',
+    'FunPlus Phoenix':          'FunPlus Phoenix',
+    'FUNPLUS PHOENIX':          'FunPlus Phoenix',
+    # MSI / Worlds / EWC (same teams, names already covered above)
 }
 
 
@@ -206,7 +240,8 @@ def fetch_polymarket_odds() -> dict:
 
 
 def fetch_upcoming(days_ahead: int = 14) -> pd.DataFrame:
-    """Query the lolesports schedule API for upcoming LCK/LEC matches."""
+    """Query the lolesports schedule API for upcoming matches.
+    Also merges any games from data/manual_upcoming.json (for EWC etc.)."""
     now    = pd.Timestamp.now('UTC')
     cutoff = now + pd.Timedelta(days=days_ahead)
     rows   = []
@@ -260,6 +295,29 @@ def fetch_upcoming(days_ahead: int = 14) -> pd.DataFrame:
                 page_token = newer
             else:
                 break
+
+    # Merge manual schedule (EWC and other non-lolesports tournaments)
+    if _MANUAL_SCHEDULE_PATH.exists():
+        import json as _json
+        try:
+            manual = _json.loads(_MANUAL_SCHEDULE_PATH.read_text())
+            for entry in manual:
+                if 'date' not in entry or 'team1' not in entry:
+                    continue
+                dt = pd.Timestamp(entry['date']).tz_localize('UTC') if pd.Timestamp(entry['date']).tzinfo is None else pd.Timestamp(entry['date'])
+                if now < dt <= cutoff:
+                    rows.append({
+                        'Team1':        entry['team1'],
+                        'Team2':        entry['team2'],
+                        'DateTime_UTC': dt,
+                        'BestOf':       int(entry.get('best_of', 1)),
+                        'league':       entry.get('league', 'EWC'),
+                    })
+            manual_count = sum(1 for e in manual if 'date' in e and 'team1' in e and now < (pd.Timestamp(e['date']).tz_localize('UTC') if pd.Timestamp(e['date']).tzinfo is None else pd.Timestamp(e['date'])) <= cutoff)
+            if manual_count:
+                print(f"  Loaded {manual_count} game(s) from manual_upcoming.json")
+        except Exception as e:
+            print(f"  Warning: could not read manual_upcoming.json: {e}")
 
     if not rows:
         print("  No upcoming matches found in the lolesports schedule.")
