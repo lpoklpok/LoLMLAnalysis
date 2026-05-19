@@ -233,6 +233,46 @@ function seriesScoreProbs(gp: GameProbs, bestOf: number): { score: string; prob:
     .sort((a, b) => b.prob - a.prob)
 }
 
+// ---------- Kelly helpers ----------
+
+interface KellyResult {
+  side:         string   // 'team1' | 'team2' | 'no edge'
+  edge:         number
+  odds:         number   // decimal odds for bet side
+  raw_kelly:    number
+  half_kelly:   number
+  quarter_kelly: number
+  bet_half:     number   // dollar amount at half Kelly
+  bet_quarter:  number
+}
+
+function computeKelly(modelP: number, marketQ: number, bankroll: number): KellyResult {
+  const edge1 = modelP - marketQ          // edge betting team 1
+  const edge2 = (1 - modelP) - (1 - marketQ)  // edge betting team 2
+
+  let side: string, edge: number, mp: number
+  if (edge1 >= edge2 && edge1 > 0) {
+    side = 'team1'; edge = edge1; mp = marketQ
+  } else if (edge2 > 0) {
+    side = 'team2'; edge = edge2; mp = 1 - marketQ
+  } else {
+    return { side: 'no edge', edge: Math.max(edge1, edge2), odds: 0,
+             raw_kelly: 0, half_kelly: 0, quarter_kelly: 0, bet_half: 0, bet_quarter: 0 }
+  }
+
+  const odds       = (1 - mp) / mp
+  const raw_kelly  = edge / (1 - mp)
+  const half_kelly  = Math.min(raw_kelly * 0.5,  0.20)
+  const quarter_kelly = Math.min(raw_kelly * 0.25, 0.20)
+
+  return {
+    side, edge, odds, raw_kelly,
+    half_kelly, quarter_kelly,
+    bet_half:    half_kelly    * bankroll,
+    bet_quarter: quarter_kelly * bankroll,
+  }
+}
+
 // ---------- component ----------
 
 const FORMAT_OPTIONS = ['BO1', 'BO3', 'BO5'] as const
@@ -270,12 +310,14 @@ function ProbBar({ p, label }: { p: number; label: string }) {
 }
 
 export default function CalculatorPage() {
-  const [params, setParams]   = useState<ModelParams | null>(null)
-  const [team1, setTeam1]     = useState('')
-  const [team2, setTeam2]     = useState('')
-  const [format, setFormat]   = useState<Format>('BO3')
+  const [params, setParams]     = useState<ModelParams | null>(null)
+  const [team1, setTeam1]       = useState('')
+  const [team2, setTeam2]       = useState('')
+  const [format, setFormat]     = useState<Format>('BO3')
   const [playoffs, setPlayoffs] = useState(false)
-  const [error, setError]     = useState<string | null>(null)
+  const [marketPct, setMarketPct] = useState('')   // market % for team1, e.g. "42.5"
+  const [bankroll, setBankroll] = useState('10000')
+  const [error, setError]       = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/model_params.json')
@@ -320,6 +362,14 @@ export default function CalculatorPage() {
 
   const t1stats = params && team1 ? params.teams[team1] : null
   const t2stats = params && team2 ? params.teams[team2] : null
+
+  const kellyResult = useMemo<KellyResult | null>(() => {
+    if (seriesProb === null) return null
+    const mq = parseFloat(marketPct) / 100
+    if (isNaN(mq) || mq <= 0 || mq >= 1) return null
+    const br = parseFloat(bankroll) || 10000
+    return computeKelly(seriesProb, mq, br)
+  }, [seriesProb, marketPct, bankroll])
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
@@ -424,6 +474,36 @@ export default function CalculatorPage() {
                   )}
                 </div>
               </div>
+
+              {/* Kelly inputs */}
+              <div className="mt-5 pt-5 border-t border-gray-800 flex gap-6 flex-wrap items-end">
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">
+                    Market % for {team1 || 'Team 1'} (series)
+                  </label>
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      min="1" max="99" step="0.1"
+                      placeholder="e.g. 42.5"
+                      value={marketPct}
+                      onChange={e => setMarketPct(e.target.value)}
+                      className="w-32 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-yellow-500"
+                    />
+                    <span className="text-gray-500 text-sm">%</span>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Bankroll ($)</label>
+                  <input
+                    type="number"
+                    min="1" step="100"
+                    value={bankroll}
+                    onChange={e => setBankroll(e.target.value)}
+                    className="w-36 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-yellow-500"
+                  />
+                </div>
+              </div>
             </div>
 
             {/* Results */}
@@ -452,6 +532,64 @@ export default function CalculatorPage() {
                     </div>
                   </div>
                 </div>
+
+                {/* Kelly recommendation */}
+                {kellyResult && (
+                  <div className={`rounded-xl border p-6 ${
+                    kellyResult.side === 'no edge'
+                      ? 'bg-gray-900 border-gray-700'
+                      : 'bg-gray-900 border-yellow-700/50'
+                  }`}>
+                    <h2 className="text-lg font-semibold text-gray-100 mb-1">Kelly Criterion</h2>
+                    <p className="text-xs text-gray-500 mb-5">
+                      Model {pct(seriesProb!, 1)} vs market {pct(parseFloat(marketPct)/100, 1)} · half-Kelly capped at 20%
+                    </p>
+
+                    {kellyResult.side === 'no edge' ? (
+                      <p className="text-gray-400 text-sm">
+                        No edge — model favours the same side as the market or is very close.
+                        Edge: {(kellyResult.edge * 100).toFixed(2)}%
+                      </p>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-2 mb-5">
+                          <span className="text-xs text-gray-400">Bet side:</span>
+                          <span className={`px-3 py-1 rounded-full text-sm font-semibold ${
+                            kellyResult.side === 'team1' ? 'bg-blue-900/50 text-blue-300' : 'bg-red-900/50 text-red-300'
+                          }`}>
+                            {kellyResult.side === 'team1' ? team1 : team2}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            {pct(kellyResult.edge, 2)} edge · {kellyResult.odds.toFixed(3)}x decimal odds
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                          {[
+                            { label: 'Raw Kelly', frac: kellyResult.raw_kelly, amt: kellyResult.raw_kelly * (parseFloat(bankroll) || 10000) },
+                            { label: 'Half Kelly', frac: kellyResult.half_kelly, amt: kellyResult.bet_half },
+                            { label: 'Quarter Kelly', frac: kellyResult.quarter_kelly, amt: kellyResult.bet_quarter },
+                            { label: 'Decimal Odds', frac: null, amt: null },
+                          ].map(({ label, frac, amt }) =>
+                            frac !== null ? (
+                              <div key={label} className="bg-gray-800 rounded-lg p-3">
+                                <div className="text-xs text-gray-400 mb-1">{label}</div>
+                                <div className="text-yellow-300 font-bold text-lg">{pct(frac, 1)}</div>
+                                <div className="text-gray-300 text-sm">${amt!.toLocaleString('en-US', { maximumFractionDigits: 0 })}</div>
+                              </div>
+                            ) : (
+                              <div key={label} className="bg-gray-800 rounded-lg p-3">
+                                <div className="text-xs text-gray-400 mb-1">Decimal Odds</div>
+                                <div className="text-white font-bold text-lg">{kellyResult.odds.toFixed(3)}x</div>
+                                <div className="text-gray-400 text-xs">profit per $ staked</div>
+                              </div>
+                            )
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
 
                 {/* Per-game probabilities */}
                 <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
