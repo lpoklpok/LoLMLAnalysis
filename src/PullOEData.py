@@ -1,5 +1,6 @@
 import gdown
 import os
+import requests
 
 FOLDER_ID = "1gLSw0RLjBbtaNy0dgnGQDAZOHIgCe-HH"
 CURRENT_YEAR_FILE_ID = "1hnpbrUpBMS1TZI7IovfpKeZfWJH1Aptm"
@@ -21,9 +22,33 @@ if missing_years:
 else:
     print("All historical years present, skipping folder download.")
 
-# Always re-download the current year since it updates regularly
+# Refresh current year data with fallback if Google Drive rate-limits gdown
+output_path = os.path.join(RAW_DIR, f"{CURRENT_YEAR}_LoL_esports_match_data_from_OraclesElixir.csv")
 print(f"Refreshing {CURRENT_YEAR} data...")
-gdown.download(id=CURRENT_YEAR_FILE_ID, output=os.path.join(RAW_DIR, f"{CURRENT_YEAR}_LoL_esports_match_data_from_OraclesElixir.csv"), quiet=False)
 
+def download_via_requests(file_id, path):
+    session = requests.Session()
+    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    r = session.get(url, stream=True)
+    # Handle large-file confirm token
+    confirm = next((v for k, v in r.cookies.items() if k.startswith("download_warning")), None)
+    if confirm:
+        r = session.get(url + f"&confirm={confirm}", stream=True)
+    with open(path, "wb") as f:
+        for chunk in r.iter_content(32768):
+            if chunk:
+                f.write(chunk)
 
-
+try:
+    gdown.download(id=CURRENT_YEAR_FILE_ID, output=output_path, quiet=False)
+    print("gdown succeeded.")
+except Exception as e:
+    print(f"gdown failed ({e}), trying direct requests download...")
+    try:
+        download_via_requests(CURRENT_YEAR_FILE_ID, output_path)
+        print("requests download succeeded.")
+    except Exception as e2:
+        if os.path.exists(output_path):
+            print(f"Both download methods failed ({e2}). Using cached file from previous run.")
+        else:
+            raise RuntimeError(f"Could not download {CURRENT_YEAR} data and no cache exists.") from e2

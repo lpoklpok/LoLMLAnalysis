@@ -37,6 +37,7 @@ jobs:
 
       - name: Pull latest Oracle's Elixir data
         run: python src/PullOEData.py
+        continue-on-error: true
 
       - name: Merge game + odds data
         run: python src/merge_data.py
