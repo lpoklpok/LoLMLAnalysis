@@ -30,8 +30,47 @@ FILL  = {'elo_diff': 0., 'rwr_diff': 0., 'h2h_wr': 0.5,
 # G2 adjustment for 2025+: z_G2 = ALPHA_G2 * logodds + BETA_DA * draft_advantage
 # Separates blanket regression-to-mean (alpha) from the genuine draft-advantage boost (beta).
 # Both fitted via minimising log-loss on 2025 G2 games, validated on 2026 holdout.
-ALPHA_G2 = 0.8954
-BETA_DA  = 0.0790
+ALPHA_G2 = 0.8970
+BETA_DA  = 0.0929
+
+# Per-team playoff logodds adjustment (positive = outperforms in playoffs vs regular season).
+# Fitted via leave-one-year-out residuals, scaled by a single global shrinkage factor (0.76)
+# optimised on 2025+2026 log loss. Only teams with ≥10 playoff games included.
+TEAM_PO_ADJ = {
+    'G2 Esports':         0.4172,
+    'FunPlus Phoenix':    0.3159,
+    'Bilibili Gaming':    0.2242,
+    'T1':                 0.2068,
+    'KT Rolster':         0.1991,
+    'Weibo Gaming':       0.1234,
+    'BNK FEARX':          0.1069,
+    "Anyone's Legend":    0.0801,
+    'Team BDS':           0.0612,
+    'Karmine Corp':       0.0416,
+    'Hanwha Life Esports':-0.0616,
+    'Team WE':           -0.0757,
+    'Top Esports':       -0.0927,
+    'Dplus Kia':         -0.0968,
+    'JD Gaming':         -0.1238,
+    'Invictus Gaming':   -0.1406,
+    'Gen.G':             -0.1510,
+    'Movistar KOI':      -0.1518,
+    'Team Heretics':     -0.3450,
+    'ThunderTalk Gaming':-0.3521,
+    'Ninjas in Pyjamas': -0.3548,
+    'EDward Gaming':     -0.3743,
+    'Team Vitality':     -0.4237,
+    'Fnatic':            -0.4427,
+    'GiantX':            -0.4491,
+    'Nongshim RedForce': -0.6670,
+}
+
+# Coaching adjustments: team → (from_year, logodds_bonus).
+# Applied to all games (regular season + playoffs) from from_year onwards.
+# Reapered joined Karmine Corp for 2026; fitted on 2026 KC games.
+COACHING_ADJ = {
+    'Karmine Corp': (2026, 0.3695),
+}
 
 
 def _safe(v):
@@ -86,6 +125,23 @@ def run():
     logodds_adj = logodds.copy()
     logodds_adj[g2_mask] = (ALPHA_G2 * logodds[g2_mask]
                             + BETA_DA * df['draft_advantage'].values[g2_mask])
+
+    # Team playoff adjustment: per-team logodds shift when in playoffs
+    po_mask = df['playoffs'].values == 1
+    if po_mask.any():
+        blue_po = np.array([TEAM_PO_ADJ.get(t, 0.0) for t in df['blue_team']])
+        red_po  = np.array([TEAM_PO_ADJ.get(t, 0.0) for t in df['red_team']])
+        logodds_adj[po_mask] += (blue_po - red_po)[po_mask]
+
+    # Coaching adjustments: applied to all games from the specified year onwards
+    years = df['year'].values
+    for team, (from_year, bonus) in COACHING_ADJ.items():
+        active = years >= from_year
+        blue_mask = (df['blue_team'].values == team) & active
+        red_mask  = (df['red_team'].values  == team) & active
+        logodds_adj[blue_mask] += bonus
+        logodds_adj[red_mask]  -= bonus
+
     preds = 1 / (1 + np.exp(-logodds_adj))
 
     records = []

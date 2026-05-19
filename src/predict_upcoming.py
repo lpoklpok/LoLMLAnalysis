@@ -38,8 +38,47 @@ FILL     = {'elo_diff': 0.0, 'rwr_diff': 0.0, 'h2h_wr': 0.5,
             'playoffs': 0, 'gd15_diff': 0.0, 'outperf_diff': 0.0}
 MODEL_NAME = 'Logistic Regression'
 # G2 adjustment for 2025+: z_G2 = ALPHA_G2 * logodds + BETA_DA * draft_advantage
-ALPHA_G2 = 0.8954
-BETA_DA  = 0.0790
+ALPHA_G2 = 0.8970
+BETA_DA  = 0.0929
+
+# Per-team playoff logodds adjustment (positive = outperforms in playoffs vs regular season).
+# Fitted via leave-one-year-out residuals, scaled by a single global shrinkage factor (0.76)
+# optimised on 2025+2026 log loss. Only teams with ≥10 playoff games included.
+TEAM_PO_ADJ = {
+    'G2 Esports':         0.4172,
+    'FunPlus Phoenix':    0.3159,
+    'Bilibili Gaming':    0.2242,
+    'T1':                 0.2068,
+    'KT Rolster':         0.1991,
+    'Weibo Gaming':       0.1234,
+    'BNK FEARX':          0.1069,
+    "Anyone's Legend":    0.0801,
+    'Team BDS':           0.0612,
+    'Karmine Corp':       0.0416,
+    'Hanwha Life Esports':-0.0616,
+    'Team WE':           -0.0757,
+    'Top Esports':       -0.0927,
+    'Dplus Kia':         -0.0968,
+    'JD Gaming':         -0.1238,
+    'Invictus Gaming':   -0.1406,
+    'Gen.G':             -0.1510,
+    'Movistar KOI':      -0.1518,
+    'Team Heretics':     -0.3450,
+    'ThunderTalk Gaming':-0.3521,
+    'Ninjas in Pyjamas': -0.3548,
+    'EDward Gaming':     -0.3743,
+    'Team Vitality':     -0.4237,
+    'Fnatic':            -0.4427,
+    'GiantX':            -0.4491,
+    'Nongshim RedForce': -0.6670,
+}
+
+# Coaching adjustments: team → (from_year, logodds_bonus).
+# Applied to all games (regular season + playoffs) from from_year onwards.
+# Reapered joined Karmine Corp for 2026; fitted on 2026 KC games.
+COACHING_ADJ = {
+    'Karmine Corp': (2026, 0.3695),
+}
 
 FEAT_LABELS = {
     'elo_diff':     'ELO Diff',
@@ -375,10 +414,13 @@ def _compute_model_stats(model: Pipeline, fim_inv: np.ndarray | None,
 
 def _predict_side_neutral(model: Pipeline, row_filled: pd.DataFrame,
                           game_in_series: int = 1, year: int = 2026,
-                          draft_advantage: int = 0) -> float:
+                          draft_advantage: int = 0, team_po_bonus: float = 0.0,
+                          coaching_bonus: float = 0.0) -> float:
     """Win probability with intercept zeroed out (side-neutral).
     For G2 in 2025+: z = ALPHA_G2 * logodds + BETA_DA * draft_advantage,
     separating regression-to-mean from the genuine draft-advantage boost.
+    team_po_bonus: blue_team TEAM_PO_ADJ - red_team TEAM_PO_ADJ, applied when playoffs=1.
+    coaching_bonus: net logodds shift from COACHING_ADJ for blue vs red team.
     """
     scaler = model.named_steps['s']
     lr     = model.named_steps['lr']
@@ -386,6 +428,7 @@ def _predict_side_neutral(model: Pipeline, row_filled: pd.DataFrame,
     z      = float(X_sc[0] @ lr.coef_.ravel())
     if game_in_series == 2 and year >= 2025:
         z = ALPHA_G2 * z + BETA_DA * draft_advantage
+    z += team_po_bonus + coaching_bonus
     return float(1.0 / (1.0 + np.exp(-z)))
 
 
@@ -468,11 +511,13 @@ def predict_game(blue_team: str, red_team: str, league: str,
                  team_outperf_staleness: dict | None = None,
                  draft_advantage: int = 0,
                  game_in_series: int = 1,
-                 year: int = 2026) -> dict | None:
+                 year: int = 2026,
+                 playoffs: bool = False) -> dict | None:
     """
     draft_advantage: +1 if blue lost prev game (blue has pick/side choice),
                      -1 if blue won prev game (red has choice), 0 for G1/bo1.
     game_in_series: 1 for G1/bo1, 2 for G2, etc. Used to apply G2 shrinkage.
+    playoffs: True for playoff series (enables team playoff adjustment).
     """
     blue_players = roster_state.get(blue_team)
     red_players  = roster_state.get(red_team)
@@ -514,8 +559,16 @@ def predict_game(blue_team: str, red_team: str, league: str,
         'outperf_diff': outperf_diff,
     }]).fillna(FILL)
 
+    team_po_bonus = (TEAM_PO_ADJ.get(blue_team, 0.0) - TEAM_PO_ADJ.get(red_team, 0.0)) if playoffs else 0.0
+
+    def _coaching_bonus(team: str) -> float:
+        from_year, bonus = COACHING_ADJ.get(team, (9999, 0.0))
+        return bonus if year >= from_year else 0.0
+    coaching_bonus = _coaching_bonus(blue_team) - _coaching_bonus(red_team)
+
     pred = _predict_side_neutral(model, row_filled, game_in_series=game_in_series,
-                                 year=year, draft_advantage=draft_advantage)
+                                 year=year, draft_advantage=draft_advantage,
+                                 team_po_bonus=team_po_bonus, coaching_bonus=coaching_bonus)
     se   = _pred_se_side_neutral(fim_inv, model, row_filled, pred)
 
     return {
@@ -563,9 +616,10 @@ def run():
         dt      = row['DateTime_UTC']
         best_of = int(row['BestOf'])
 
+        is_playoff = best_of >= 5
         pred = predict_game(blue, red, league, elo_map, roster_state, features, model, fim_inv,
                             player_h2h, player_gd15, team_outperf, team_outperf_staleness,
-                            draft_advantage=0)
+                            draft_advantage=0, playoffs=is_playoff)
         if pred:
             pred['date']    = dt.isoformat()
             pred['best_of'] = best_of

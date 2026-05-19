@@ -38,7 +38,9 @@ MAJOR_LEAGUES = {'LEC', 'LPL', 'LCK'}
 # ELO constants
 K_FACTOR       = 48
 ELO_SCALE      = 400
-SERIES_K_ALPHA = float(os.environ.get('SERIES_K_ALPHA', '0.3'))  # dampen K for G2 intra-series games (2025+)
+SERIES_K_ALPHA      = float(os.environ.get('SERIES_K_ALPHA',      '0.3'))  # dampen K for all games in 2025+ (major leagues run bo3/bo5, so all games are intra-series)
+PATCH_RESET_FACTOR  = float(os.environ.get('PATCH_RESET_FACTOR',  '0.0'))  # fraction of ELO deviation reset on patch change
+TRANSFER_RESET_FACTOR = float(os.environ.get('TRANSFER_RESET_FACTOR', '0.0'))  # fraction of ELO deviation reset on team transfer
 
 # League-tier starting ELOs
 # Derived from implied win probabilities:
@@ -127,7 +129,7 @@ class _NumpyEncoder(json.JSONEncoder):
 
 
 def _save_checkpoint(
-        elo_map, player_last_played, player_last_split,
+        elo_map, player_last_played, player_last_split, player_last_patch, player_last_team,
         team_history, h2h, player_gd15, team_gd20,
         team_outperf, team_outperf_elo, team_outperf_staleness,
         team_stats, series_record, roster_state, last_processed_date,
@@ -141,6 +143,8 @@ def _save_checkpoint(
         'elo_map':                elo_map,
         'player_last_played':     {p: ts(v) for p, v in player_last_played.items()},
         'player_last_split':      {k: list(v) for k, v in player_last_split.items()},
+        'player_last_patch':      dict(player_last_patch),
+        'player_last_team':       dict(player_last_team),
         'team_history':           dict(team_history),
         'h2h':                    {'|||'.join(k): v for k, v in h2h.items()},
         'player_gd15':            dict(player_gd15),
@@ -169,6 +173,8 @@ def _load_checkpoint():
     elo_map            = c['elo_map']
     player_last_played = {p: pd.Timestamp(v) for p, v in c['player_last_played'].items()}
     player_last_split  = {k: tuple(v) for k, v in c['player_last_split'].items()}
+    player_last_patch  = c.get('player_last_patch', {})
+    player_last_team   = c.get('player_last_team',  {})
     team_history       = defaultdict(list, {k: list(v) for k, v in c['team_history'].items()})
     h2h                = defaultdict(list, {tuple(k.split('|||')): list(v) for k, v in c['h2h'].items()})
     player_gd15        = defaultdict(list, {k: list(v) for k, v in c['player_gd15'].items()})
@@ -199,7 +205,7 @@ def _load_checkpoint():
     if last_date.tzinfo is None:
         last_date = last_date.tz_localize('UTC')
 
-    return (last_date, elo_map, player_last_played, player_last_split,
+    return (last_date, elo_map, player_last_played, player_last_split, player_last_patch, player_last_team,
             team_history, h2h, player_gd15, team_gd20, team_outperf,
             team_outperf_elo, team_outperf_staleness, team_stats, series_record,
             roster_state, player_h2h)
@@ -277,13 +283,24 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
     df['date'] = pd.to_datetime(df['date'], utc=True)
     df = df.sort_values('date').reset_index(drop=True)
 
+    # Pre-scan: flag games that belong to a multi-game series (bo3/bo5).
+    # Done on the full dataset before the incremental split so the lookup is
+    # correct even for the first game of a newly-arriving series.
+    _ps_blue = df['blue_team_teamname'].apply(lambda x: _norm_team(str(x)))
+    _ps_red  = df['red_team_teamname'].apply(lambda x: _norm_team(str(x)))
+    _ps_day  = df['date'].dt.date
+    _ps_key  = [('|'.join(sorted([b, r]))) for b, r in zip(_ps_blue, _ps_red)]
+    _ps_grp  = pd.Series(list(zip(_ps_day, df['league'], _ps_key)))
+    _ps_max  = df.groupby([_ps_day, df['league'], _ps_key])['game'].transform('max')
+    df['is_series_game'] = (_ps_max > 1).values
+
     ckpt = _load_checkpoint() if incremental else None
     existing_features_all   = None
     existing_features_major = None
     roster_state: dict[str, list[str]] = {}
 
     if ckpt is not None:
-        (last_date, elo_map, player_last_played, player_last_split,
+        (last_date, elo_map, player_last_played, player_last_split, player_last_patch, player_last_team,
          team_history, h2h, player_gd15, team_gd20, team_outperf,
          team_outperf_elo, team_outperf_staleness, team_stats, series_record,
          roster_state, player_h2h) = ckpt
@@ -306,6 +323,8 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
         elo_map                = {}
         player_last_played     = {}
         player_last_split      = {}
+        player_last_patch      = {}
+        player_last_team       = {}
         team_history           = defaultdict(list)
         h2h                    = defaultdict(list)
         player_gd15            = defaultdict(list)
@@ -347,6 +366,24 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
                 if p in player_last_split and player_last_split[p] != cur_split:
                     curr = elo_map.get(p, start)
                     elo_map[p] = start + (curr - start) * (1.0 - split_reset_factor)
+
+        # --- Patch reset (pull toward baseline on each patch change) ---
+        if PATCH_RESET_FACTOR > 0:
+            cur_patch = g.patch
+            start = _starting_elo(league)
+            for p in blue_players + red_players:
+                if p in player_last_patch and player_last_patch[p] != cur_patch:
+                    curr = elo_map.get(p, start)
+                    elo_map[p] = start + (curr - start) * (1.0 - PATCH_RESET_FACTOR)
+
+        # --- Transfer reset (pull toward baseline when player joins a new team) ---
+        if TRANSFER_RESET_FACTOR > 0:
+            start = _starting_elo(league)
+            for p, team in zip(blue_players + red_players,
+                               [blue_team]*5 + [red_team]*5):
+                if p in player_last_team and player_last_team[p] != team:
+                    curr = elo_map.get(p, start)
+                    elo_map[p] = start + (curr - start) * (1.0 - TRANSFER_RESET_FACTOR)
 
         # --- Days since last played (pre-game snapshot) ---
         def _days_since(players):
@@ -543,14 +580,16 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
         })
 
         # --- Update state AFTER recording pre-game snapshot ---
-        k_scale = SERIES_K_ALPHA if (g.game >= 2 and g.year >= 2025) else 1.0
+        k_scale = SERIES_K_ALPHA if (g.year >= 2025) else 1.0
         _update_players(blue_players, elo_map, league, float(blue_win),     float(red_elo), k_scale)
         _update_players(red_players,  elo_map, league, float(1 - blue_win), float(blue_elo), k_scale)
 
         # Update last-played date and split for decay/reset tracking
-        for p in blue_players + red_players:
+        for p, team in zip(blue_players + red_players, [blue_team]*5 + [red_team]*5):
             player_last_played[p] = current_date
             player_last_split[p]  = (g.year, g.split)
+            player_last_patch[p]  = g.patch
+            player_last_team[p]   = team
 
         # Update roster state with this game's lineup
         roster_state[blue_team] = blue_players
@@ -670,7 +709,7 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
     # --- Save checkpoint for next incremental run ---
     if last_processed_date is not None:
         _save_checkpoint(
-            elo_map, player_last_played, player_last_split,
+            elo_map, player_last_played, player_last_split, player_last_patch, player_last_team,
             team_history, h2h, player_gd15, team_gd20,
             team_outperf, team_outperf_elo, team_outperf_staleness,
             team_stats, series_record, roster_state, last_processed_date,

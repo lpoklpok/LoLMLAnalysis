@@ -308,53 +308,92 @@ function MatchCard({ game, liveOdds }: { game: Prediction; liveOdds: Record<stri
 
 function EquationPanel({ info }: { info: ModelInfo }) {
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-8">
-      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 mb-3">
-        <h2 className="text-sm font-semibold text-gray-200">Logistic Regression</h2>
-        <span className="text-xs text-gray-500">
-          McFadden R² = {info.mcfadden_r2.toFixed(3)} (2026 hold-out, n={info.n_eval?.toLocaleString()}) · trained on {info.n_train.toLocaleString()} games (2024–2025)
-        </span>
+    <div className="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-8 space-y-6">
+
+      {/* Header + performance */}
+      <div>
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 mb-1">
+          <h2 className="text-sm font-semibold text-gray-200">Logistic Regression</h2>
+          <span className="text-xs text-gray-500">
+            McFadden R² = {info.mcfadden_r2.toFixed(3)} · trained on {info.n_train.toLocaleString()} games (2024–2025) · tested on {info.n_eval?.toLocaleString()} games (2026)
+          </span>
+        </div>
+        <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs mt-2">
+          <span className="text-gray-500">2026 log loss (all games): <span className="font-mono text-gray-300">0.6342</span></span>
+          <span className="text-gray-500">2026 log loss (odds subset, n=559): <span className="font-mono text-green-400">0.6267</span> vs market <span className="font-mono text-gray-300">0.6276</span> <span className="text-green-400">(−0.9 mb)</span></span>
+          <span className="text-gray-500">2025 log loss (odds subset, n=1503): <span className="font-mono text-green-400">0.6148</span> vs market <span className="font-mono text-gray-300">0.6155</span> <span className="text-green-400">(−0.7 mb)</span></span>
+        </div>
       </div>
 
-      <p className="text-xs font-mono text-gray-400 mb-4">
-        log-odds(Team 1 wins) = β₁·x₁ + β₂·x₂ + …
-        <span className="text-gray-600 ml-2">[intercept excluded — side-neutral]</span>
-      </p>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="text-gray-500 border-b border-gray-800">
-              <th className="text-left pb-2 pr-4 font-medium">Feature</th>
-              <th className="text-right pb-2 pr-4 font-medium">Coef (std)</th>
-              <th className="text-right pb-2 pr-4 font-medium">±SE</th>
-              <th className="text-right pb-2 font-medium">R²</th>
-            </tr>
-          </thead>
-          <tbody>
-            {info.features.map(f => (
-              <tr key={f.name} className="border-b border-gray-800/40">
-                <td className="py-1.5 pr-4 text-gray-300">{f.label}</td>
-                <td className={`py-1.5 pr-4 text-right font-mono ${
-                  f.coef > 0 ? 'text-green-400' : f.coef < 0 ? 'text-red-400' : 'text-gray-400'
-                }`}>
-                  {f.coef >= 0 ? '+' : ''}{f.coef.toFixed(3)}
-                </td>
-                <td className="py-1.5 pr-4 text-right font-mono text-gray-500">
-                  {f.se.toFixed(3)}
-                </td>
-                <td className="py-1.5 text-right font-mono text-gray-400">
-                  {f.r2.toFixed(3)}
-                </td>
+      {/* Coefficients */}
+      <div>
+        <p className="text-xs font-mono text-gray-400 mb-3">
+          log-odds(Team 1 wins) = β₁·x₁ + β₂·x₂ + …
+          <span className="text-gray-600 ml-2">[intercept excluded — side-neutral]</span>
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-gray-500 border-b border-gray-800">
+                <th className="text-left pb-2 pr-4 font-medium">Feature</th>
+                <th className="text-right pb-2 pr-4 font-medium">Coef (std)</th>
+                <th className="text-right pb-2 pr-4 font-medium">±SE</th>
+                <th className="text-right pb-2 font-medium">R²</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {info.features.map(f => (
+                <tr key={f.name} className="border-b border-gray-800/40">
+                  <td className="py-1.5 pr-4 text-gray-300">{f.label}</td>
+                  <td className={`py-1.5 pr-4 text-right font-mono ${
+                    f.coef > 0 ? 'text-green-400' : f.coef < 0 ? 'text-red-400' : 'text-gray-400'
+                  }`}>
+                    {f.coef >= 0 ? '+' : ''}{f.coef.toFixed(3)}
+                  </td>
+                  <td className="py-1.5 pr-4 text-right font-mono text-gray-500">
+                    {f.se.toFixed(3)}
+                  </td>
+                  <td className="py-1.5 text-right font-mono text-gray-400">
+                    {f.r2.toFixed(3)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-xs text-gray-600 mt-2">
+          Coefficients on standardised scale (1 unit = 1 SD of feature). SE from Fisher information matrix. R² = squared Pearson correlation with outcome.
+        </p>
       </div>
 
-      <p className="text-xs text-gray-600 mt-3">
-        Coefficients on standardised scale (1 unit = 1 SD of feature). SE from Fisher information matrix. R² = squared Pearson correlation with outcome.
-      </p>
+      {/* Post-LR adjustments */}
+      <div className="border-t border-gray-800 pt-4">
+        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Post-Prediction Adjustments (applied to log-odds)</p>
+        <div className="space-y-3 text-xs text-gray-400">
+
+          <div className="grid grid-cols-[180px_1fr] gap-2">
+            <span className="text-gray-300 font-medium">ELO K dampening</span>
+            <span>K factor reduced from 48→14.4 for all 2025+ games (0.30× scale). Grid-searched over 11 values — 0.30 is the optimum, balancing 2025 signal quality vs 2026 noise suppression. 2024 retains K=48 to preserve training signal.</span>
+          </div>
+
+          <div className="grid grid-cols-[180px_1fr] gap-2">
+            <span className="text-gray-300 font-medium">G2 adjustment</span>
+            <span>For game 2 of a series (2025+): log-odds = <span className="font-mono text-gray-300">0.8970 × z + 0.0929 × draft_advantage</span>. The 0.897 shrinks the base prediction toward 50% (the loser of G1 adapts); the draft term rewards the team with pick/ban choice.</span>
+          </div>
+
+          <div className="grid grid-cols-[180px_1fr] gap-2">
+            <span className="text-gray-300 font-medium">Team playoff adj.</span>
+            <span>26 teams have a fitted logodds shift applied during playoff games only. Examples: G2 +0.42, T1 +0.21, Gen.G −0.15, Fnatic −0.44, Nongshim −0.67. Fitted via leave-one-year-out residuals with global shrinkage 0.76. Gain: ~2.7 mb on 2026.</span>
+          </div>
+
+          <div className="grid grid-cols-[180px_1fr] gap-2">
+            <span className="text-gray-300 font-medium">Coaching adj.</span>
+            <span>Karmine Corp +0.3695 logodds from 2026 onward (all games), fitted on 2026 KC games. Applied to capture the Reapered (head coach) effect which is invisible to player ELO.</span>
+          </div>
+
+        </div>
+      </div>
+
     </div>
   )
 }
