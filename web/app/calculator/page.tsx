@@ -15,16 +15,20 @@ interface TeamStats {
   coaching_adj: number
 }
 
+interface PlayerH2HEntry { n: number; wins: number }
+
 interface ModelParams {
-  generated: string
-  features:  string[]
-  fill:      Record<string, number>
-  scaler:    { mean: number[]; scale: number[] }
-  coef:      number[]
-  alpha_g2:  number
-  beta_da:   number
-  teams:     Record<string, TeamStats>
-  h2h:       Record<string, number>
+  generated:  string
+  features:   string[]
+  fill:       Record<string, number>
+  scaler:     { mean: number[]; scale: number[] }
+  coef:       number[]
+  alpha_g2:   number
+  beta_da:    number
+  teams:      Record<string, TeamStats>
+  rosters:    Record<string, string[]>
+  h2h:        Record<string, number>
+  player_h2h: Record<string, PlayerH2HEntry>
 }
 
 interface GameProbs {
@@ -273,6 +277,69 @@ function computeKelly(modelP: number, marketQ: number, bankroll: number): KellyR
   }
 }
 
+// ---------- player H2H ----------
+
+const POSITIONS = ['top', 'jng', 'mid', 'bot', 'sup'] as const
+const POS_LABEL: Record<string, string> = { top: 'TOP', jng: 'JNG', mid: 'MID', bot: 'BOT', sup: 'SUP' }
+
+interface RoleH2HRow { pos: string; t1Player: string; t2Player: string; n: number; t1Wins: number }
+
+function buildRoleH2H(params: ModelParams, t1: string, t2: string): RoleH2HRow[] {
+  const r1 = params.rosters[t1]
+  const r2 = params.rosters[t2]
+  if (!r1 || !r2 || r1.length < 5 || r2.length < 5) return []
+
+  return POSITIONS.map((pos, i) => {
+    const p1 = r1[i]; const p2 = r2[i]
+    const [pa, pb] = p1 <= p2 ? [p1, p2] : [p2, p1]
+    const key  = `${pa}|||${pb}|||${pos}`
+    const entry = params.player_h2h[key]
+    const n      = entry?.n    ?? 0
+    const winsA  = entry?.wins ?? 0
+    const t1Wins = pa === p1 ? winsA : n - winsA
+    return { pos, t1Player: p1, t2Player: p2, n, t1Wins }
+  })
+}
+
+function RoleH2HTable({ rows, t1, t2 }: { rows: RoleH2HRow[]; t1: string; t2: string }) {
+  return (
+    <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+      <h2 className="text-lg font-semibold text-gray-100 mb-4">Player H2H</h2>
+      <div className="space-y-2">
+        {rows.map(({ pos, t1Player, t2Player, n, t1Wins }) => {
+          const enough   = n >= 5
+          const t1Pct    = enough ? Math.round((t1Wins / n) * 100) : null
+          const favorT1  = t1Pct != null && t1Pct > 50
+          const favorT2  = t1Pct != null && t1Pct < 50
+          return (
+            <div key={pos} className="grid grid-cols-[44px_1fr_auto] gap-x-3 items-center text-sm">
+              <span className="font-mono text-xs text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded text-center">
+                {POS_LABEL[pos]}
+              </span>
+              <span className="truncate text-gray-400">
+                <span className={favorT1 ? 'text-blue-300 font-medium' : 'text-gray-300'}>{t1Player}</span>
+                <span className="text-gray-600 mx-2">vs</span>
+                <span className={favorT2 ? 'text-red-300 font-medium' : 'text-gray-300'}>{t2Player}</span>
+              </span>
+              {enough ? (
+                <span className={`font-mono text-xs shrink-0 ${favorT1 ? 'text-blue-400' : favorT2 ? 'text-red-400' : 'text-gray-400'}`}>
+                  {t1Wins}–{n - t1Wins}
+                  <span className="text-gray-600 ml-1">({t1Pct}%)</span>
+                </span>
+              ) : (
+                <span className="font-mono text-xs text-gray-700 shrink-0">
+                  {n > 0 ? `${t1Wins}–${n - t1Wins}` : '—'}
+                </span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      <p className="text-xs text-gray-600 mt-3">Highlighted when ≥5 games. Blue = {t1} leads, red = {t2} leads.</p>
+    </div>
+  )
+}
+
 // ---------- component ----------
 
 const FORMAT_OPTIONS = ['BO1', 'BO3', 'BO5'] as const
@@ -362,6 +429,11 @@ export default function CalculatorPage() {
 
   const t1stats = params && team1 ? params.teams[team1] : null
   const t2stats = params && team2 ? params.teams[team2] : null
+
+  const roleH2H = useMemo<RoleH2HRow[]>(() => {
+    if (!params || !team1 || !team2 || team1 === team2) return []
+    return buildRoleH2H(params, team1, team2)
+  }, [params, team1, team2])
 
   const kellyResult = useMemo<KellyResult | null>(() => {
     if (seriesProb === null) return null
@@ -654,6 +726,11 @@ export default function CalculatorPage() {
                       })}
                     </div>
                   </div>
+                )}
+
+                {/* Player H2H */}
+                {roleH2H.length > 0 && (
+                  <RoleH2HTable rows={roleH2H} t1={team1} t2={team2} />
                 )}
 
                 {/* Feature breakdown */}

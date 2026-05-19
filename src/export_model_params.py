@@ -189,8 +189,15 @@ def main():
                              else 0.0),
         }
 
+    # Rosters for 2026 teams (top/jng/mid/bot/sup order)
+    rosters: dict[str, list[str]] = {}
+    for team in teams_2026:
+        players = roster_state.get(team, [])
+        if players:
+            rosters[team] = players
+
     # Precompute pairwise h2h records for all 2026 team pairs
-    print("Computing h2h records…")
+    print("Computing team h2h records…")
     h2h = {}
     team_list = list(teams_2026)
     for i, t1 in enumerate(team_list):
@@ -200,6 +207,22 @@ def main():
                 key = f"{t1}|||{t2}"
                 h2h[key] = wr
 
+    # Player H2H — filtered to only current roster players
+    print("Filtering player h2h to 2026 roster players…")
+    player_h2h_path = PROCESSED / 'player_h2h.json'
+    player_h2h_out: dict = {}
+    if player_h2h_path.exists():
+        with open(player_h2h_path) as f:
+            raw_ph2h = json.load(f)
+        active_players: set[str] = set()
+        for players in rosters.values():
+            active_players.update(players)
+        for key, val in raw_ph2h.items():
+            parts = key.split('|||')
+            if len(parts) == 3 and parts[0] in active_players and parts[1] in active_players:
+                player_h2h_out[key] = val
+    print(f"  {len(player_h2h_out)} player h2h pairs for {len(active_players)} active players")
+
     out = {
         'generated': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         'features':  FEATS,
@@ -208,16 +231,19 @@ def main():
             'mean':  [round(v, 8) for v in scaler.mean_.tolist()],
             'scale': [round(v, 8) for v in scaler.scale_.tolist()],
         },
-        'coef': [round(v, 8) for v in lr.coef_[0].tolist()],
-        'alpha_g2': ALPHA_G2,
-        'beta_da':  BETA_DA,
-        'teams':    team_stats,
-        'h2h':      h2h,
+        'coef':       [round(v, 8) for v in lr.coef_[0].tolist()],
+        'alpha_g2':   ALPHA_G2,
+        'beta_da':    BETA_DA,
+        'teams':      team_stats,
+        'rosters':    rosters,
+        'h2h':        h2h,
+        'player_h2h': player_h2h_out,
     }
 
     with open(OUT, 'w') as f:
         json.dump(out, f, separators=(',', ':'))
-    print(f"Wrote {OUT}  ({len(team_stats)} teams, {len(h2h)} h2h pairs)")
+    size_kb = OUT.stat().st_size // 1024
+    print(f"Wrote {OUT}  ({len(team_stats)} teams, {len(h2h)} h2h pairs, {len(player_h2h_out)} player h2h, {size_kb}KB)")
 
 
 if __name__ == '__main__':
