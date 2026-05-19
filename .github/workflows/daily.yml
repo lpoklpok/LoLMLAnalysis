@@ -40,6 +40,9 @@ jobs:
         run: python src/PullOEData.py
         continue-on-error: true
 
+      - name: Combine raw OE data into games.csv
+        run: python src/combine_data.py
+
       - name: Merge game + odds data
         run: python src/merge_data.py
 
