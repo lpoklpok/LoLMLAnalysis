@@ -7,7 +7,8 @@ import ChampionTable from './components/ChampionTable'
 import StatsCards from './components/StatsCards'
 import Link from 'next/link'
 
-const LEAGUES = ['All', 'LCK', 'LEC', 'LCS', 'LPL']
+const LEAGUES = ['All', 'Main Leagues', 'LCK', 'LEC', 'LCS', 'LPL']
+const MAIN_LEAGUES = ['LCK', 'LEC', 'LCS', 'LPL']
 
 export interface SummaryStats {
   total_games: number
@@ -46,19 +47,52 @@ export default function Dashboard() {
 
   const loadData = useCallback(async () => {
     setLoading(true)
-    const params = {
-      p_league: league === 'All' ? null : league,
-      p_year:   year   === 'All' ? null : parseInt(year),
-      p_patch:  patch  === 'All' ? null : patch,
+
+    const baseParams = {
+      p_year:  year  === 'All' ? null : parseInt(year),
+      p_patch: patch === 'All' ? null : patch,
     }
 
-    const [summaryRes, champRes] = await Promise.all([
-      supabase.rpc('get_summary_stats', params),
-      supabase.rpc('get_champion_stats', { ...params, p_position: position }),
-    ])
+    if (league === 'Main Leagues') {
+      const [summaryResults, champResults] = await Promise.all([
+        Promise.all(MAIN_LEAGUES.map(l => supabase.rpc('get_summary_stats', { ...baseParams, p_league: l }))),
+        Promise.all(MAIN_LEAGUES.map(l => supabase.rpc('get_champion_stats', { ...baseParams, p_league: l, p_position: position }))),
+      ])
 
-    setStats(summaryRes.data)
-    setChampions(champRes.data ?? [])
+      const summaries = summaryResults.map(r => r.data).filter(Boolean) as SummaryStats[]
+      const merged: SummaryStats = {
+        total_games:    summaries.reduce((s, r) => s + r.total_games, 0),
+        blue_wins:      summaries.reduce((s, r) => s + r.blue_wins, 0),
+        games_with_odds: summaries.reduce((s, r) => s + r.games_with_odds, 0),
+        favorite_wins:  summaries.reduce((s, r) => s + r.favorite_wins, 0),
+        avg_gamelength: summaries.reduce((s, r) => s + r.avg_gamelength * r.total_games, 0) /
+                        summaries.reduce((s, r) => s + r.total_games, 0),
+      }
+      setStats(merged)
+
+      const champMap = new Map<string, ChampionStat>()
+      for (const res of champResults) {
+        for (const c of (res.data ?? []) as ChampionStat[]) {
+          const existing = champMap.get(c.champion)
+          if (existing) {
+            existing.picks += c.picks
+            existing.wins  += c.wins
+          } else {
+            champMap.set(c.champion, { ...c })
+          }
+        }
+      }
+      setChampions([...champMap.values()].sort((a, b) => b.picks - a.picks))
+    } else {
+      const params = { ...baseParams, p_league: league === 'All' ? null : league }
+      const [summaryRes, champRes] = await Promise.all([
+        supabase.rpc('get_summary_stats', params),
+        supabase.rpc('get_champion_stats', { ...params, p_position: position }),
+      ])
+      setStats(summaryRes.data)
+      setChampions(champRes.data ?? [])
+    }
+
     setLoading(false)
   }, [league, year, patch, position])
 
