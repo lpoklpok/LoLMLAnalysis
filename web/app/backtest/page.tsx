@@ -301,6 +301,7 @@ export default function BacktestPage() {
         <Link href="/predictions" className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Predictions</Link>
         <Link href="/games"       className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Game Explorer</Link>
         <Link href="/chart"       className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Model vs Market</Link>
+        <Link href="/calculator"  className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Series Calculator</Link>
         <span className="text-sm text-emerald-400 font-medium">Kelly Backtest</span>
       </div>
 

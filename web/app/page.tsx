@@ -93,6 +93,9 @@ export default function Dashboard() {
         <Link href="/backtest" className="text-sm text-emerald-400 hover:text-emerald-300 transition-colors">
           Kelly Backtest →
         </Link>
+        <Link href="/calculator" className="text-sm text-orange-400 hover:text-orange-300 transition-colors">
+          Series Calculator →
+        </Link>
         <span className="text-xs text-gray-500">
           {loading ? 'Loading…' : `${(stats?.total_games ?? 0).toLocaleString()} games`}
         </span>

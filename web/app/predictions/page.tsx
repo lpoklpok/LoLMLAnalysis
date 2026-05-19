@@ -452,7 +452,9 @@ export default function PredictionsPage() {
       <div className="px-6 py-4 border-b border-gray-800 flex gap-6 flex-wrap items-center">
         <Link href="/"        className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Dashboard</Link>
         <Link href="/players" className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Player Lookup</Link>
-        <Link href="/model"   className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Model</Link>
+        <Link href="/model"      className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Model</Link>
+        <Link href="/backtest"   className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Backtest</Link>
+        <Link href="/calculator" className="text-sm text-gray-400 hover:text-gray-200 transition-colors">Series Calculator</Link>
         <span className="text-sm text-green-400 font-medium">Predictions</span>
       </div>
 
