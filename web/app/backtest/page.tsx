@@ -213,7 +213,7 @@ export default function BacktestPage() {
         const mp = bet.side === 'blue' ? bet.market_q : 1 - bet.market_q
         const odds = (1 - mp) / mp
         const f = Math.min(bet.kelly_f * frac, 0.20)
-        bankroll += bet.won ? f * bankroll * odds * (1 - data.fee_pct) : -f * bankroll
+        bankroll += bet.won ? f * bankroll * odds * (1 - data.fee_pct / 100) : -f * bankroll
         if (bankroll > peak) peak = bankroll
         mdd = Math.max(mdd, peak - bankroll)
 
