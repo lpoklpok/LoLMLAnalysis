@@ -49,6 +49,12 @@ jobs:
       - name: Train model + save predictions
         run: python src/train_model.py
 
+      - name: Upload game features to Supabase
+        run: python src/upload_game_features.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
       - name: Upload predictions to Supabase
         run: python src/upload_predictions.py
         env:

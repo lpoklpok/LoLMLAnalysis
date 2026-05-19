@@ -81,7 +81,7 @@ def _safe(v):
 
 
 def run():
-    df = pd.read_csv(PROCESSED_DIR / 'features.csv', low_memory=False)
+    df = pd.read_csv(PROCESSED_DIR / 'features_all.csv', low_memory=False)
     df['date'] = pd.to_datetime(df['date'], utc=True)
 
     # Compute series metadata first — draft_advantage must exist before model training
