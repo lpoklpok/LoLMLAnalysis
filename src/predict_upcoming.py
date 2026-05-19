@@ -33,20 +33,21 @@ POSITIONS = ['top', 'jng', 'mid', 'bot', 'sup']
 _ELO_TIER = {'LCK': 1620, 'LPL': 1620, 'LEC': 1500,
               'LCS': 1380, 'LTA': 1380, 'LTA N': 1380, 'LTA S': 1380, 'LCKC': 1380}
 
-FEATS    = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff', 'draft_advantage']
+FEATS    = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff']
 FILL     = {'elo_diff': 0.0, 'rwr_diff': 0.0, 'h2h_wr': 0.5,
-            'playoffs': 0, 'gd15_diff': 0.0, 'outperf_diff': 0.0, 'draft_advantage': 0}
+            'playoffs': 0, 'gd15_diff': 0.0, 'outperf_diff': 0.0}
 MODEL_NAME = 'Logistic Regression'
-ALPHA_G2   = 0.85  # shrink G2 log-odds toward 50% for 2025+ series games
+# G2 adjustment for 2025+: z_G2 = ALPHA_G2 * logodds + BETA_DA * draft_advantage
+ALPHA_G2 = 0.8954
+BETA_DA  = 0.0790
 
 FEAT_LABELS = {
-    'elo_diff':        'ELO Diff',
-    'rwr_diff':        'Win Rate Diff (10g)',
-    'h2h_wr':          'H2H Win Rate (Team 1)',
-    'playoffs':        'Playoffs',
-    'gd15_diff':       'GD@15 Diff',
-    'outperf_diff':    'Market Outperf Diff',
-    'draft_advantage': 'Draft Advantage (+1 blue lost prev/has pick choice, -1 red lost prev)',
+    'elo_diff':     'ELO Diff',
+    'rwr_diff':     'Win Rate Diff (10g)',
+    'h2h_wr':       'H2H Win Rate (Team 1)',
+    'playoffs':     'Playoffs',
+    'gd15_diff':    'GD@15 Diff',
+    'outperf_diff': 'Market Outperf Diff',
 }
 
 # lolesports.com schedule API
@@ -373,17 +374,18 @@ def _compute_model_stats(model: Pipeline, fim_inv: np.ndarray | None,
 
 
 def _predict_side_neutral(model: Pipeline, row_filled: pd.DataFrame,
-                          game_in_series: int = 1, year: int = 2026) -> float:
+                          game_in_series: int = 1, year: int = 2026,
+                          draft_advantage: int = 0) -> float:
     """Win probability with intercept zeroed out (side-neutral).
-    Applies G2 shrinkage (alpha=0.85) for 2025+ series to account for
-    regression-to-mean after game 1 result.
+    For G2 in 2025+: z = ALPHA_G2 * logodds + BETA_DA * draft_advantage,
+    separating regression-to-mean from the genuine draft-advantage boost.
     """
     scaler = model.named_steps['s']
     lr     = model.named_steps['lr']
     X_sc   = scaler.transform(row_filled)
     z      = float(X_sc[0] @ lr.coef_.ravel())
     if game_in_series == 2 and year >= 2025:
-        z *= ALPHA_G2
+        z = ALPHA_G2 * z + BETA_DA * draft_advantage
     return float(1.0 / (1.0 + np.exp(-z)))
 
 
@@ -504,16 +506,16 @@ def predict_game(blue_team: str, red_team: str, league: str,
     outperf_diff = blue_op - red_op if not (np.isnan(blue_op) or np.isnan(red_op)) else np.nan
 
     row_filled = pd.DataFrame([{
-        'elo_diff':        elo_diff,
-        'rwr_diff':        rwr_diff,
-        'h2h_wr':          h2h_wr,
-        'playoffs':        0,
-        'gd15_diff':       gd15_diff,
-        'outperf_diff':    outperf_diff,
-        'draft_advantage': draft_advantage,
+        'elo_diff':     elo_diff,
+        'rwr_diff':     rwr_diff,
+        'h2h_wr':       h2h_wr,
+        'playoffs':     0,
+        'gd15_diff':    gd15_diff,
+        'outperf_diff': outperf_diff,
     }]).fillna(FILL)
 
-    pred = _predict_side_neutral(model, row_filled, game_in_series=game_in_series, year=year)
+    pred = _predict_side_neutral(model, row_filled, game_in_series=game_in_series,
+                                 year=year, draft_advantage=draft_advantage)
     se   = _pred_se_side_neutral(fim_inv, model, row_filled, pred)
 
     return {
@@ -531,7 +533,6 @@ def predict_game(blue_team: str, red_team: str, league: str,
         'feat_h2h_wr':         _safe(h2h_wr),
         'feat_gd15_diff':      _safe(gd15_diff),
         'feat_outperf_diff':   _safe(outperf_diff),
-        'feat_draft_advantage':  int(draft_advantage),
         # per-role player head-to-head records (informational only)
         'role_h2h':           _role_h2h_info(blue_players, red_players, player_h2h or {}),
     }

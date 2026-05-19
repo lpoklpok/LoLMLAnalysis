@@ -36,8 +36,9 @@ def _norm_team(name: str) -> str:
 MAJOR_LEAGUES = {'LEC', 'LPL', 'LCK'}
 
 # ELO constants
-K_FACTOR  = 48
-ELO_SCALE = 400
+K_FACTOR       = 48
+ELO_SCALE      = 400
+SERIES_K_ALPHA = float(os.environ.get('SERIES_K_ALPHA', '0.3'))  # dampen K for G2 intra-series games (2025+)
 
 # League-tier starting ELOs
 # Derived from implied win probabilities:
@@ -75,12 +76,12 @@ def _team_elo(players: list[str], elo_map: dict, league: str) -> float:
 
 
 def _update_players(players: list[str], elo_map: dict, league: str,
-                    actual: float, opp_avg: float) -> None:
+                    actual: float, opp_avg: float, k_scale: float = 1.0) -> None:
     start = _starting_elo(league)
     for p in players:
         r = elo_map.get(p, start)
         e = _expected(r, opp_avg)
-        elo_map[p] = r + K_FACTOR * (actual - e)
+        elo_map[p] = r + K_FACTOR * k_scale * (actual - e)
 
 
 # ---------------------------------------------------------------------------
@@ -542,8 +543,9 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
         })
 
         # --- Update state AFTER recording pre-game snapshot ---
-        _update_players(blue_players, elo_map, league, float(blue_win),     float(red_elo))
-        _update_players(red_players,  elo_map, league, float(1 - blue_win), float(blue_elo))
+        k_scale = SERIES_K_ALPHA if (g.game >= 2 and g.year >= 2025) else 1.0
+        _update_players(blue_players, elo_map, league, float(blue_win),     float(red_elo), k_scale)
+        _update_players(red_players,  elo_map, league, float(1 - blue_win), float(blue_elo), k_scale)
 
         # Update last-played date and split for decay/reset tracking
         for p in blue_players + red_players:

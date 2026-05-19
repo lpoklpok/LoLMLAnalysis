@@ -23,14 +23,15 @@ load_dotenv(Path(os.path.dirname(__file__)) / '..' / '.env')
 
 PROCESSED_DIR = Path(os.path.dirname(__file__)) / '..' / 'data' / 'processed'
 
-FEATS = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff', 'draft_advantage']
+FEATS = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff']
 FILL  = {'elo_diff': 0., 'rwr_diff': 0., 'h2h_wr': 0.5,
-         'playoffs': 0, 'gd15_diff': 0., 'outperf_diff': 0., 'draft_advantage': 0}
+         'playoffs': 0, 'gd15_diff': 0., 'outperf_diff': 0.}
 
-# G2 shrinkage: in 2025+, predictions for game 2 are shrunk toward 50%
-# because the G1 result provides information that regresses team quality toward the mean.
-# Alpha fitted via leave-one-year-out CV on 2025-2026 G2 games.
-ALPHA_G2 = 0.85
+# G2 adjustment for 2025+: z_G2 = ALPHA_G2 * logodds + BETA_DA * draft_advantage
+# Separates blanket regression-to-mean (alpha) from the genuine draft-advantage boost (beta).
+# Both fitted via minimising log-loss on 2025 G2 games, validated on 2026 holdout.
+ALPHA_G2 = 0.8954
+BETA_DA  = 0.0790
 
 
 def _safe(v):
@@ -44,23 +45,7 @@ def run():
     df = pd.read_csv(PROCESSED_DIR / 'features.csv', low_memory=False)
     df['date'] = pd.to_datetime(df['date'], utc=True)
 
-    train = df[df['year'].isin([2024, 2025])]
-    model = Pipeline([('s', StandardScaler()), ('lr', LogisticRegression(max_iter=1000))])
-    model.fit(train[FEATS].fillna(FILL), train['blue_win'].values)
-
-    # Raw log-odds for all games
-    scaler = model.named_steps['s']
-    lr     = model.named_steps['lr']
-    X_sc   = scaler.transform(df[FEATS].fillna(FILL))
-    logodds = X_sc @ lr.coef_.ravel() + lr.intercept_[0]
-
-    # Apply G2 shrinkage for 2025+ games
-    shrink_mask = (df['game'] == 2) & (df['year'] >= 2025)
-    logodds_adj = logodds.copy()
-    logodds_adj[shrink_mask] *= ALPHA_G2
-    preds = 1 / (1 + np.exp(-logodds_adj))
-
-    # Compute series metadata: group same matchup on same calendar day
+    # Compute series metadata first — draft_advantage must exist before model training
     df['_date_day'] = df['date'].dt.date
     df['_team_key'] = df.apply(
         lambda r: '|'.join(sorted([str(r['blue_team']), str(r['red_team'])])), axis=1
@@ -73,8 +58,8 @@ def run():
         return 'bo1' if row['_series_max'] == 1 else 'bo3'
     df['_series_type'] = df.apply(_series_type, axis=1)
 
-    # draft_advantage: the loser of the previous game chooses side/pick order next game.
-    # +1 = blue team lost prev game (blue has draft choice), -1 = blue won prev (red has choice), 0 = G1/bo1
+    # draft_advantage: loser of prev game chooses side/pick order independently.
+    # +1 = blue lost prev (blue has draft choice), -1 = blue won (red has choice), 0 = G1/bo1
     df = df.sort_values(['_date_day', 'league', '_team_key', 'game'])
     def _add_draft_advantage(grp):
         grp = grp.sort_values('game')
@@ -84,6 +69,24 @@ def run():
         ).astype(int)
         return grp
     df = df.groupby(['_date_day', 'league', '_team_key'], group_keys=False).apply(_add_draft_advantage)
+    df = df.reset_index(drop=True)
+
+    train = df[df['year'].isin([2024, 2025])]
+    model = Pipeline([('s', StandardScaler()), ('lr', LogisticRegression(max_iter=1000))])
+    model.fit(train[FEATS].fillna(FILL), train['blue_win'].values)
+
+    # Raw log-odds aligned with current df row order
+    scaler = model.named_steps['s']
+    lr     = model.named_steps['lr']
+    X_sc   = scaler.transform(df[FEATS].fillna(FILL))
+    logodds = X_sc @ lr.coef_.ravel() + lr.intercept_[0]
+
+    # G2 adjustment for 2025+: alpha * logodds + beta * draft_advantage
+    g2_mask = ((df['game'] == 2) & (df['year'] >= 2025)).values
+    logodds_adj = logodds.copy()
+    logodds_adj[g2_mask] = (ALPHA_G2 * logodds[g2_mask]
+                            + BETA_DA * df['draft_advantage'].values[g2_mask])
+    preds = 1 / (1 + np.exp(-logodds_adj))
 
     records = []
     for i, (_, row) in enumerate(df.iterrows()):
