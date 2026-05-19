@@ -288,6 +288,40 @@ def _attach_to_games(games: pd.DataFrame, game_series_map: pd.DataFrame,
 
 
 # ---------------------------------------------------------------------------
+# LPL BO2 fix
+# ---------------------------------------------------------------------------
+
+def _fix_lpl_bo2(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    LPL regular season uses BO2 format. OE records each game separately with
+    game=1, so same-day same-team LPL pairs both appear as game=1 with format=BO1.
+    Fix: identify these pairs, re-number them (1 and 2), and set format=BO2.
+    """
+    df = df.copy()
+    df['_date_day'] = pd.to_datetime(df['date']).dt.date
+    df['_pair'] = df.apply(
+        lambda r: tuple(sorted([r['blue_team_teamname'], r['red_team_teamname']])), axis=1
+    )
+
+    lpl = df[(df['league'] == 'LPL') & (df['format'] == 'BO1')].copy()
+    dupes = lpl[lpl.duplicated(subset=['_date_day', '_pair'], keep=False)]
+
+    fixed = 0
+    for (day, pair), grp in dupes.groupby(['_date_day', '_pair']):
+        if len(grp) == 2:
+            idx = grp.sort_values('date').index
+            df.loc[idx[0], 'game']   = 1
+            df.loc[idx[1], 'game']   = 2
+            df.loc[idx,    'format'] = 'BO2'
+            fixed += 1
+
+    df = df.drop(columns=['_date_day', '_pair'])
+    if fixed:
+        print(f"Fixed {fixed} LPL BO2 series (relabeled from BO1, renumbered games)")
+    return df
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -317,6 +351,8 @@ def run():
 
     series_out = PROCESSED_DIR / 'series_with_odds.csv'
     games_out  = PROCESSED_DIR / 'games_with_odds.csv'
+
+    games_with_odds = _fix_lpl_bo2(games_with_odds)
 
     series_with_odds.to_csv(series_out, index=False)
     games_with_odds.to_csv(games_out,  index=False)

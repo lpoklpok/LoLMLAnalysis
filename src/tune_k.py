@@ -20,18 +20,28 @@ PROCESSED_DIR = Path(os.path.dirname(__file__)) / '..' / 'data' / 'processed'
 MAJOR_LEAGUES = {'LEC', 'LPL', 'LCK'}
 POSITIONS     = ['top', 'jng', 'mid', 'bot', 'sup']
 ELO_SCALE     = 400
-INITIAL_ELO   = 1500
 FEATURES      = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs']
 FILL_VALUES   = {'elo_diff': 0.0, 'rwr_diff': 0.0, 'h2h_wr': 0.5, 'playoffs': 0}
 K_GRID        = [4, 8, 16, 24, 32, 48, 64, 96, 128]
+
+_ELO_TIER = {
+    'LCK': 1620, 'LPL': 1620,
+    'LEC': 1500,
+    'LCS': 1380, 'LTA': 1380, 'LTA N': 1380, 'LTA S': 1380, 'LCKC': 1380,
+}
+_ELO_DEFAULT = 1260
+
+def _starting_elo(league: str) -> float:
+    return _ELO_TIER.get(league, _ELO_DEFAULT)
 
 
 def _expected(elo_a, elo_b):
     return 1.0 / (1.0 + 10 ** ((elo_b - elo_a) / ELO_SCALE))
 
 
-def _team_elo(players, elo_map):
-    return np.mean([elo_map.get(p, INITIAL_ELO) for p in players])
+def _team_elo(players, elo_map, league):
+    start = _starting_elo(league)
+    return np.mean([elo_map.get(p, start) for p in players])
 
 
 def _rolling_winrate(history, n=10):
@@ -57,9 +67,10 @@ def build_features_for_k(df: pd.DataFrame, k: float) -> pd.DataFrame:
         blue_team = str(g.blue_team_teamname)
         red_team  = str(g.red_team_teamname)
         blue_win  = int(g.blue_team_result)
+        league    = g.league
 
-        blue_elo = _team_elo(blue_players, elo_map)
-        red_elo  = _team_elo(red_players,  elo_map)
+        blue_elo = _team_elo(blue_players, elo_map, league)
+        red_elo  = _team_elo(red_players,  elo_map, league)
         blue_rwr = _rolling_winrate(team_history[blue_team])
         red_rwr  = _rolling_winrate(team_history[red_team])
 
@@ -83,11 +94,12 @@ def build_features_for_k(df: pd.DataFrame, k: float) -> pd.DataFrame:
             })
 
         # Update ELO
+        start = _starting_elo(league)
         for p in blue_players:
-            r = elo_map.get(p, INITIAL_ELO)
+            r = elo_map.get(p, start)
             elo_map[p] = r + k * (blue_win - _expected(r, red_elo))
         for p in red_players:
-            r = elo_map.get(p, INITIAL_ELO)
+            r = elo_map.get(p, start)
             elo_map[p] = r + k * ((1 - blue_win) - _expected(r, blue_elo))
 
         team_history[blue_team].append(blue_win)
