@@ -316,7 +316,10 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
         feat_all_path = PROCESSED_DIR / 'features_all.csv'
         feat_path     = PROCESSED_DIR / 'features.csv'
         if feat_all_path.exists():
-            existing_features_all   = pd.read_csv(feat_all_path, low_memory=False)
+            existing_features_all = pd.read_csv(feat_all_path, low_memory=False)
+            if 'league' not in existing_features_all.columns:
+                print("Cached features_all.csv is stale (missing 'league') — forcing full rebuild.")
+                existing_features_all = None
         if feat_path.exists():
             existing_features_major = pd.read_csv(feat_path, low_memory=False)
     else:

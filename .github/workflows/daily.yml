@@ -32,9 +32,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: data/processed
-          key: processed-${{ github.run_number }}
+          key: processed-v2-${{ github.run_number }}
           restore-keys: |
-            processed-
+            processed-v2-
 
       - name: Pull latest Oracle's Elixir data
         run: python src/PullOEData.py
