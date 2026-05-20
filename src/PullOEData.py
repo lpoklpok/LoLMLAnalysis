@@ -26,6 +26,16 @@ else:
 output_path = os.path.join(RAW_DIR, f"{CURRENT_YEAR}_LoL_esports_match_data_from_OraclesElixir.csv")
 print(f"Refreshing {CURRENT_YEAR} data...")
 
+def _validate_csv(path):
+    """Raise if `path` doesn't look like a CSV (Google Drive returns HTML on quota hits)."""
+    with open(path, "rb") as f:
+        head = f.read(256).lstrip()
+    if head.startswith(b"<!DOCTYPE") or head.startswith(b"<html"):
+        raise RuntimeError("Downloaded payload is HTML, not CSV (likely Google Drive quota page).")
+    if len(head) < 32:
+        raise RuntimeError(f"Downloaded payload is suspiciously small ({len(head)} bytes).")
+
+
 def download_via_requests(file_id, path):
     session = requests.Session()
     url = f"https://drive.google.com/uc?export=download&id={file_id}"
@@ -34,15 +44,24 @@ def download_via_requests(file_id, path):
     confirm = next((v for k, v in r.cookies.items() if k.startswith("download_warning")), None)
     if confirm:
         r = session.get(url + f"&confirm={confirm}", stream=True)
-    with open(path, "wb") as f:
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
         for chunk in r.iter_content(32768):
             if chunk:
                 f.write(chunk)
+    _validate_csv(tmp)
+    os.replace(tmp, path)
 
+
+tmp_path = output_path + ".gdown.tmp"
 try:
-    gdown.download(id=CURRENT_YEAR_FILE_ID, output=output_path, quiet=False)
+    gdown.download(id=CURRENT_YEAR_FILE_ID, output=tmp_path, quiet=False)
+    _validate_csv(tmp_path)
+    os.replace(tmp_path, output_path)
     print("gdown succeeded.")
 except Exception as e:
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
     print(f"gdown failed ({e}), trying direct requests download...")
     try:
         download_via_requests(CURRENT_YEAR_FILE_ID, output_path)
