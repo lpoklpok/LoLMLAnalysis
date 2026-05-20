@@ -133,6 +133,9 @@ export default function Dashboard() {
         <Link href="/calculator" className="text-sm text-orange-400 hover:text-orange-300 transition-colors">
           Series Calculator →
         </Link>
+        <Link href="/findings" className="text-sm text-pink-400 hover:text-pink-300 transition-colors">
+          General Findings →
+        </Link>
         <span className="text-xs text-gray-500">
           {loading ? 'Loading…' : `${(stats?.total_games ?? 0).toLocaleString()} games`}
         </span>
