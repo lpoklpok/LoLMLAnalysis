@@ -153,7 +153,7 @@ function ProbXGoldTable({ rows, allBuckets }: { rows: ProbGoldRow[]; allBuckets:
       <table className="text-xs w-full">
         <thead>
           <tr className="text-gray-500 border-b border-gray-800">
-            <th className="text-left pb-2 font-normal pr-4">Pre-game prob (blue)</th>
+            <th className="text-left pb-2 font-normal pr-4">Pre-game prob (leading team)</th>
             <th className="text-right pb-2 font-normal pr-4">Overall</th>
             {allBuckets.map(b => (
               <th key={b} className="text-right pb-2 font-normal px-2 whitespace-nowrap">{b}</th>
