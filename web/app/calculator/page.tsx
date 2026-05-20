@@ -59,6 +59,8 @@ function rawZ(
   t1: string,
   t2: string,
   playoffs: boolean,
+  elo1?: number,
+  elo2?: number,
 ): number {
   const s1   = params.teams[t1]
   const s2   = params.teams[t2]
@@ -68,7 +70,7 @@ function rawZ(
   const coef  = params.coef
 
   const raw: Record<string, number> = {
-    elo_diff:     (s1.elo     ?? 0) - (s2.elo     ?? 0),
+    elo_diff:     (elo1 ?? s1.elo ?? 0) - (elo2 ?? s2.elo ?? 0),
     rwr_diff:     s1.rwr !== null && s2.rwr !== null
                     ? s1.rwr - s2.rwr
                     : fill['rwr_diff'],
@@ -94,6 +96,8 @@ function computeGameProbs(
   t1: string,
   t2: string,
   playoffs: boolean,
+  elo1?: number,
+  elo2?: number,
 ): GameProbs | null {
   const s1 = params.teams[t1]
   const s2 = params.teams[t2]
@@ -101,7 +105,7 @@ function computeGameProbs(
 
   // Average forward and reverse logits to cancel scaler mean bias,
   // making predictions symmetric when teams are swapped.
-  const z_base = (rawZ(params, t1, t2, playoffs) - rawZ(params, t2, t1, playoffs)) / 2
+  const z_base = (rawZ(params, t1, t2, playoffs, elo1, elo2) - rawZ(params, t2, t1, playoffs, elo2, elo1)) / 2
 
   const po_net       = playoffs ? (s1.po_adj - s2.po_adj) : 0
   const coaching_net = s1.coaching_adj - s2.coaching_adj
@@ -296,13 +300,13 @@ const POS_LABEL: Record<string, string> = { top: 'TOP', jng: 'JNG', mid: 'MID', 
 
 interface RoleH2HRow { pos: string; t1Player: string; t2Player: string; n: number; t1Wins: number }
 
-function buildRoleH2H(params: ModelParams, t1: string, t2: string): RoleH2HRow[] {
-  const r1 = params.rosters[t1]
-  const r2 = params.rosters[t2]
-  if (!r1 || !r2 || r1.length < 5 || r2.length < 5) return []
+function buildRoleH2H(params: ModelParams, t1: string, t2: string, r1?: string[], r2?: string[]): RoleH2HRow[] {
+  const roster1 = r1 ?? params.rosters[t1]
+  const roster2 = r2 ?? params.rosters[t2]
+  if (!roster1 || !roster2 || roster1.length < 5 || roster2.length < 5) return []
 
   return POSITIONS.map((pos, i) => {
-    const p1 = r1[i]; const p2 = r2[i]
+    const p1 = roster1[i]; const p2 = roster2[i]
     const [pa, pb] = p1 <= p2 ? [p1, p2] : [p2, p1]
     const key  = `${pa}|||${pb}|||${pos}`
     const entry = params.player_h2h[key]
@@ -415,6 +419,9 @@ export default function CalculatorPage() {
   const [marketPct, setMarketPct] = useState('')   // market % for team1, e.g. "42.5"
   const [bankroll, setBankroll] = useState('10000')
   const [error, setError]       = useState<string | null>(null)
+  const [blueRoster, setBlueRoster] = useState<string[]>([])
+  const [redRoster, setRedRoster]   = useState<string[]>([])
+  const [showSubs, setShowSubs]     = useState(false)
 
   useEffect(() => {
     fetch('/model_params.json')
@@ -430,6 +437,14 @@ export default function CalculatorPage() {
       .catch(() => setError('Failed to load model parameters'))
   }, [])
 
+  useEffect(() => {
+    if (params && team1 && params.rosters[team1]) setBlueRoster([...params.rosters[team1]])
+  }, [params, team1])
+
+  useEffect(() => {
+    if (params && team2 && params.rosters[team2]) setRedRoster([...params.rosters[team2]])
+  }, [params, team2])
+
   const teamNames = useMemo(
     () => params ? Object.keys(params.teams).sort() : [],
     [params]
@@ -437,10 +452,29 @@ export default function CalculatorPage() {
 
   const bestOf = format === 'BO1' ? 1 : format === 'BO3' ? 3 : 5
 
+  const customElo1 = useMemo<number | null>(() => {
+    if (!params || !team1 || blueRoster.length < 5) return null
+    const fallback = params.teams[team1]?.elo ?? 1500
+    return Math.round(blueRoster.map(p => params.player_elos[p] ?? fallback).reduce((a, b) => a + b, 0) / 5 * 10) / 10
+  }, [params, team1, blueRoster])
+
+  const customElo2 = useMemo<number | null>(() => {
+    if (!params || !team2 || redRoster.length < 5) return null
+    const fallback = params.teams[team2]?.elo ?? 1500
+    return Math.round(redRoster.map(p => params.player_elos[p] ?? fallback).reduce((a, b) => a + b, 0) / 5 * 10) / 10
+  }, [params, team2, redRoster])
+
+  const subsActive = useMemo(() => {
+    if (!params) return false
+    const r1 = params.rosters[team1] ?? []
+    const r2 = params.rosters[team2] ?? []
+    return blueRoster.some((p, i) => p !== (r1[i] ?? '')) || redRoster.some((p, i) => p !== (r2[i] ?? ''))
+  }, [params, team1, team2, blueRoster, redRoster])
+
   const gameProbs = useMemo<GameProbs | null>(() => {
     if (!params || !team1 || !team2 || team1 === team2) return null
-    return computeGameProbs(params, team1, team2, playoffs)
-  }, [params, team1, team2, playoffs])
+    return computeGameProbs(params, team1, team2, playoffs, customElo1 ?? undefined, customElo2 ?? undefined)
+  }, [params, team1, team2, playoffs, customElo1, customElo2])
 
   const seriesProb = useMemo<number | null>(() => {
     if (!gameProbs) return null
@@ -462,8 +496,10 @@ export default function CalculatorPage() {
 
   const roleH2H = useMemo<RoleH2HRow[]>(() => {
     if (!params || !team1 || !team2 || team1 === team2) return []
-    return buildRoleH2H(params, team1, team2)
-  }, [params, team1, team2])
+    return buildRoleH2H(params, team1, team2,
+      blueRoster.length === 5 ? blueRoster : undefined,
+      redRoster.length  === 5 ? redRoster  : undefined)
+  }, [params, team1, team2, blueRoster, redRoster])
 
   const kellyResult = useMemo<KellyResult | null>(() => {
     if (seriesProb === null) return null
@@ -486,6 +522,7 @@ export default function CalculatorPage() {
           <Link href="/backtest"    className="text-gray-400 hover:text-gray-200 transition-colors">Backtest</Link>
           <Link href="/games"       className="text-gray-400 hover:text-gray-200 transition-colors">Game Explorer</Link>
           <Link href="/model"       className="text-gray-400 hover:text-gray-200 transition-colors">Model</Link>
+          <Link href="/elo-editor"  className="text-gray-400 hover:text-gray-200 transition-colors">ELO Editor</Link>
         </nav>
       </header>
 
@@ -514,7 +551,11 @@ export default function CalculatorPage() {
                   </select>
                   {t1stats && (
                     <p className="text-xs text-gray-500 mt-1">
-                      {t1stats.league} · ELO {t1stats.elo?.toFixed(0) ?? '—'} · RWR {t1stats.rwr !== null ? pct(t1stats.rwr, 0) : '—'}
+                      {t1stats.league} · ELO {(customElo1 ?? t1stats.elo)?.toFixed(0) ?? '—'}
+                      {customElo1 !== null && customElo1 !== t1stats.elo && (
+                        <span className="text-gray-600 ml-1">(base {t1stats.elo?.toFixed(0)})</span>
+                      )}
+                      {' '}· RWR {t1stats.rwr !== null ? pct(t1stats.rwr, 0) : '—'}
                     </p>
                   )}
                 </div>
@@ -536,7 +577,11 @@ export default function CalculatorPage() {
                   </select>
                   {t2stats && (
                     <p className="text-xs text-gray-500 mt-1">
-                      {t2stats.league} · ELO {t2stats.elo?.toFixed(0) ?? '—'} · RWR {t2stats.rwr !== null ? pct(t2stats.rwr, 0) : '—'}
+                      {t2stats.league} · ELO {(customElo2 ?? t2stats.elo)?.toFixed(0) ?? '—'}
+                      {customElo2 !== null && customElo2 !== t2stats.elo && (
+                        <span className="text-gray-600 ml-1">(base {t2stats.elo?.toFixed(0)})</span>
+                      )}
+                      {' '}· RWR {t2stats.rwr !== null ? pct(t2stats.rwr, 0) : '—'}
                     </p>
                   )}
                 </div>
@@ -607,6 +652,95 @@ export default function CalculatorPage() {
                 </div>
               </div>
             </div>
+
+            {/* datalist for player autocomplete */}
+            <datalist id="player-list">
+              {Object.keys(params.player_elos).sort().map(p => <option key={p} value={p} />)}
+            </datalist>
+
+            {/* Substitutions panel */}
+            {team1 && team2 && team1 !== team2 && (
+              <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+                <button
+                  onClick={() => setShowSubs(s => !s)}
+                  className="w-full flex items-center justify-between px-6 py-4 text-sm font-medium text-gray-300 hover:bg-gray-800/50 transition-colors"
+                >
+                  <span className="flex items-center gap-2">
+                    Substitutions
+                    {subsActive && (
+                      <span className="text-xs bg-purple-900/50 text-purple-300 px-1.5 py-0.5 rounded">active</span>
+                    )}
+                  </span>
+                  <span className="text-gray-500 text-xs">{showSubs ? '▲' : '▼'}</span>
+                </button>
+                {showSubs && (
+                  <div className="px-6 pb-6 border-t border-gray-800">
+                    <div className="mt-4 space-y-2">
+                      <div className="grid grid-cols-[48px_1fr_1fr] gap-3 pb-1">
+                        <span />
+                        <span className="text-xs font-medium text-blue-400 text-center">{team1}</span>
+                        <span className="text-xs font-medium text-red-400 text-center">{team2}</span>
+                      </div>
+                      {POSITIONS.map((pos, i) => {
+                        const def1 = params.rosters[team1]?.[i] ?? ''
+                        const def2 = params.rosters[team2]?.[i] ?? ''
+                        const p1   = blueRoster[i] ?? def1
+                        const p2   = redRoster[i]  ?? def2
+                        return (
+                          <div key={pos} className="grid grid-cols-[48px_1fr_1fr] gap-3 items-center">
+                            <span className="text-xs font-mono text-gray-500 bg-gray-800 px-1.5 py-1 rounded text-center">
+                              {POS_LABEL[pos]}
+                            </span>
+                            <input
+                              list="player-list"
+                              value={p1}
+                              onChange={e => { const n = [...blueRoster]; n[i] = e.target.value; setBlueRoster(n) }}
+                              className={`w-full bg-gray-800 border rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500 ${p1 !== def1 ? 'border-blue-600' : 'border-gray-700'}`}
+                            />
+                            <input
+                              list="player-list"
+                              value={p2}
+                              onChange={e => { const n = [...redRoster]; n[i] = e.target.value; setRedRoster(n) }}
+                              className={`w-full bg-gray-800 border rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-red-500 ${p2 !== def2 ? 'border-red-600' : 'border-gray-700'}`}
+                            />
+                          </div>
+                        )
+                      })}
+                      <div className="flex items-center justify-between pt-3 text-xs text-gray-500">
+                        <div className="flex gap-4">
+                          {customElo1 !== null && customElo1 !== (params.teams[team1]?.elo ?? null) && (
+                            <span>
+                              {team1} ELO{' '}
+                              <span className="line-through text-gray-600">{params.teams[team1]?.elo?.toFixed(0)}</span>
+                              {' → '}
+                              <span className="text-blue-400 font-medium">{customElo1.toFixed(0)}</span>
+                            </span>
+                          )}
+                          {customElo2 !== null && customElo2 !== (params.teams[team2]?.elo ?? null) && (
+                            <span>
+                              {team2} ELO{' '}
+                              <span className="line-through text-gray-600">{params.teams[team2]?.elo?.toFixed(0)}</span>
+                              {' → '}
+                              <span className="text-red-400 font-medium">{customElo2.toFixed(0)}</span>
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex gap-3">
+                          <button
+                            onClick={() => setBlueRoster([...(params.rosters[team1] ?? [])])}
+                            className="hover:text-gray-300 transition-colors"
+                          >Reset {team1}</button>
+                          <button
+                            onClick={() => setRedRoster([...(params.rosters[team2] ?? [])])}
+                            className="hover:text-gray-300 transition-colors"
+                          >Reset {team2}</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Results */}
             {gameProbs && seriesProb !== null && team1 !== team2 && (
@@ -768,7 +902,7 @@ export default function CalculatorPage() {
                   <h2 className="text-lg font-semibold text-gray-100 mb-4">Feature Inputs</h2>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
                     {[
-                      { label: 'ELO diff', value: ((t1stats?.elo ?? 0) - (t2stats?.elo ?? 0)).toFixed(1) },
+                      { label: 'ELO diff', value: ((customElo1 ?? t1stats?.elo ?? 0) - (customElo2 ?? t2stats?.elo ?? 0)).toFixed(1) },
                       { label: 'RWR diff', value: (t1stats?.rwr !== null && t2stats?.rwr !== null)
                         ? ((t1stats!.rwr! - t2stats!.rwr!) * 100).toFixed(1) + '%'
                         : 'N/A (0)' },

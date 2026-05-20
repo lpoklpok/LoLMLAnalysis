@@ -160,6 +160,16 @@ def main():
     lr     = model.named_steps['lr']
 
     elo_map   = elo_state['elo_map']
+
+    overrides_path = PROCESSED / 'elo_overrides.json'
+    if overrides_path.exists():
+        with open(overrides_path) as f:
+            _overrides = json.load(f)
+        for player, data in _overrides.items():
+            elo_map[player] = data['elo'] if isinstance(data, dict) else data
+        if _overrides:
+            print(f"Applied {len(_overrides)} ELO override(s): {', '.join(_overrides)}")
+
     player_gd15  = ckpt.get('player_gd15', {})
     team_outperf_hist = ckpt.get('team_outperf', {})
     team_outperf_staleness = ckpt.get('team_outperf_staleness', {})
