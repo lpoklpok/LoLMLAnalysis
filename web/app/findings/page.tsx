@@ -150,14 +150,21 @@ function ChampionHalf({ rows, direction }: { rows: ChampionRow[]; direction: 'ov
   )
 }
 
-// ---- Matchup table ----
-function MatchupHalf({ rows, direction }: { rows: MatchupRow[]; direction: 'over' | 'under' }) {
-  const sorted = direction === 'over'
-    ? [...rows].sort((a, b) => b.outperf - a.outperf).slice(0, TOP_N)
-    : [...rows].sort((a, b) => a.outperf - b.outperf).slice(0, TOP_N)
-  const accent = direction === 'over' ? 'text-green-400' : 'text-red-400'
-  const label  = direction === 'over' ? 'Counters' : 'Gets Countered'
-  return (
+// ---- Matchup tables ----
+// Both halves select the same top-N pairs ranked by |delta|.
+// "Counters" shows from the winner's perspective; "Gets Countered" flips to the loser's.
+function MatchupPair({ rows }: { rows: MatchupRow[] }) {
+  // Select top N by absolute delta, normalise so outperf is always positive
+  // (counter = the side that overperforms, countered = the other side)
+  const strongest = [...rows]
+    .sort((a, b) => Math.abs(b.outperf) - Math.abs(a.outperf))
+    .slice(0, TOP_N)
+    .map(r => r.outperf >= 0
+      ? { counter: r.champ, countered: r.opp, games: r.games, actual: r.actual,       expected: r.expected,       delta: r.outperf }
+      : { counter: r.opp,  countered: r.champ, games: r.games, actual: 1 - r.actual,  expected: 1 - r.expected,  delta: -r.outperf }
+    )
+
+  const col = (label: string, accent: string, flip: boolean) => (
     <div className="flex-1 min-w-0">
       <h3 className={`text-sm font-semibold uppercase tracking-wide mb-3 ${accent}`}>{label}</h3>
       <table className="w-full text-sm">
@@ -172,18 +179,33 @@ function MatchupHalf({ rows, direction }: { rows: MatchupRow[]; direction: 'over
           </tr>
         </thead>
         <tbody>
-          {sorted.map((r, i) => (
-            <tr key={`${r.champ}|${r.opp}`} className={i % 2 === 0 ? 'bg-gray-900/40' : ''}>
-              <td className="py-1.5 pr-1 text-gray-200 whitespace-nowrap">{r.champ}</td>
-              <td className="py-1.5 pl-2 text-gray-500 whitespace-nowrap">{r.opp}</td>
-              <td className="py-1.5 text-right text-gray-500 tabular-nums">{r.games}</td>
-              <td className="py-1.5 text-right text-gray-300 tabular-nums">{pct(r.actual)}</td>
-              <td className="py-1.5 text-right text-gray-500 tabular-nums">{pct(r.expected)}</td>
-              <td className={`py-1.5 text-right tabular-nums ${outperfColor(r.outperf)}`}>{sign(r.outperf)}</td>
-            </tr>
-          ))}
+          {strongest.map((r, i) => {
+            const a = flip ? r.countered : r.counter
+            const b = flip ? r.counter   : r.countered
+            const actual   = flip ? 1 - r.actual   : r.actual
+            const expected = flip ? 1 - r.expected : r.expected
+            const delta    = flip ? -r.delta        : r.delta
+            return (
+              <tr key={`${r.counter}|${r.countered}`} className={i % 2 === 0 ? 'bg-gray-900/40' : ''}>
+                <td className="py-1.5 pr-1 text-gray-200 whitespace-nowrap">{a}</td>
+                <td className="py-1.5 pl-2 text-gray-500 whitespace-nowrap">{b}</td>
+                <td className="py-1.5 text-right text-gray-500 tabular-nums">{r.games}</td>
+                <td className="py-1.5 text-right text-gray-300 tabular-nums">{pct(actual)}</td>
+                <td className="py-1.5 text-right text-gray-500 tabular-nums">{pct(expected)}</td>
+                <td className={`py-1.5 text-right tabular-nums ${outperfColor(delta)}`}>{sign(delta)}</td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
+    </div>
+  )
+
+  return (
+    <div className="flex gap-8">
+      {col('Counters',      'text-green-400', false)}
+      <div className="w-px bg-gray-800 shrink-0" />
+      {col('Gets Countered', 'text-red-400',   true)}
     </div>
   )
 }
@@ -290,11 +312,7 @@ export default function FindingsPage() {
             </p>
             <PosTabs pos={pos} setPos={setPos} />
             <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-              <div className="flex gap-8">
-                <MatchupHalf rows={matchupRows} direction="over" />
-                <div className="w-px bg-gray-800 shrink-0" />
-                <MatchupHalf rows={matchupRows} direction="under" />
-              </div>
+              <MatchupPair rows={matchupRows} />
             </div>
           </section>
 
