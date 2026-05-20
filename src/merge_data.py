@@ -18,7 +18,7 @@ from scipy.optimize import brentq
 PROCESSED_DIR = Path(os.path.dirname(__file__)) / '..' / 'data' / 'processed'
 ODDS_DIR      = Path(os.path.dirname(__file__)) / '..' / 'data' / 'odds'
 
-ODDS_LEAGUES = ['LCK', 'LEC', 'LCS', 'LPL']
+ODDS_LEAGUES = ['LCK', 'LEC', 'LCS', 'LPL', 'EWC', 'MSI']
 
 # Teams where OE and OddsPortal use different names.
 # Both sides map to a single canonical form used only for matching.
@@ -174,12 +174,14 @@ def _merge_series(oe_series: pd.DataFrame, odds: pd.DataFrame) -> pd.DataFrame:
         on=['league', 'year', 'date_day', 'pair_key'],
         how='left',
     )
+    # Drop duplicate OE rows caused by multiple odds matches (keep first match)
+    merged = merged.drop_duplicates(subset=['series_id'], keep='first').reset_index(drop=True)
 
     # Secondary join with OE date shifted -1 day for leagues where OE timestamps
     # are in UTC/KST and games are played in Western timezones (LCS, LEC)
     unmatched_mask = merged['odd1_decimal'].isna()
     if unmatched_mask.any():
-        unmatched = oe_series[unmatched_mask.values].copy()
+        unmatched = merged.loc[unmatched_mask, oe_series.columns].copy()
         unmatched['date_day'] = unmatched['date_day'] - pd.Timedelta(days=1)
         fallback = unmatched.merge(
             odds_prep,
