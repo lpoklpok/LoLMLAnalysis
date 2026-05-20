@@ -36,14 +36,23 @@ def _validate_csv(path):
         raise RuntimeError(f"Downloaded payload is suspiciously small ({len(head)} bytes).")
 
 
-def download_via_requests(file_id, path):
+_BROWSER_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
+
+def _download_url_to_tmp(url: str, path: str, headers: dict | None = None) -> None:
+    """Stream a single URL into path+.tmp, validate, then move into place."""
     session = requests.Session()
-    url = f"https://drive.google.com/uc?export=download&id={file_id}"
-    r = session.get(url, stream=True)
-    # Handle large-file confirm token
+    if headers:
+        session.headers.update(headers)
+    r = session.get(url, stream=True, allow_redirects=True)
+    # Old-style cookie-based confirm token (still hit for some files)
     confirm = next((v for k, v in r.cookies.items() if k.startswith("download_warning")), None)
     if confirm:
-        r = session.get(url + f"&confirm={confirm}", stream=True)
+        sep = "&" if "?" in url else "?"
+        r = session.get(f"{url}{sep}confirm={confirm}", stream=True, allow_redirects=True)
     tmp = path + ".requests.tmp"
     try:
         with open(tmp, "wb") as f:
@@ -56,6 +65,34 @@ def download_via_requests(file_id, path):
         if os.path.exists(tmp):
             os.remove(tmp)
         raise
+
+
+def download_via_requests(file_id: str, path: str) -> None:
+    """
+    Try several Drive download endpoints in order. The legacy /uc endpoint and
+    the newer drive.usercontent endpoint go through different CDN caches, so
+    one may serve fresher data than the other. Browser-like User-Agent helps
+    avoid being routed to the API-side cache.
+    """
+    import time
+    cb = int(time.time())  # cache-busting query param
+    attempts = [
+        (f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t&_cb={cb}",
+         {"User-Agent": _BROWSER_UA}),
+        (f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t&_cb={cb}",
+         {"User-Agent": _BROWSER_UA}),
+        (f"https://drive.google.com/uc?export=download&id={file_id}",
+         None),  # original, no UA — matches old behavior
+    ]
+    last_err = None
+    for url, headers in attempts:
+        try:
+            _download_url_to_tmp(url, path, headers=headers)
+            return
+        except Exception as e:
+            last_err = e
+            print(f"  attempt failed: {url.split('?')[0]} → {e}")
+    raise RuntimeError(f"All Drive endpoints failed; last error: {last_err}")
 
 
 tmp_path = output_path + ".gdown.tmp"
