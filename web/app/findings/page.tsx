@@ -22,11 +22,15 @@ interface ProbGoldRow {
   gold_buckets: GoldBucket[]
 }
 
+interface ObjectiveStat { n: number; wins: number; win_rate: number | null }
+interface ObjectivesSet { dragons_4plus: ObjectiveStat; first_baron: ObjectiveStat }
+
 interface GoldLeadData {
   generated:   string
   year:        number
   gold_lead:   { all: Record<string, GoldBucket[]>;   major: Record<string, GoldBucket[]> }
   prob_x_gold: { all: Record<string, ProbGoldRow[]>;  major: Record<string, ProbGoldRow[]> }
+  objectives:  { all: ObjectivesSet;                  major: ObjectivesSet }
 }
 
 // ── Champion types ───────────────────────────────────────────────────────────
@@ -540,6 +544,35 @@ export default function FindingsPage() {
               </div>
             </section>
           )}
+
+          {/* ── Section 6: Objective win rates ── */}
+          {glData && (() => {
+            const obj = majorOnly ? glData.objectives.major : glData.objectives.all
+            const card = (label: string, sub: string, stat: ObjectiveStat) => (
+              <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 flex-1">
+                <div className="text-sm text-gray-400 mb-1">{label}</div>
+                <div className="text-xs text-gray-600 mb-3">{sub}</div>
+                <div className="text-4xl font-bold text-emerald-400">
+                  {stat.win_rate !== null ? `${(stat.win_rate * 100).toFixed(1)}%` : '—'}
+                </div>
+                <div className="text-xs text-gray-500 mt-2">
+                  {stat.wins.toLocaleString()} wins / {stat.n.toLocaleString()} team-games
+                </div>
+              </div>
+            )
+            return (
+              <section>
+                <h2 className="text-lg font-semibold text-gray-100 mb-1">Objective Win Rates</h2>
+                <p className="text-gray-500 text-sm mb-4">
+                  Win rate of a team that secured the objective. Side-agnostic — pools both blue and red team-game instances.
+                </p>
+                <div className="flex flex-col md:flex-row gap-4">
+                  {card('4+ Dragons', 'P(win | team got 4+ dragons)',  obj.dragons_4plus)}
+                  {card('First Baron', 'P(win | team got first baron)', obj.first_baron)}
+                </div>
+              </section>
+            )
+          })()}
 
           <p className="text-xs text-gray-600">
             Updated {new Date(data.generated).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}

@@ -201,10 +201,42 @@ def prob_x_gold_wr(df: pd.DataFrame, diff_col: str) -> list[dict]:
     return result_rows
 
 
+def objective_wrs(df: pd.DataFrame) -> dict:
+    """Win rate when a team gets 4+ dragons or first baron (side-agnostic)."""
+    out: dict = {}
+
+    # 4+ dragons: two team-game rows per game (blue + red)
+    drag = df[['blue_team_dragons', 'red_team_dragons', 'blue_team_result']].dropna()
+    blue_drag_4 = drag[drag['blue_team_dragons'] >= 4]
+    red_drag_4  = drag[drag['red_team_dragons']  >= 4]
+    n_drag = len(blue_drag_4) + len(red_drag_4)
+    wins_drag = int(blue_drag_4['blue_team_result'].sum()) + int((1 - red_drag_4['blue_team_result']).sum())
+    out['dragons_4plus'] = {
+        'n':        n_drag,
+        'wins':     wins_drag,
+        'win_rate': round(wins_drag / n_drag, 4) if n_drag else None,
+    }
+
+    # First baron
+    bar = df[['blue_team_firstbaron', 'red_team_firstbaron', 'blue_team_result']].dropna()
+    blue_fb = bar[bar['blue_team_firstbaron'] == 1]
+    red_fb  = bar[bar['red_team_firstbaron']  == 1]
+    n_bar = len(blue_fb) + len(red_fb)
+    wins_bar = int(blue_fb['blue_team_result'].sum()) + int((1 - red_fb['blue_team_result']).sum())
+    out['first_baron'] = {
+        'n':        n_bar,
+        'wins':     wins_bar,
+        'win_rate': round(wins_bar / n_bar, 4) if n_bar else None,
+    }
+
+    return out
+
+
 def compute_set(df: pd.DataFrame, times: dict) -> dict:
     return {
         'gold_lead':   {t: gold_lead_wr(df, col)   for t, col in times.items()},
         'prob_x_gold': {t: prob_x_gold_wr(df, col) for t, col in times.items()},
+        'objectives':  objective_wrs(df),
     }
 
 
@@ -243,6 +275,7 @@ def main():
         'gold_step':   GOLD_STEP,
         'gold_lead':   {'all': data_all['gold_lead'],   'major': data_major['gold_lead']},
         'prob_x_gold': {'all': data_all['prob_x_gold'], 'major': data_major['prob_x_gold']},
+        'objectives':  {'all': data_all['objectives'],  'major': data_major['objectives']},
     }
 
     with open(OUT, 'w') as f:
