@@ -52,15 +52,25 @@ def run():
     pos_df = pd.concat(pos_records).sort_values('date', ascending=False)
     player_pos = pos_df.drop_duplicates('player').set_index('player')['position'].to_dict()
 
-    # League per team from most recent game appearance
+    # Home league = most frequent main-league appearance (LCK/LEC/LCS/LPL)
+    # Falls back to most frequent league overall if team never played in a main league
+    MAIN_LEAGUES = {'LCK', 'LEC', 'LCS', 'LPL'}
     blue_tl = df[['blue_team_teamname', 'league']].rename(columns={'blue_team_teamname': 'team'})
     red_tl  = df[['red_team_teamname',  'league']].rename(columns={'red_team_teamname':  'team'})
-    team_to_league = (
-        pd.concat([blue_tl, red_tl])
-        .drop_duplicates('team')
-        .set_index('team')['league']
+    all_tl  = pd.concat([blue_tl, red_tl]).dropna(subset=['team'])
+
+    main_tl = all_tl[all_tl['league'].isin(MAIN_LEAGUES)]
+    main_league_map = (
+        main_tl.groupby('team')['league']
+        .agg(lambda x: x.value_counts().idxmax())
         .to_dict()
     )
+    fallback_map = (
+        all_tl.groupby('team')['league']
+        .agg(lambda x: x.value_counts().idxmax())
+        .to_dict()
+    )
+    team_to_league = {t: main_league_map.get(t, fallback_map.get(t, '')) for t in fallback_map}
 
     records = []
     for player, elo in elo_map.items():
