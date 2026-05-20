@@ -28,7 +28,8 @@ interface ModelParams {
   teams:      Record<string, TeamStats>
   rosters:    Record<string, string[]>
   h2h:        Record<string, number>
-  player_h2h: Record<string, PlayerH2HEntry>
+  player_h2h:  Record<string, PlayerH2HEntry>
+  player_elos: Record<string, number>
 }
 
 interface GameProbs {
@@ -312,7 +313,17 @@ function buildRoleH2H(params: ModelParams, t1: string, t2: string): RoleH2HRow[]
   })
 }
 
-function RoleH2HTable({ rows, t1, t2 }: { rows: RoleH2HRow[]; t1: string; t2: string }) {
+function eloColor(elo: number | undefined): string {
+  if (elo === undefined) return 'text-gray-300'
+  if (elo >= 1800) return 'text-yellow-400'
+  if (elo >= 1700) return 'text-blue-400'
+  if (elo >= 1600) return 'text-green-400'
+  return 'text-gray-400'
+}
+
+function RoleH2HTable({ rows, t1, t2, playerElos }: {
+  rows: RoleH2HRow[]; t1: string; t2: string; playerElos: Record<string, number>
+}) {
   return (
     <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
       <h2 className="text-lg font-semibold text-gray-100 mb-4">Player H2H</h2>
@@ -322,6 +333,8 @@ function RoleH2HTable({ rows, t1, t2 }: { rows: RoleH2HRow[]; t1: string; t2: st
           const t1Pct    = enough ? Math.round((t1Wins / n) * 100) : null
           const favorT1  = t1Pct != null && t1Pct > 50
           const favorT2  = t1Pct != null && t1Pct < 50
+          const elo1     = playerElos[t1Player]
+          const elo2     = playerElos[t2Player]
           return (
             <div key={pos} className="grid grid-cols-[44px_1fr_auto] gap-x-3 items-center text-sm">
               <span className="font-mono text-xs text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded text-center">
@@ -329,8 +342,14 @@ function RoleH2HTable({ rows, t1, t2 }: { rows: RoleH2HRow[]; t1: string; t2: st
               </span>
               <span className="truncate text-gray-400">
                 <span className={favorT1 ? 'text-blue-300 font-medium' : 'text-gray-300'}>{t1Player}</span>
+                {elo1 !== undefined && (
+                  <span className={`font-mono text-xs ml-1 ${eloColor(elo1)}`}>{Math.round(elo1)}</span>
+                )}
                 <span className="text-gray-600 mx-2">vs</span>
                 <span className={favorT2 ? 'text-red-300 font-medium' : 'text-gray-300'}>{t2Player}</span>
+                {elo2 !== undefined && (
+                  <span className={`font-mono text-xs ml-1 ${eloColor(elo2)}`}>{Math.round(elo2)}</span>
+                )}
               </span>
               {enough ? (
                 <span className={`font-mono text-xs shrink-0 ${favorT1 ? 'text-blue-400' : favorT2 ? 'text-red-400' : 'text-gray-400'}`}>
@@ -741,7 +760,7 @@ export default function CalculatorPage() {
 
                 {/* Player H2H */}
                 {roleH2H.length > 0 && (
-                  <RoleH2HTable rows={roleH2H} t1={team1} t2={team2} />
+                  <RoleH2HTable rows={roleH2H} t1={team1} t2={team2} playerElos={params?.player_elos ?? {}} />
                 )}
 
                 {/* Feature breakdown */}

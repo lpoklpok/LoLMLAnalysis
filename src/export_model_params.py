@@ -223,6 +223,16 @@ def main():
                 player_h2h_out[key] = val
     print(f"  {len(player_h2h_out)} player h2h pairs for {len(active_players)} active players")
 
+    # Per-player ELO for active roster players only
+    active_players_all: set[str] = set()
+    for players in rosters.values():
+        active_players_all.update(players)
+    player_elos_out = {
+        p: round(float(elo_map[p]), 1)
+        for p in active_players_all
+        if p in elo_map
+    }
+
     out = {
         'generated': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         'features':  FEATS,
@@ -238,12 +248,13 @@ def main():
         'rosters':    rosters,
         'h2h':        h2h,
         'player_h2h': player_h2h_out,
+        'player_elos': player_elos_out,
     }
 
     with open(OUT, 'w') as f:
         json.dump(out, f, separators=(',', ':'))
     size_kb = OUT.stat().st_size // 1024
-    print(f"Wrote {OUT}  ({len(team_stats)} teams, {len(h2h)} h2h pairs, {len(player_h2h_out)} player h2h, {size_kb}KB)")
+    print(f"Wrote {OUT}  ({len(team_stats)} teams, {len(h2h)} h2h pairs, {len(player_h2h_out)} player h2h, {len(player_elos_out)} player elos, {size_kb}KB)")
 
 
 if __name__ == '__main__':
