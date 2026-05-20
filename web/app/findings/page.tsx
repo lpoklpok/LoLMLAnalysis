@@ -25,8 +25,8 @@ interface ProbGoldRow {
 interface GoldLeadData {
   generated:   string
   year:        number
-  gold_lead:   Record<string, GoldBucket[]>
-  prob_x_gold: Record<string, ProbGoldRow[]>
+  gold_lead:   { all: Record<string, GoldBucket[]>;   major: Record<string, GoldBucket[]> }
+  prob_x_gold: { all: Record<string, ProbGoldRow[]>;  major: Record<string, ProbGoldRow[]> }
 }
 
 // ── Champion types ───────────────────────────────────────────────────────────
@@ -413,7 +413,8 @@ export default function FindingsPage() {
 
   const allGoldBuckets = useMemo(() => {
     if (!glData) return []
-    const rows = glData.prob_x_gold[glTime] ?? []
+    const src = majorOnly ? glData.prob_x_gold.major : glData.prob_x_gold.all
+    const rows = src[glTime] ?? []
     const seen = new Set<string>()
     const out: string[] = []
     for (const row of rows) {
@@ -422,7 +423,7 @@ export default function FindingsPage() {
       }
     }
     return out
-  }, [glData, glTime])
+  }, [glData, glTime, majorOnly])
 
   const gFilter = <T extends { games: number }>(rows: T[]) =>
     minGames ? rows.filter(r => r.games >= 10) : rows
@@ -516,7 +517,7 @@ export default function FindingsPage() {
               </p>
               <TimeTabs time={glTime} setTime={setGlTime} />
               <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-                <GoldLeadTable buckets={glData.gold_lead[glTime] ?? []} />
+                <GoldLeadTable buckets={(majorOnly ? glData.gold_lead.major : glData.gold_lead.all)[glTime] ?? []} />
               </div>
             </section>
           )}
@@ -526,14 +527,14 @@ export default function FindingsPage() {
             <section>
               <h2 className="text-lg font-semibold text-gray-100 mb-1">Pre-Game Probability × Gold Lead</h2>
               <p className="text-gray-500 text-sm mb-4">
-                Win rate of the gold-leading team, split by the blue team's pre-game implied probability bucket.
+                Win rate of the gold-leading team, split by that team's pre-game implied probability bucket.
                 Shows how gold leads interact with pre-game strength — useful for live betting.
                 Cell format: win rate / n games.
               </p>
               <TimeTabs time={glTime} setTime={setGlTime} />
               <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
                 <ProbXGoldTable
-                  rows={glData.prob_x_gold[glTime] ?? []}
+                  rows={(majorOnly ? glData.prob_x_gold.major : glData.prob_x_gold.all)[glTime] ?? []}
                   allBuckets={allGoldBuckets}
                 />
               </div>

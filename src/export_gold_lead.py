@@ -8,7 +8,6 @@ Usage:
 
 import json
 import pandas as pd
-import numpy as np
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,8 +15,9 @@ ROOT      = Path(__file__).resolve().parent.parent
 PROCESSED = ROOT / 'data' / 'processed'
 OUT       = ROOT / 'web' / 'public' / 'gold_lead.json'
 
-GOLD_STEP = 500
-GOLD_EDGES = [0, 500, 1000, 1500, 2000, 2500]  # last bucket is 2500+
+MAJOR_LEAGUES = {'LCK', 'LEC', 'LCS', 'LPL'}
+GOLD_STEP     = 500
+GOLD_EDGES    = list(range(0, 10001, 500))  # 0, 500, 1000, ..., 10000 then 10000+
 
 
 def _bucket_label(lo: int, hi: int | None) -> str:
@@ -45,10 +45,10 @@ def gold_lead_wr(df: pd.DataFrame, diff_col: str) -> list[dict]:
             ((chunk[diff_col] < 0) & (chunk['blue_team_result'] == 0))
         )
         rows.append({
-            'bucket': _bucket_label(lo, hi),
-            'gold_lo': lo,
-            'gold_hi': hi,
-            'n': int(n),
+            'bucket':   _bucket_label(lo, hi),
+            'gold_lo':  lo,
+            'gold_hi':  hi,
+            'n':        int(n),
             'win_rate': round(float(leading_wins.mean()), 4),
         })
     return rows
@@ -56,19 +56,30 @@ def gold_lead_wr(df: pd.DataFrame, diff_col: str) -> list[dict]:
 
 def prob_x_gold_wr(df: pd.DataFrame, diff_col: str) -> list[dict]:
     """
-    For each 10%-wide pre-game prob bucket (blue team),
-    win rate of the gold-leading team in each 500g gold-lead bucket.
-    Only uses games that have odds data.
+    Win rate of the gold-leading team, split by that team's pre-game implied
+    probability (10% buckets) and their gold lead magnitude (500g buckets).
+    Uses the leading team's prob regardless of side.
     """
-    sub = df[[diff_col, 'blue_team_result', 'implied_prob1_vigfree']].dropna()
-    sub = sub[sub[diff_col] != 0]
+    cols = [diff_col, 'blue_team_result', 'implied_prob1_vigfree']
+    sub = df[cols].dropna()
+    sub = sub[sub[diff_col] != 0].copy()
+
+    # leading_team_prob: pre-game prob of whichever team has the gold lead
+    sub['leading_prob'] = sub.apply(
+        lambda r: r['implied_prob1_vigfree'] if r[diff_col] > 0 else 1 - r['implied_prob1_vigfree'],
+        axis=1,
+    )
+    sub['leading_wins'] = (
+        ((sub[diff_col] > 0) & (sub['blue_team_result'] == 1)) |
+        ((sub[diff_col] < 0) & (sub['blue_team_result'] == 0))
+    )
 
     prob_edges = [i / 10 for i in range(11)]
     result_rows = []
 
     for j in range(len(prob_edges) - 1):
         p_lo, p_hi = prob_edges[j], prob_edges[j + 1]
-        pchunk = sub[(sub['implied_prob1_vigfree'] >= p_lo) & (sub['implied_prob1_vigfree'] < p_hi)]
+        pchunk = sub[(sub['leading_prob'] >= p_lo) & (sub['leading_prob'] < p_hi)]
         if len(pchunk) < 3:
             continue
 
@@ -83,42 +94,39 @@ def prob_x_gold_wr(df: pd.DataFrame, diff_col: str) -> list[dict]:
             n = len(gchunk)
             if n == 0:
                 continue
-            leading_wins = (
-                ((gchunk[diff_col] > 0) & (gchunk['blue_team_result'] == 1)) |
-                ((gchunk[diff_col] < 0) & (gchunk['blue_team_result'] == 0))
-            )
             gold_rows.append({
-                'bucket': _bucket_label(lo, hi),
-                'gold_lo': lo,
-                'gold_hi': hi,
-                'n': int(n),
-                'win_rate': round(float(leading_wins.mean()), 4),
+                'bucket':   _bucket_label(lo, hi),
+                'gold_lo':  lo,
+                'gold_hi':  hi,
+                'n':        int(n),
+                'win_rate': round(float(gchunk['leading_wins'].mean()), 4),
             })
 
-        # Overall (any lead)
-        any_lead = pchunk[pchunk[diff_col] != 0]
-        n_total = len(pchunk)
-        leading_wins_all = (
-            ((any_lead[diff_col] > 0) & (any_lead['blue_team_result'] == 1)) |
-            ((any_lead[diff_col] < 0) & (any_lead['blue_team_result'] == 0))
-        )
         result_rows.append({
             'prob_bucket': f'{int(p_lo * 100)}–{int(p_hi * 100)}%',
-            'prob_lo': p_lo,
-            'prob_hi': p_hi,
-            'n': int(n_total),
-            'overall_wr': round(float(leading_wins_all.mean()) if len(any_lead) > 0 else 0.0, 4),
+            'prob_lo':     p_lo,
+            'prob_hi':     p_hi,
+            'n':           int(len(pchunk)),
+            'overall_wr':  round(float(pchunk['leading_wins'].mean()), 4),
             'gold_buckets': gold_rows,
         })
 
     return result_rows
 
 
+def compute_set(df: pd.DataFrame, times: dict) -> dict:
+    return {
+        'gold_lead':   {t: gold_lead_wr(df, col)     for t, col in times.items()},
+        'prob_x_gold': {t: prob_x_gold_wr(df, col)   for t, col in times.items()},
+    }
+
+
 def main():
     print('Loading games_with_odds…')
     df = pd.read_csv(PROCESSED / 'games_with_odds.csv', low_memory=False)
-    df2026 = df[df['year'] == 2026].copy()
-    print(f'  2026 rows: {len(df2026)}, with odds: {df2026["implied_prob1_vigfree"].notna().sum()}')
+    df2026  = df[df['year'] == 2026].copy()
+    df_major = df2026[df2026['league'].isin(MAJOR_LEAGUES)].copy()
+    print(f'  2026 all: {len(df2026)},  major: {len(df_major)}')
 
     times = {
         '10': 'blue_team_golddiffat10',
@@ -126,26 +134,17 @@ def main():
         '20': 'blue_team_golddiffat20',
     }
 
-    print('Computing gold-lead win rates…')
-    gold_lead: dict = {}
-    for t, col in times.items():
-        gold_lead[t] = gold_lead_wr(df2026, col)
-        total = sum(r['n'] for r in gold_lead[t])
-        print(f'  @{t}: {total} games')
-
-    print('Computing pre-game prob × gold matrices…')
-    prob_x_gold: dict = {}
-    for t, col in times.items():
-        prob_x_gold[t] = prob_x_gold_wr(df2026, col)
-        total = sum(r['n'] for r in prob_x_gold[t])
-        print(f'  @{t}: {total} games with odds, {len(prob_x_gold[t])} prob buckets')
+    print('Computing all-leagues…')
+    data_all   = compute_set(df2026,  times)
+    print('Computing major-leagues…')
+    data_major = compute_set(df_major, times)
 
     out = {
-        'generated':   datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-        'year':        2026,
-        'gold_step':   GOLD_STEP,
-        'gold_lead':   gold_lead,
-        'prob_x_gold': prob_x_gold,
+        'generated':        datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'year':             2026,
+        'gold_step':        GOLD_STEP,
+        'gold_lead':        {'all': data_all['gold_lead'],   'major': data_major['gold_lead']},
+        'prob_x_gold':      {'all': data_all['prob_x_gold'], 'major': data_major['prob_x_gold']},
     }
 
     with open(OUT, 'w') as f:
