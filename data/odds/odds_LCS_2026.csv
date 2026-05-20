@@ -1,6 +1,8 @@
 league,page_num,source_url,date_header,match_date,year,team1_raw,team2_raw,team1,team2,series_score,score1,score2,odd1_decimal,odd2_decimal,implied_prob1_vigfree,implied_prob2_vigfree
-LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,"Yesterday, 10 May - Spring Season",2026-05-10,2026,Lyon Gaming,Team Liquid,Lyon Gaming,Team Liquid,2-1,2,1,1.92,2.07,0.518797,0.481203
-LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,"Yesterday, 10 May - Spring Season",2026-05-10,2026,Cloud9,FlyQuest eSports,Cloud9,FlyQuest eSports,2-1,2,1,1.49,2.94,0.663657,0.336343
+LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,17 May 2026 - Spring Season,2026-05-17,2026,Sentinels,Dignitas,Sentinels,Dignitas,2-0,2,0,1.16,6.15,0.841313,0.158687
+LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,16 May 2026 - Spring Season,2026-05-16,2026,Team Liquid,Cloud9,Team Liquid,Cloud9,0-2,0,2,2.18,1.71,0.439589,0.560411
+LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,10 May 2026 - Spring Season,2026-05-10,2026,Lyon Gaming,Team Liquid,Lyon Gaming,Team Liquid,2-1,2,1,1.92,2.07,0.518797,0.481203
+LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,10 May 2026 - Spring Season,2026-05-10,2026,Cloud9,FlyQuest eSports,Cloud9,FlyQuest eSports,2-1,2,1,1.49,2.94,0.663657,0.336343
 LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,09 May 2026 - Spring Season,2026-05-09,2026,Disguised,Dignitas,Disguised,Dignitas,2-0,2,0,1.3,3.0,0.697674,0.302326
 LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,09 May 2026 - Spring Season,2026-05-09,2026,Shopify Rebellion,Sentinels,Shopify Rebellion,Sentinels,0-2,0,2,3.48,1.36,0.280992,0.719008
 LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,03 May 2026 - Spring Season,2026-05-03,2026,Lyon Gaming,Sentinels,Lyon Gaming,Sentinels,2-0,2,0,1.54,2.6,0.628019,0.371981
@@ -14,7 +16,6 @@ LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs
 LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,18 Apr 2026 - Spring Season,2026-04-18,2026,Disguised,Cloud9,Disguised,Cloud9,0-2,0,2,5.8,1.14,0.164265,0.835735
 LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,12 Apr 2026 - Spring Season,2026-04-12,2026,Sentinels,Cloud9,Sentinels,Cloud9,1-2,1,2,4.78,1.32,0.216393,0.783607
 LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,11 Apr 2026 - Spring Season,2026-04-11,2026,Dignitas,Lyon Gaming,Dignitas,Lyon Gaming,1-2,1,2,3.2,1.26,0.282511,0.717489
-LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,11 Apr 2026 - Spring Season,2026-04-11,2026,Team Liquid,Sentinels,Team Liquid,Sentinels,1-2,1,2,1.4,3.25,0.698925,0.301075
 LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,11 Apr 2026 - Spring Season,2026-04-11,2026,Shopify Rebellion,Team Liquid,Shopify Rebellion,Team Liquid,0-2,0,2,2.94,1.46,0.331818,0.668182
 LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,01 Mar 2026 - Winter - Play Offs,2026-03-01,2026,Lyon Gaming,Cloud9,Lyon Gaming,Cloud9,3-1,3,1,3.47,1.36,0.281573,0.718427
 LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,28 Feb 2026 - Winter - Play Offs,2026-02-28,2026,Lyon Gaming,Sentinels,Lyon Gaming,Sentinels,3-1,3,1,1.3,4.2,0.763636,0.236364
@@ -24,6 +25,7 @@ LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs
 LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,15 Feb 2026 - Winter - Play Offs,2026-02-15,2026,Cloud9,FlyQuest eSports,Cloud9,FlyQuest eSports,3-0,3,0,1.32,3.8,0.742188,0.257812
 LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,14 Feb 2026 - Winter - Play Offs,2026-02-14,2026,Sentinels,Disguised,Sentinels,Disguised,3-2,3,2,1.68,2.28,0.575758,0.424242
 LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,08 Feb 2026 - Winter Season,2026-02-08,2026,Dignitas,Team Liquid,Dignitas,Team Liquid,0-1,0,1,3.15,1.62,0.339623,0.660377
+LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,08 Feb 2026 - Winter Season,2026-02-08,2026,FlyQuest eSports,Dignitas,FlyQuest eSports,Dignitas,2-0,2,0,1.22,4.51,0.787086,0.212914
 LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,08 Feb 2026 - Winter Season,2026-02-08,2026,Cloud9,FlyQuest eSports,Cloud9,FlyQuest eSports,2-1,2,1,1.45,5.0,0.775194,0.224806
 LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,08 Feb 2026 - Winter Season,2026-02-08,2026,Dignitas,Shopify Rebellion,Dignitas,Shopify Rebellion,2-0,2,0,2.73,1.52,0.357647,0.642353
 LCS,1,https://www.oddsportal.com/esports/league-of-legends/league-of-legends-lcs/results/,07 Feb 2026 - Winter Season,2026-02-07,2026,Team Liquid,Sentinels,Team Liquid,Sentinels,1-2,1,2,1.4,3.25,0.698925,0.301075

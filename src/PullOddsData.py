@@ -39,7 +39,7 @@ TEAM_NAME_MAP: Dict[str, str] = {
     "brion": "HANJIN BRION",
     "hanwha life esports": "Hanwha Life Esports", "hanwha life": "Hanwha Life Esports",
     "kt rolster": "KT Rolster", "kt": "KT Rolster",
-    "kiwoom drx": "Kiwoom DRX", "drx": "Kiwoom DRX",
+    "kiwoom drx": "Kiwoom DRX", "drx": "Kiwoom DRX", "krx": "Kiwoom DRX",
     "nongshim redforce": "Nongshim RedForce",
     "t1": "T1",
     # LEC
@@ -51,8 +51,10 @@ TEAM_NAME_MAP: Dict[str, str] = {
     "movistar koi": "Movistar KOI", "koi": "Movistar KOI",
     "natus vincere": "Natus Vincere", "navi": "Natus Vincere",
     "sk gaming": "SK Gaming",
-    "team heretics": "Team Heretics",
-    "team vitality": "Team Vitality",
+    "team heretics": "Team Heretics", "heretics": "Team Heretics",
+    "team vitality": "Team Vitality", "vitality": "Team Vitality",
+    "shifters": "Shifters",
+    "karmine corp blue": "Karmine Corp",
     # LPL
     "anyone's legend": "Anyone's Legend",
     "bilibili gaming": "Bilibili Gaming", "blg": "Bilibili Gaming",
@@ -67,11 +69,20 @@ TEAM_NAME_MAP: Dict[str, str] = {
     "rare atom": "Rare Atom",
     # LCS
     "cloud9": "Cloud9", "c9": "Cloud9",
-    "flyquest": "FlyQuest",
+    "flyquest": "FlyQuest", "flyquest esports": "FlyQuest",
     "team liquid": "Team Liquid", "tl": "Team Liquid",
     "100 thieves": "100 Thieves",
     "dignitas": "Dignitas",
     "sentinels": "Sentinels",
+    "disguised": "Disguised",
+    "lyon gaming": "Lyon Gaming",
+    "shopify rebellion": "Shopify Rebellion",
+    # LPL extras
+    "tt gaming": "ThunderTalk Gaming",
+    "lgd gaming": "LGD Gaming",
+    # EWC extras
+    "solary": "Solary",
+    "galions": "Galions",
 }
 
 
