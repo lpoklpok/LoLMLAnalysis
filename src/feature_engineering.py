@@ -268,6 +268,28 @@ def _apply_elo_decay(players: list[str], elo_map: dict, league: str,
         elo_map[p] = start + (current - start) * decay
 
 
+_ODDS_COLS = [
+    'odd1_decimal', 'odd2_decimal',
+    'implied_prob1_vigfree', 'implied_prob2_vigfree',
+    'format', 'score_match', 'q_blue_win',
+]
+
+
+def _patch_odds_columns() -> None:
+    """Re-join odds columns from games_with_odds.csv into features files."""
+    gwo_path = PROCESSED_DIR / 'games_with_odds.csv'
+    gwo = pd.read_csv(gwo_path, low_memory=False, usecols=['gameid'] + _ODDS_COLS)
+    for path in [PROCESSED_DIR / 'features_all.csv', PROCESSED_DIR / 'features.csv']:
+        if not path.exists():
+            continue
+        feat = pd.read_csv(path, low_memory=False)
+        feat = feat.drop(columns=[c for c in _ODDS_COLS if c in feat.columns])
+        feat = feat.merge(gwo, on='gameid', how='left')
+        feat.to_csv(path, index=False)
+    n = gwo['q_blue_win'].notna().sum()
+    print(f"Odds patch applied: {n:,} games now have odds.")
+
+
 def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
                    split_reset_factor: float | None = None,
                    incremental: bool = True) -> pd.DataFrame:
@@ -307,7 +329,15 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
 
         new_df = df[df['date'] > last_date]
         if new_df.empty:
-            print(f"No new games since {last_date.date()} — skipping feature engineering.")
+            gwo_path  = PROCESSED_DIR / 'games_with_odds.csv'
+            ckpt_mtime = CHECKPOINT_PATH.stat().st_mtime
+            gwo_mtime  = gwo_path.stat().st_mtime if gwo_path.exists() else 0
+            if gwo_mtime > ckpt_mtime:
+                print(f"No new games, but odds file is newer than checkpoint — patching odds columns.")
+                _patch_odds_columns()
+                CHECKPOINT_PATH.touch()  # prevent re-patching on next run
+            else:
+                print(f"No new games since {last_date.date()} — skipping feature engineering.")
             return pd.read_csv(PROCESSED_DIR / 'features.csv', low_memory=False)
 
         print(f"Incremental: processing {len(new_df)} new games after {last_date.date()}")
