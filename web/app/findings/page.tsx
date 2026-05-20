@@ -153,7 +153,7 @@ function ProbXGoldTable({ rows, allBuckets }: { rows: ProbGoldRow[]; allBuckets:
       <table className="text-xs w-full">
         <thead>
           <tr className="text-gray-500 border-b border-gray-800">
-            <th className="text-left pb-2 font-normal pr-4">Market prob (leading team)</th>
+            <th className="text-left pb-2 font-normal pr-4">Model prob (leading team)</th>
             <th className="text-right pb-2 font-normal pr-4">Overall</th>
             {allBuckets.map(b => (
               <th key={b} className="text-right pb-2 font-normal px-2 whitespace-nowrap">{b}</th>
@@ -527,7 +527,7 @@ export default function FindingsPage() {
             <section>
               <h2 className="text-lg font-semibold text-gray-100 mb-1">Pre-Game Probability × Gold Lead</h2>
               <p className="text-gray-500 text-sm mb-4">
-                Win rate of the gold-leading team, split by that team's pre-game market probability bucket.
+                Win rate of the gold-leading team, split by that team's pre-game model probability bucket.
                 Shows how gold leads interact with pre-game strength — useful for live betting.
                 Cell format: win rate / n games.
               </p>

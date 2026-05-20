@@ -21,6 +21,86 @@ FEATS = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_dif
 FILL  = {'elo_diff': 0.0, 'rwr_diff': 0.0, 'h2h_wr': 0.5,
          'playoffs': 0, 'gd15_diff': 0.0, 'outperf_diff': 0.0}
 
+ALPHA_G2 = 0.8970
+BETA_DA  = 0.0929
+
+TEAM_PO_ADJ = {
+    'G2 Esports':          0.4172,
+    'FunPlus Phoenix':     0.3159,
+    'Bilibili Gaming':     0.2242,
+    'T1':                  0.2068,
+    'KT Rolster':          0.1991,
+    'Weibo Gaming':        0.1234,
+    'BNK FEARX':           0.1069,
+    "Anyone's Legend":     0.0801,
+    'Team BDS':            0.0612,
+    'Karmine Corp':        0.0416,
+    'Hanwha Life Esports': -0.0616,
+    'Team WE':             -0.0757,
+    'Top Esports':         -0.0927,
+    'Dplus Kia':           -0.0968,
+    'JD Gaming':           -0.1238,
+    'Invictus Gaming':     -0.1406,
+    'Gen.G':               -0.1510,
+    'Movistar KOI':        -0.1518,
+    'Team Heretics':       -0.3450,
+    'ThunderTalk Gaming':  -0.3521,
+    'Ninjas in Pyjamas':   -0.3548,
+    'EDward Gaming':       -0.3743,
+    'Team Vitality':       -0.4237,
+    'Fnatic':              -0.4427,
+    'GiantX':              -0.4491,
+    'Nongshim RedForce':   -0.6670,
+}
+
+COACHING_ADJ = {
+    'Karmine Corp': (2026, 0.3695),
+}
+
+
+def compute_model_preds(df: pd.DataFrame) -> pd.DataFrame:
+    """Train on 2024-2025, apply with G2/playoff/coaching adjustments. Matches upload_game_features.py."""
+    df = df.copy()
+    df['date'] = pd.to_datetime(df['date'], utc=True)
+    df['_date_day'] = df['date'].dt.date
+    df['_team_key'] = df.apply(
+        lambda r: '|'.join(sorted([str(r['blue_team']), str(r['red_team'])])), axis=1
+    )
+    df = df.sort_values(['_date_day', 'league', '_team_key', 'game']).reset_index(drop=True)
+    shifted = df.groupby(['_date_day', 'league', '_team_key'])['blue_win'].shift(1)
+    df['draft_advantage'] = shifted.map(
+        lambda x: 0 if pd.isna(x) else (-1 if x == 1 else 1)
+    ).astype(int)
+
+    train = df[df['year'].isin([2024, 2025])]
+    model = Pipeline([('s', StandardScaler()), ('lr', LogisticRegression(max_iter=1000))])
+    model.fit(train[FEATS].fillna(FILL), train['blue_win'].values)
+
+    scaler = model.named_steps['s']
+    lr     = model.named_steps['lr']
+    X_sc   = scaler.transform(df[FEATS].fillna(FILL))
+    logodds = X_sc @ lr.coef_.ravel() + lr.intercept_[0]
+    logodds_adj = logodds.copy()
+
+    g2_mask = ((df['game'] == 2) & (df['year'] >= 2025)).values
+    logodds_adj[g2_mask] = (ALPHA_G2 * logodds[g2_mask]
+                            + BETA_DA * df['draft_advantage'].values[g2_mask])
+
+    po_mask = df['playoffs'].values == 1
+    if po_mask.any():
+        blue_po = np.array([TEAM_PO_ADJ.get(t, 0.0) for t in df['blue_team']])
+        red_po  = np.array([TEAM_PO_ADJ.get(t, 0.0) for t in df['red_team']])
+        logodds_adj[po_mask] += (blue_po - red_po)[po_mask]
+
+    years = df['year'].values
+    for team, (from_year, bonus) in COACHING_ADJ.items():
+        active = years >= from_year
+        logodds_adj[(df['blue_team'].values == team) & active] += bonus
+        logodds_adj[(df['red_team'].values  == team) & active] -= bonus
+
+    df['model_pred'] = 1 / (1 + np.exp(-logodds_adj))
+    return df
+
 POS_MAP = {
     'top': ('blue_top_champion', 'red_top_champion'),
     'jng': ('blue_jng_champion', 'red_jng_champion'),
@@ -147,13 +227,9 @@ def main():
     feat = pd.read_csv(PROCESSED / 'features_all.csv', low_memory=False)
     gwo  = pd.read_csv(PROCESSED / 'games_with_odds.csv', low_memory=False)
 
-    print("Training model on 2024–2025…")
-    train = feat[feat['year'].isin([2024, 2025])]
-    model = Pipeline([('s', StandardScaler()), ('lr', LogisticRegression(max_iter=1000))])
-    model.fit(train[FEATS].fillna(FILL), train['blue_win'].values)
-
+    print("Training model on 2024–2025 + applying adjustments…")
+    feat = compute_model_preds(feat)
     feat26 = feat[feat['year'] == 2026].copy()
-    feat26['model_pred'] = model.predict_proba(feat26[FEATS].fillna(FILL))[:, 1]
     print(f"2026 games: {len(feat26)}")
 
     champ_cols = (

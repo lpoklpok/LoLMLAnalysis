@@ -7,9 +7,13 @@ Usage:
 """
 
 import json
+import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
 from pathlib import Path
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 ROOT      = Path(__file__).resolve().parent.parent
 PROCESSED = ROOT / 'data' / 'processed'
@@ -19,9 +23,93 @@ MAJOR_LEAGUES = {'LCK', 'LEC', 'LCS', 'LPL'}
 GOLD_STEP     = 500
 GOLD_EDGES    = list(range(0, 10001, 500))  # 0, 500, 1000, ..., 10000 then 10000+
 
+FEATS = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff']
+FILL  = {'elo_diff': 0., 'rwr_diff': 0., 'h2h_wr': 0.5,
+         'playoffs': 0, 'gd15_diff': 0., 'outperf_diff': 0.}
+
+ALPHA_G2 = 0.8970
+BETA_DA  = 0.0929
+
+TEAM_PO_ADJ = {
+    'G2 Esports':          0.4172,
+    'FunPlus Phoenix':     0.3159,
+    'Bilibili Gaming':     0.2242,
+    'T1':                  0.2068,
+    'KT Rolster':          0.1991,
+    'Weibo Gaming':        0.1234,
+    'BNK FEARX':           0.1069,
+    "Anyone's Legend":     0.0801,
+    'Team BDS':            0.0612,
+    'Karmine Corp':        0.0416,
+    'Hanwha Life Esports': -0.0616,
+    'Team WE':             -0.0757,
+    'Top Esports':         -0.0927,
+    'Dplus Kia':           -0.0968,
+    'JD Gaming':           -0.1238,
+    'Invictus Gaming':     -0.1406,
+    'Gen.G':               -0.1510,
+    'Movistar KOI':        -0.1518,
+    'Team Heretics':       -0.3450,
+    'ThunderTalk Gaming':  -0.3521,
+    'Ninjas in Pyjamas':   -0.3548,
+    'EDward Gaming':       -0.3743,
+    'Team Vitality':       -0.4237,
+    'Fnatic':              -0.4427,
+    'GiantX':              -0.4491,
+    'Nongshim RedForce':   -0.6670,
+}
+
+COACHING_ADJ = {
+    'Karmine Corp': (2026, 0.3695),
+}
+
 
 def _bucket_label(lo: int, hi: int | None) -> str:
     return f'{lo:,}+' if hi is None else f'{lo:,}–{hi:,}'
+
+
+def compute_model_preds(df: pd.DataFrame) -> pd.DataFrame:
+    """Train on 2024-2025, apply to all rows. Identical pipeline to upload_game_features.py."""
+    df = df.copy()
+    df['date'] = pd.to_datetime(df['date'], utc=True)
+    df['_date_day'] = df['date'].dt.date
+    df['_team_key'] = df.apply(
+        lambda r: '|'.join(sorted([str(r['blue_team']), str(r['red_team'])])), axis=1
+    )
+    df = df.sort_values(['_date_day', 'league', '_team_key', 'game']).reset_index(drop=True)
+    shifted = df.groupby(['_date_day', 'league', '_team_key'])['blue_win'].shift(1)
+    df['draft_advantage'] = shifted.map(
+        lambda x: 0 if pd.isna(x) else (-1 if x == 1 else 1)
+    ).astype(int)
+
+    train = df[df['year'].isin([2024, 2025])]
+    model = Pipeline([('s', StandardScaler()), ('lr', LogisticRegression(max_iter=1000))])
+    model.fit(train[FEATS].fillna(FILL), train['blue_win'].values)
+
+    scaler = model.named_steps['s']
+    lr     = model.named_steps['lr']
+    X_sc   = scaler.transform(df[FEATS].fillna(FILL))
+    logodds = X_sc @ lr.coef_.ravel() + lr.intercept_[0]
+    logodds_adj = logodds.copy()
+
+    g2_mask = ((df['game'] == 2) & (df['year'] >= 2025)).values
+    logodds_adj[g2_mask] = (ALPHA_G2 * logodds[g2_mask]
+                            + BETA_DA * df['draft_advantage'].values[g2_mask])
+
+    po_mask = df['playoffs'].values == 1
+    if po_mask.any():
+        blue_po = np.array([TEAM_PO_ADJ.get(t, 0.0) for t in df['blue_team']])
+        red_po  = np.array([TEAM_PO_ADJ.get(t, 0.0) for t in df['red_team']])
+        logodds_adj[po_mask] += (blue_po - red_po)[po_mask]
+
+    years = df['year'].values
+    for team, (from_year, bonus) in COACHING_ADJ.items():
+        active = years >= from_year
+        logodds_adj[(df['blue_team'].values == team) & active] += bonus
+        logodds_adj[(df['red_team'].values  == team) & active] -= bonus
+
+    df['model_pred'] = 1 / (1 + np.exp(-logodds_adj))
+    return df
 
 
 def gold_lead_wr(df: pd.DataFrame, diff_col: str) -> list[dict]:
@@ -58,19 +146,15 @@ def prob_x_gold_wr(df: pd.DataFrame, diff_col: str) -> list[dict]:
     """
     Win rate of the gold-leading team, split by that team's pre-game model
     probability (10% buckets) and their gold lead magnitude (500g buckets).
-    Uses q_blue_win (model prediction) which is available for all games.
+    Uses model_pred (blue win probability from logistic regression).
     """
-    cols = [diff_col, 'blue_team_result', 'implied_prob1_vigfree', 'implied_prob2_vigfree', 'blue_is_odds_team1']
+    cols = [diff_col, 'blue_team_result', 'model_pred']
     sub = df[cols].dropna()
     sub = sub[sub[diff_col] != 0].copy()
 
-    sub['blue_prob'] = sub.apply(
-        lambda r: r['implied_prob1_vigfree'] if r['blue_is_odds_team1'] else r['implied_prob2_vigfree'],
-        axis=1,
-    )
-    sub['leading_prob'] = sub.apply(
-        lambda r: r['blue_prob'] if r[diff_col] > 0 else 1 - r['blue_prob'],
-        axis=1,
+    # model_pred is always blue's probability; flip for leading team when red is ahead
+    sub['leading_prob'] = np.where(
+        sub[diff_col] > 0, sub['model_pred'], 1 - sub['model_pred']
     )
     sub['leading_wins'] = (
         ((sub[diff_col] > 0) & (sub['blue_team_result'] == 1)) |
@@ -119,17 +203,28 @@ def prob_x_gold_wr(df: pd.DataFrame, diff_col: str) -> list[dict]:
 
 def compute_set(df: pd.DataFrame, times: dict) -> dict:
     return {
-        'gold_lead':   {t: gold_lead_wr(df, col)     for t, col in times.items()},
-        'prob_x_gold': {t: prob_x_gold_wr(df, col)   for t, col in times.items()},
+        'gold_lead':   {t: gold_lead_wr(df, col)   for t, col in times.items()},
+        'prob_x_gold': {t: prob_x_gold_wr(df, col) for t, col in times.items()},
     }
 
 
 def main():
-    print('Loading games_with_odds…')
-    df = pd.read_csv(PROCESSED / 'games_with_odds.csv', low_memory=False)
-    df2026  = df[df['year'] == 2026].copy()
-    df_major = df2026[df2026['league'].isin(MAJOR_LEAGUES)].copy()
-    print(f'  2026 all: {len(df2026)},  major: {len(df_major)}')
+    print('Loading features_all.csv and computing model predictions…')
+    feats = pd.read_csv(PROCESSED / 'features_all.csv', low_memory=False)
+    feats = compute_model_preds(feats)
+    feats2026 = feats[feats['year'] == 2026][['gameid', 'model_pred']].copy()
+    print(f'  2026 model predictions: {len(feats2026)}')
+
+    print('Loading games_with_odds.csv…')
+    games = pd.read_csv(PROCESSED / 'games_with_odds.csv', low_memory=False)
+    games2026 = games[games['year'] == 2026].copy()
+
+    df = games2026.merge(feats2026, on='gameid', how='left')
+    matched = df['model_pred'].notna().sum()
+    print(f'  2026 games: {len(df)}, matched model predictions: {matched}')
+
+    df_major = df[df['league'].isin(MAJOR_LEAGUES)].copy()
+    print(f'  major: {len(df_major)}')
 
     times = {
         '10': 'blue_team_golddiffat10',
@@ -138,16 +233,16 @@ def main():
     }
 
     print('Computing all-leagues…')
-    data_all   = compute_set(df2026,  times)
+    data_all   = compute_set(df,       times)
     print('Computing major-leagues…')
     data_major = compute_set(df_major, times)
 
     out = {
-        'generated':        datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-        'year':             2026,
-        'gold_step':        GOLD_STEP,
-        'gold_lead':        {'all': data_all['gold_lead'],   'major': data_major['gold_lead']},
-        'prob_x_gold':      {'all': data_all['prob_x_gold'], 'major': data_major['prob_x_gold']},
+        'generated':   datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'year':        2026,
+        'gold_step':   GOLD_STEP,
+        'gold_lead':   {'all': data_all['gold_lead'],   'major': data_major['gold_lead']},
+        'prob_x_gold': {'all': data_all['prob_x_gold'], 'major': data_major['prob_x_gold']},
     }
 
     with open(OUT, 'w') as f:
