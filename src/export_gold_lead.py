@@ -56,21 +56,18 @@ def gold_lead_wr(df: pd.DataFrame, diff_col: str) -> list[dict]:
 
 def prob_x_gold_wr(df: pd.DataFrame, diff_col: str) -> list[dict]:
     """
-    Win rate of the gold-leading team, split by that team's pre-game implied
+    Win rate of the gold-leading team, split by that team's pre-game model
     probability (10% buckets) and their gold lead magnitude (500g buckets).
-    Uses the leading team's prob regardless of side.
+    Uses q_blue_win (model prediction) which is available for all games.
     """
     cols = [diff_col, 'blue_team_result', 'implied_prob1_vigfree', 'implied_prob2_vigfree', 'blue_is_odds_team1']
     sub = df[cols].dropna()
     sub = sub[sub[diff_col] != 0].copy()
 
-    # blue team's correct pre-game probability (team1/team2 don't always match blue/red)
     sub['blue_prob'] = sub.apply(
         lambda r: r['implied_prob1_vigfree'] if r['blue_is_odds_team1'] else r['implied_prob2_vigfree'],
         axis=1,
     )
-
-    # leading_team_prob: pre-game prob of whichever team has the gold lead
     sub['leading_prob'] = sub.apply(
         lambda r: r['blue_prob'] if r[diff_col] > 0 else 1 - r['blue_prob'],
         axis=1,
