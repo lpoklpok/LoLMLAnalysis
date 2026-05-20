@@ -12,10 +12,12 @@ interface ChampionRow {
 }
 
 interface FindingsData {
-  generated:   string
-  year:        number
-  min_games:   number
-  by_position: Record<string, ChampionRow[]>
+  generated:         string
+  year:              number
+  min_games:         number
+  min_games_major:   number
+  by_position:       Record<string, ChampionRow[]>
+  by_position_major: Record<string, ChampionRow[]>
 }
 
 const POSITIONS = ['top', 'jng', 'mid', 'bot', 'sup'] as const
@@ -81,9 +83,10 @@ function ChampionTable({
 }
 
 export default function FindingsPage() {
-  const [data, setData]   = useState<FindingsData | null>(null)
-  const [pos, setPos]     = useState<typeof POSITIONS[number]>('mid')
-  const [error, setError] = useState<string | null>(null)
+  const [data, setData]       = useState<FindingsData | null>(null)
+  const [pos, setPos]         = useState<typeof POSITIONS[number]>('mid')
+  const [majorOnly, setMajor] = useState(false)
+  const [error, setError]     = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/champion_findings.json')
@@ -92,7 +95,9 @@ export default function FindingsPage() {
       .catch(() => setError('Failed to load findings data'))
   }, [])
 
-  const rows = data?.by_position[pos] ?? []
+  const rows = data
+    ? (majorOnly ? data.by_position_major : data.by_position)[pos] ?? []
+    : []
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 p-6 max-w-5xl mx-auto">
@@ -101,7 +106,7 @@ export default function FindingsPage() {
         <h1 className="text-2xl font-bold text-white">General Findings</h1>
         {data && (
           <span className="text-xs text-gray-600 ml-auto">
-            2026 · model trained on 2024–2025 · min {data.min_games} games
+            2026 · model trained on 2024–2025 · min {majorOnly ? data.min_games_major : data.min_games} games
           </span>
         )}
       </div>
@@ -119,6 +124,30 @@ export default function FindingsPage() {
             pre-game prediction. Positive delta means teams that drafted this champion won more than
             expected; negative means they won less.
           </p>
+
+          {/* League filter */}
+          <div className="flex gap-2 mb-4">
+            <button
+              onClick={() => setMajor(false)}
+              className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                !majorOnly
+                  ? 'bg-gray-600 text-white'
+                  : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
+              }`}
+            >
+              All Leagues
+            </button>
+            <button
+              onClick={() => setMajor(true)}
+              className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                majorOnly
+                  ? 'bg-gray-600 text-white'
+                  : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
+              }`}
+            >
+              Major Leagues (LCK / LEC / LCS / LPL)
+            </button>
+          </div>
 
           {/* Position tabs */}
           <div className="flex gap-2 mb-6">

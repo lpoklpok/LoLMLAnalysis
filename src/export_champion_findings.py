@@ -29,7 +29,54 @@ POS_MAP = {
     'sup': ('blue_sup_champion', 'red_sup_champion'),
 }
 
-MIN_GAMES = 10
+MIN_GAMES        = 10
+MIN_GAMES_MAJOR  = 5
+MAJOR_LEAGUES    = {'LCK', 'LEC', 'LCS', 'LPL'}
+
+
+def _build_records(merged: pd.DataFrame, league_filter: set | None) -> pd.DataFrame:
+    if league_filter is not None:
+        merged = merged[merged['league'].isin(league_filter)]
+
+    records = []
+    for pos, (bc, rc) in POS_MAP.items():
+        for _, row in merged.iterrows():
+            pred   = row['model_pred']
+            result = row['blue_team_result']
+            if pd.isna(pred) or pd.isna(result):
+                continue
+            if pd.notna(row.get(bc)):
+                records.append({'champion': row[bc], 'position': pos,
+                                'expected': pred, 'won': int(result)})
+            if pd.notna(row.get(rc)):
+                records.append({'champion': row[rc], 'position': pos,
+                                'expected': 1 - pred, 'won': 1 - int(result)})
+    return pd.DataFrame(records)
+
+
+def _aggregate(df: pd.DataFrame, min_games: int) -> dict:
+    agg = df.groupby(['champion', 'position']).agg(
+        games    = ('won', 'count'),
+        actual   = ('won', 'mean'),
+        expected = ('expected', 'mean'),
+    ).reset_index()
+    agg['outperf'] = agg['actual'] - agg['expected']
+    agg = agg[agg['games'] >= min_games].copy()
+
+    by_pos: dict = {}
+    for pos in POS_MAP:
+        sub  = agg[agg['position'] == pos].sort_values('outperf', ascending=False)
+        by_pos[pos] = [
+            {
+                'champion': r['champion'],
+                'games':    int(r['games']),
+                'actual':   round(float(r['actual']), 4),
+                'expected': round(float(r['expected']), 4),
+                'outperf':  round(float(r['outperf']), 4),
+            }
+            for _, r in sub.iterrows()
+        ]
+    return by_pos
 
 
 def main():
@@ -47,57 +94,30 @@ def main():
     print(f"2026 games: {len(feat26)}")
 
     champ_cols = (
-        ['gameid', 'blue_team_result'] +
+        ['gameid', 'league', 'blue_team_result'] +
         [c for pos in POS_MAP.values() for c in pos]
     )
     gwo26  = gwo[gwo['year'] == 2026][champ_cols].copy()
     merged = feat26[['gameid', 'model_pred']].merge(gwo26, on='gameid', how='inner')
 
-    records = []
-    for pos, (bc, rc) in POS_MAP.items():
-        for _, row in merged.iterrows():
-            pred   = row['model_pred']
-            result = row['blue_team_result']
-            if pd.isna(pred) or pd.isna(result):
-                continue
-            if pd.notna(row.get(bc)):
-                records.append({'champion': row[bc], 'position': pos,
-                                'expected': pred, 'won': int(result)})
-            if pd.notna(row.get(rc)):
-                records.append({'champion': row[rc], 'position': pos,
-                                'expected': 1 - pred, 'won': 1 - int(result)})
+    print("Building all-leagues dataset…")
+    df_all   = _build_records(merged, league_filter=None)
+    print("Building major-leagues dataset…")
+    df_major = _build_records(merged, league_filter=MAJOR_LEAGUES)
 
-    df = pd.DataFrame(records)
+    by_position       = _aggregate(df_all,   MIN_GAMES)
+    by_position_major = _aggregate(df_major, MIN_GAMES_MAJOR)
 
-    agg = df.groupby(['champion', 'position']).agg(
-        games    = ('won', 'count'),
-        actual   = ('won', 'mean'),
-        expected = ('expected', 'mean'),
-    ).reset_index()
-    agg['outperf'] = agg['actual'] - agg['expected']
-    agg = agg[agg['games'] >= MIN_GAMES].copy()
-
-    by_position: dict = {}
     for pos in POS_MAP:
-        sub = agg[agg['position'] == pos].copy()
-        rows = sub.sort_values('outperf', ascending=False)
-        by_position[pos] = [
-            {
-                'champion': r['champion'],
-                'games':    int(r['games']),
-                'actual':   round(float(r['actual']), 4),
-                'expected': round(float(r['expected']), 4),
-                'outperf':  round(float(r['outperf']), 4),
-            }
-            for _, r in rows.iterrows()
-        ]
-        print(f"  {pos}: {len(rows)} champions")
+        print(f"  {pos}: {len(by_position[pos])} all / {len(by_position_major[pos])} major")
 
     out = {
-        'generated':   datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-        'year':        2026,
-        'min_games':   MIN_GAMES,
-        'by_position': by_position,
+        'generated':          datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'year':               2026,
+        'min_games':          MIN_GAMES,
+        'min_games_major':    MIN_GAMES_MAJOR,
+        'by_position':        by_position,
+        'by_position_major':  by_position_major,
     }
 
     with open(OUT, 'w') as f:
