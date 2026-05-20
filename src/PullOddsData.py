@@ -11,7 +11,7 @@ CURRENT_YEAR = 2026
 HISTORICAL_YEARS = list(range(2024, CURRENT_YEAR))
 ALL_YEARS = HISTORICAL_YEARS + [CURRENT_YEAR]
 
-LEAGUES = ["LCK", "LEC", "LPL", "LCS"]
+LEAGUES = ["LCK", "LEC", "LPL", "LCS", "EWC"]
 MAX_PAGES = 160
 DATE_TOLERANCE = 3
 WAIT_PAGE_LOAD = 10
@@ -23,7 +23,11 @@ LEAGUE_SLUGS: Dict[str, str] = {
     "LCK": "league-of-legends-lck",
     "LPL": "league-of-legends-lpl",
     "LCS": "league-of-legends-lcs",
+    "EWC": "league-of-legends-esports-world-cup",
 }
+
+# Leagues that use a single URL for all years (no year suffix)
+SINGLE_URL_LEAGUES = {"EWC"}
 
 TEAM_NAME_MAP: Dict[str, str] = {
     # LCK
@@ -77,6 +81,8 @@ def canon(name: str) -> str:
 
 def _league_year_url(league: str, year: int) -> str:
     slug = LEAGUE_SLUGS[league.upper()]
+    if league.upper() in SINGLE_URL_LEAGUES:
+        return f"https://www.oddsportal.com/esports/league-of-legends/{slug}/results/"
     if year == CURRENT_YEAR:
         return f"https://www.oddsportal.com/esports/league-of-legends/{slug}/results/"
     return f"https://www.oddsportal.com/esports/league-of-legends/{slug}-{year}/results/"
@@ -470,6 +476,17 @@ def run(headless: bool = True) -> None:
 
     all_dfs = []
     for league in LEAGUES:
+        # Single-URL leagues (e.g. EWC) are scraped once, not per year
+        if league.upper() in SINGLE_URL_LEAGUES:
+            out_path = ODDS_DIR / f"odds_{league}.csv"
+            df = scrape_league_year(league, CURRENT_YEAR, headless=headless)
+            if not df.empty:
+                df.to_csv(out_path, index=False)
+                print(f"  [{league}] saved {len(df)} rows → {out_path.name}")
+                all_dfs.append(df)
+            time.sleep(2)
+            continue
+
         for year in ALL_YEARS:
             out_path = ODDS_DIR / f"odds_{league}_{year}.csv"
 
