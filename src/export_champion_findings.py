@@ -134,7 +134,7 @@ def _build_individual_records(merged: pd.DataFrame) -> pd.DataFrame:
                 records.append({'champion': row[bc], 'position': pos, 'expected': pred, 'won': int(result)})
             if pd.notna(row.get(rc)):
                 records.append({'champion': row[rc], 'position': pos, 'expected': 1 - pred, 'won': 1 - int(result)})
-    return pd.DataFrame(records)
+    return pd.DataFrame(records, columns=['champion', 'position', 'expected', 'won'])
 
 
 def _aggregate_individual(df: pd.DataFrame, min_games: int) -> dict:
@@ -170,7 +170,7 @@ def _build_matchup_records(merged: pd.DataFrame) -> pd.DataFrame:
             else:
                 champ, opp, exp, won = rc_val, bc_val, 1 - pred, 1 - int(result)
             records.append({'champ': champ, 'opp': opp, 'position': pos, 'expected': exp, 'won': won})
-    return pd.DataFrame(records)
+    return pd.DataFrame(records, columns=['champ', 'opp', 'position', 'expected', 'won'])
 
 
 def _aggregate_matchups(df: pd.DataFrame, min_games: int) -> dict:
@@ -205,7 +205,7 @@ def _build_synergy_records(merged: pd.DataFrame) -> pd.DataFrame:
                 for j in range(i + 1, len(champs)):
                     a, b = (champs[i], champs[j]) if champs[i] <= champs[j] else (champs[j], champs[i])
                     records.append({'champA': a, 'champB': b, 'expected': exp, 'won': won})
-    return pd.DataFrame(records)
+    return pd.DataFrame(records, columns=['champA', 'champB', 'expected', 'won'])
 
 
 def _aggregate_synergies(df: pd.DataFrame, min_games: int) -> list:
