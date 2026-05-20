@@ -44,13 +44,18 @@ def download_via_requests(file_id, path):
     confirm = next((v for k, v in r.cookies.items() if k.startswith("download_warning")), None)
     if confirm:
         r = session.get(url + f"&confirm={confirm}", stream=True)
-    tmp = path + ".tmp"
-    with open(tmp, "wb") as f:
-        for chunk in r.iter_content(32768):
-            if chunk:
-                f.write(chunk)
-    _validate_csv(tmp)
-    os.replace(tmp, path)
+    tmp = path + ".requests.tmp"
+    try:
+        with open(tmp, "wb") as f:
+            for chunk in r.iter_content(32768):
+                if chunk:
+                    f.write(chunk)
+        _validate_csv(tmp)
+        os.replace(tmp, path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
 
 
 tmp_path = output_path + ".gdown.tmp"
