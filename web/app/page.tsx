@@ -112,6 +112,9 @@ export default function Dashboard() {
         <Link href="/players" className="ml-auto text-sm text-blue-400 hover:text-blue-300 transition-colors">
           Player Lookup →
         </Link>
+        <Link href="/rankings" className="text-sm text-blue-400 hover:text-blue-300 transition-colors">
+          ELO Rankings →
+        </Link>
         <Link href="/model" className="text-sm text-purple-400 hover:text-purple-300 transition-colors">
           Model →
         </Link>

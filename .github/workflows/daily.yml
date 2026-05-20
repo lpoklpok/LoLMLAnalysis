@@ -64,6 +64,12 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
 
+      - name: Upload player ELO rankings to Supabase
+        run: python src/upload_player_elos.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
       - name: Generate upcoming game predictions
         run: python src/predict_upcoming.py
         continue-on-error: true
