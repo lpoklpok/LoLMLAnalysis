@@ -51,6 +51,9 @@ interface Prediction {
   poly_volume: number | null
   poly_event_slug: string | null
   poly_team1: string | null
+  op_prob: number | null
+  op_odd_blue: number | null
+  op_odd_red: number | null
 }
 
 interface LiveOdds {
@@ -247,6 +250,40 @@ function MatchCard({ game, liveOdds }: { game: Prediction; liveOdds: Record<stri
             <span className="text-gray-700">·</span>
             {(() => {
               const delta = Math.round((sp - polyProb) * 100)
+              const color = Math.abs(delta) >= 5
+                ? (delta > 0 ? 'text-blue-400' : 'text-red-400')
+                : 'text-gray-500'
+              return (
+                <span className={`font-mono font-semibold ${color}`}>
+                  {delta > 0 ? '+' : ''}{delta}pp
+                </span>
+              )
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* OddsPortal bookmaker odds */}
+      {game.op_prob != null && (
+        <div className="border-t border-gray-800 pt-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Bookmaker</span>
+            <span className="text-xs text-gray-600">OddsPortal</span>
+          </div>
+          <div className="flex items-center gap-3 text-xs">
+            <div className="flex items-center gap-1.5">
+              <span className="text-gray-500">Market</span>
+              <span className="font-mono font-semibold text-white">{Math.round(game.op_prob * 100)}%</span>
+            </div>
+            <span className="text-gray-700">·</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-blue-500 font-mono">{game.op_odd_blue?.toFixed(2)}</span>
+              <span className="text-gray-600">/</span>
+              <span className="text-red-500 font-mono">{game.op_odd_red?.toFixed(2)}</span>
+            </div>
+            <span className="text-gray-700">·</span>
+            {(() => {
+              const delta = Math.round((sp - game.op_prob) * 100)
               const color = Math.abs(delta) >= 5
                 ? (delta > 0 ? 'text-blue-400' : 'text-red-400')
                 : 'text-gray-500'

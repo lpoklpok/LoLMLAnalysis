@@ -181,6 +181,36 @@ def _starting_elo(league: str) -> float:
 _POLY_URL = 'https://gamma-api.polymarket.com/events'
 
 
+def fetch_oddsportal_odds() -> dict:
+    """
+    Load upcoming odds scraped from OddsPortal (data/odds/upcoming_odds.csv).
+    Returns dict mapping frozenset({team1, team2}) ->
+        {'prob_team1': float, 'team1': str, 'team2': str, 'odd1': float, 'odd2': float}
+    """
+    path = Path(os.path.dirname(__file__)) / '..' / 'data' / 'odds' / 'upcoming_odds.csv'
+    if not path.exists():
+        print("  No upcoming_odds.csv found — run PullOddsData.py --upcoming first")
+        return {}
+    try:
+        df = pd.read_csv(path)
+        result = {}
+        for _, row in df.iterrows():
+            t1 = str(row['team1']).strip()
+            t2 = str(row['team2']).strip()
+            result[frozenset([t1, t2])] = {
+                'prob_team1': float(row['implied_prob1_vigfree']),
+                'team1':      t1,
+                'team2':      t2,
+                'odd1':       float(row['odd1_decimal']),
+                'odd2':       float(row['odd2_decimal']),
+            }
+        print(f"  OddsPortal: loaded {len(result)} upcoming match odds")
+        return result
+    except Exception as e:
+        print(f"  OddsPortal load error: {e}")
+        return {}
+
+
 def fetch_polymarket_odds() -> dict:
     """
     Fetch all active LoL match markets from Polymarket.
@@ -666,6 +696,9 @@ def run():
     print("Fetching Polymarket odds...")
     poly_odds = fetch_polymarket_odds()
 
+    print("Loading OddsPortal upcoming odds...")
+    op_odds = fetch_oddsportal_odds()
+
     results = []
     for _, row in upcoming.iterrows():
         blue    = _norm_team(row['Team1'])
@@ -695,6 +728,20 @@ def run():
                 pred['poly_volume']      = None
                 pred['poly_event_slug']  = None
                 pred['poly_team1']       = None
+
+            # Attach OddsPortal bookmaker odds
+            op = op_odds.get(frozenset([blue, red]))
+            if op:
+                op_blue_prob = op['prob_team1'] if op['team1'] == blue else 1 - op['prob_team1']
+                op_blue_odd  = op['odd1'] if op['team1'] == blue else op['odd2']
+                op_red_odd   = op['odd2'] if op['team1'] == blue else op['odd1']
+                pred['op_prob']     = round(op_blue_prob, 4)
+                pred['op_odd_blue'] = round(op_blue_odd, 3)
+                pred['op_odd_red']  = round(op_red_odd, 3)
+            else:
+                pred['op_prob']     = None
+                pred['op_odd_blue'] = None
+                pred['op_odd_red']  = None
 
             results.append(pred)
             poly_str = f"  poly={pred['poly_prob']:.3f}" if pred['poly_prob'] else ''

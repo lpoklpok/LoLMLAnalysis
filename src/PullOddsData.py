@@ -299,6 +299,98 @@ def _click_next(page, old: str) -> bool:
     return False
 
 
+def _upcoming_url(league: str) -> str:
+    slug = LEAGUE_SLUGS[league.upper()]
+    return f"https://www.oddsportal.com/esports/league-of-legends/{slug}/"
+
+
+def _parse_upcoming_page(body: str, league: str, url: str) -> List[Dict]:
+    """Parse upcoming (not-started) matches from OddsPortal main league page."""
+    lines = _clean_lines(body)
+    rows, current_date, i = [], None, 0
+    time_re = re.compile(r"^\d{1,2}:\d{2}$")
+
+    while i < len(lines):
+        line = lines[i]
+        if _is_date_header(line):
+            current_date = line; i += 1; continue
+
+        # Upcoming match pattern: HH:MM, team1, team2, odds1, odds2
+        if time_re.match(line) and i + 4 < len(lines):
+            match_time = line
+            team1, team2, o1s, o2s = lines[i+1], lines[i+2], lines[i+3], lines[i+4]
+            if _is_odd(o1s) and _is_odd(o2s) and _is_lol_match(team1, team2):
+                date = _parse_date_header(current_date or "")
+                year = _parse_year(current_date)
+                o1, o2 = _to_decimal(o1s), _to_decimal(o2s)
+                vf1, vf2 = _vig_free(o1, o2)
+                rows.append({
+                    "league":                league,
+                    "source_url":            url,
+                    "date_header":           current_date,
+                    "match_date":            date,
+                    "match_time":            match_time,
+                    "year":                  year,
+                    "team1_raw":             team1,
+                    "team2_raw":             team2,
+                    "team1":                 canon(team1),
+                    "team2":                 canon(team2),
+                    "odd1_decimal":          o1,
+                    "odd2_decimal":          o2,
+                    "implied_prob1_vigfree": round(vf1, 6),
+                    "implied_prob2_vigfree": round(vf2, 6),
+                })
+                i += 5; continue
+        i += 1
+    return rows
+
+
+def scrape_upcoming_odds(leagues: List[str] = None, headless: bool = True) -> pd.DataFrame:
+    """Scrape upcoming match odds from OddsPortal for all specified leagues."""
+    from playwright.sync_api import sync_playwright
+
+    if leagues is None:
+        leagues = LEAGUES
+
+    all_rows: List[Dict] = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=headless)
+        page = browser.new_context().new_page()
+
+        for league in leagues:
+            url = _upcoming_url(league)
+            print(f"  [{league}] fetching upcoming odds from {url}...")
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+                page.wait_for_timeout(WAIT_PAGE_LOAD * 1000)
+                _dismiss_cookie(page)
+                _settle_page(page)
+                body = _get_body(page)
+                rows = _parse_upcoming_page(body, league, url)
+                print(f"  [{league}] found {len(rows)} upcoming matches")
+                all_rows.extend(rows)
+                unrecognised = [r["team1_raw"] for r in rows if r["team1"] == r["team1_raw"] and r["team1_raw"].strip().lower() not in TEAM_NAME_MAP]
+                unrecognised += [r["team2_raw"] for r in rows if r["team2"] == r["team2_raw"] and r["team2_raw"].strip().lower() not in TEAM_NAME_MAP]
+                if unrecognised:
+                    print(f"  [{league}] *** UNRECOGNISED: {sorted(set(unrecognised))} ***")
+            except Exception as e:
+                print(f"  [{league}] error: {e}")
+            time.sleep(2)
+
+        browser.close()
+
+    if not all_rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(all_rows)
+    out_path = ODDS_DIR / "upcoming_odds.csv"
+    ODDS_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_path, index=False)
+    print(f"Saved {len(df)} upcoming odds rows → {out_path}")
+    return df
+
+
 def scrape_league_year(league: str, year: int, headless: bool = True) -> pd.DataFrame:
     from playwright.sync_api import sync_playwright
 
@@ -403,7 +495,13 @@ def run(headless: bool = True) -> None:
 
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) > 1 and sys.argv[1] == "--test":
+    if len(sys.argv) > 1 and sys.argv[1] == "--upcoming":
+        headless = "--headless" in sys.argv
+        df = scrape_upcoming_odds(headless=headless)
+        if not df.empty:
+            print(df[["league", "match_date", "match_time", "team1", "team2",
+                       "odd1_decimal", "odd2_decimal"]].to_string())
+    elif len(sys.argv) > 1 and sys.argv[1] == "--test":
 
         MAX_PAGES = 3
         ODDS_DIR.mkdir(parents=True, exist_ok=True)
