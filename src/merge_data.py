@@ -161,7 +161,7 @@ def _prepare_odds(odds: pd.DataFrame) -> pd.DataFrame:
     o['norm_team1'] = o['team1'].map(_norm)
     o['norm_team2'] = o['team2'].map(_norm)
     o['pair_key']   = o.apply(lambda r: _pair_key(r['team1'], r['team2']), axis=1)
-    o['date_day']   = pd.to_datetime(o['match_date'])
+    o['date_day']   = pd.to_datetime(o['match_date'], format='mixed').dt.normalize()
     return o
 
 
