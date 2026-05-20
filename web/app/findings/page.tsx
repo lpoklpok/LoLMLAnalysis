@@ -1,7 +1,35 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import Link from 'next/link'
+
+// ── Gold lead types ──────────────────────────────────────────────────────────
+
+interface GoldBucket {
+  bucket:   string
+  gold_lo:  number
+  gold_hi:  number | null
+  n:        number
+  win_rate: number
+}
+
+interface ProbGoldRow {
+  prob_bucket: string
+  prob_lo:     number
+  prob_hi:     number
+  n:           number
+  overall_wr:  number
+  gold_buckets: GoldBucket[]
+}
+
+interface GoldLeadData {
+  generated:   string
+  year:        number
+  gold_lead:   Record<string, GoldBucket[]>
+  prob_x_gold: Record<string, ProbGoldRow[]>
+}
+
+// ── Champion types ───────────────────────────────────────────────────────────
 
 interface ChampionRow {
   champion: string
@@ -48,6 +76,119 @@ const TOP_N = 10
 
 function pct(v: number) { return `${(v * 100).toFixed(1)}%` }
 function sign(v: number) { return v >= 0 ? `+${(v * 100).toFixed(1)}%` : `${(v * 100).toFixed(1)}%` }
+
+function wrColor(wr: number): string {
+  if (wr >= 0.90) return 'text-green-300 font-bold'
+  if (wr >= 0.80) return 'text-green-400 font-semibold'
+  if (wr >= 0.70) return 'text-green-500'
+  if (wr >= 0.60) return 'text-emerald-600'
+  if (wr >= 0.55) return 'text-gray-300'
+  if (wr >= 0.45) return 'text-gray-400'
+  return 'text-gray-500'
+}
+
+function wrBg(wr: number): string {
+  if (wr >= 0.85) return 'bg-green-900/60'
+  if (wr >= 0.75) return 'bg-green-900/40'
+  if (wr >= 0.65) return 'bg-green-900/20'
+  if (wr >= 0.55) return 'bg-gray-800/60'
+  return 'bg-gray-800/30'
+}
+
+function TimeTabs({ time, setTime }: { time: string; setTime: (t: string) => void }) {
+  return (
+    <div className="flex gap-2 mb-5">
+      {['10', '15', '20'].map(t => (
+        <button key={t} onClick={() => setTime(t)}
+          className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            time === t
+              ? 'bg-blue-600 text-white'
+              : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
+          }`}>
+          @{t} min
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function GoldLeadTable({ buckets }: { buckets: GoldBucket[] }) {
+  const max = Math.max(...buckets.map(b => b.win_rate))
+  return (
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="text-xs text-gray-500 border-b border-gray-800">
+          <th className="text-left pb-2 font-normal">Gold lead (leading team)</th>
+          <th className="text-right pb-2 font-normal">Win rate</th>
+          <th className="pb-2 px-4 font-normal w-48"></th>
+          <th className="text-right pb-2 font-normal">n</th>
+        </tr>
+      </thead>
+      <tbody>
+        {buckets.map((b, i) => (
+          <tr key={b.bucket} className={i % 2 === 0 ? 'bg-gray-900/40' : ''}>
+            <td className="py-2 pr-4 text-gray-300 font-mono text-xs">{b.bucket}</td>
+            <td className={`py-2 text-right tabular-nums font-mono ${wrColor(b.win_rate)}`}>
+              {pct(b.win_rate)}
+            </td>
+            <td className="py-2 px-4">
+              <div className="h-4 bg-gray-800 rounded overflow-hidden">
+                <div
+                  className="h-full bg-blue-600 rounded transition-all duration-300"
+                  style={{ width: `${(b.win_rate / max) * 100}%` }}
+                />
+              </div>
+            </td>
+            <td className="py-2 text-right text-gray-600 tabular-nums text-xs">{b.n.toLocaleString()}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function ProbXGoldTable({ rows, allBuckets }: { rows: ProbGoldRow[]; allBuckets: string[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="text-xs w-full">
+        <thead>
+          <tr className="text-gray-500 border-b border-gray-800">
+            <th className="text-left pb-2 font-normal pr-4">Pre-game prob (blue)</th>
+            <th className="text-right pb-2 font-normal pr-4">Overall</th>
+            {allBuckets.map(b => (
+              <th key={b} className="text-right pb-2 font-normal px-2 whitespace-nowrap">{b}</th>
+            ))}
+            <th className="text-right pb-2 font-normal pl-4">n</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => {
+            const byBucket: Record<string, GoldBucket> = {}
+            for (const gb of row.gold_buckets) byBucket[gb.bucket] = gb
+            return (
+              <tr key={row.prob_bucket} className={i % 2 === 0 ? 'bg-gray-900/40' : ''}>
+                <td className="py-2 pr-4 text-gray-300 font-mono whitespace-nowrap">{row.prob_bucket}</td>
+                <td className={`py-2 pr-4 text-right tabular-nums font-mono ${wrColor(row.overall_wr)}`}>
+                  {pct(row.overall_wr)}
+                </td>
+                {allBuckets.map(b => {
+                  const gb = byBucket[b]
+                  return (
+                    <td key={b} className={`py-2 px-2 text-right tabular-nums font-mono ${gb ? wrColor(gb.win_rate) : 'text-gray-700'} ${gb ? wrBg(gb.win_rate) : ''}`}>
+                      {gb ? pct(gb.win_rate) : '—'}
+                      {gb && <span className="text-gray-600 ml-0.5 text-[10px]">/{gb.n}</span>}
+                    </td>
+                  )
+                })}
+                <td className="py-2 pl-4 text-right text-gray-600 tabular-nums">{row.n}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
 
 function outperfColor(v: number): string {
   if (v >=  0.15) return 'text-green-300 font-semibold'
@@ -252,6 +393,8 @@ function SynergyHalf({ rows, direction }: { rows: SynergyRow[]; direction: 'over
 
 export default function FindingsPage() {
   const [data, setData]       = useState<FindingsData | null>(null)
+  const [glData, setGlData]   = useState<GoldLeadData | null>(null)
+  const [glTime, setGlTime]   = useState('10')
   const [pos, setPos]         = useState<typeof POSITIONS[number]>('mid')
   const [majorOnly, setMajor] = useState(false)
   const [minGames, setMinGames] = useState(false)
@@ -262,7 +405,24 @@ export default function FindingsPage() {
       .then(r => r.json())
       .then(setData)
       .catch(() => setError('Failed to load findings data'))
+    fetch('/gold_lead.json')
+      .then(r => r.json())
+      .then(setGlData)
+      .catch(() => {})
   }, [])
+
+  const allGoldBuckets = useMemo(() => {
+    if (!glData) return []
+    const rows = glData.prob_x_gold[glTime] ?? []
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const row of rows) {
+      for (const gb of row.gold_buckets) {
+        if (!seen.has(gb.bucket)) { seen.add(gb.bucket); out.push(gb.bucket) }
+      }
+    }
+    return out
+  }, [glData, glTime])
 
   const gFilter = <T extends { games: number }>(rows: T[]) =>
     minGames ? rows.filter(r => r.games >= 10) : rows
@@ -346,6 +506,39 @@ export default function FindingsPage() {
               </div>
             </div>
           </section>
+
+          {/* ── Section 4: Gold lead win rate ── */}
+          {glData && (
+            <section>
+              <h2 className="text-lg font-semibold text-gray-100 mb-1">Gold Lead Win Rate (2026)</h2>
+              <p className="text-gray-500 text-sm mb-4">
+                Win probability of the team with the gold lead, bucketed by lead magnitude. Regardless of side.
+              </p>
+              <TimeTabs time={glTime} setTime={setGlTime} />
+              <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                <GoldLeadTable buckets={glData.gold_lead[glTime] ?? []} />
+              </div>
+            </section>
+          )}
+
+          {/* ── Section 5: Pre-game prob × gold lead ── */}
+          {glData && (
+            <section>
+              <h2 className="text-lg font-semibold text-gray-100 mb-1">Pre-Game Probability × Gold Lead</h2>
+              <p className="text-gray-500 text-sm mb-4">
+                Win rate of the gold-leading team, split by the blue team's pre-game implied probability bucket.
+                Shows how gold leads interact with pre-game strength — useful for live betting.
+                Cell format: win rate / n games.
+              </p>
+              <TimeTabs time={glTime} setTime={setGlTime} />
+              <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                <ProbXGoldTable
+                  rows={glData.prob_x_gold[glTime] ?? []}
+                  allBuckets={allGoldBuckets}
+                />
+              </div>
+            </section>
+          )}
 
           <p className="text-xs text-gray-600">
             Updated {new Date(data.generated).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
