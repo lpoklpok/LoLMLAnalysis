@@ -739,6 +739,10 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
     features_all.to_csv(PROCESSED_DIR / 'features_all.csv', index=False)
     features_major.to_csv(PROCESSED_DIR / 'features.csv', index=False)
 
+    # Always backfill odds from games_with_odds.csv so retroactively-added
+    # market odds reach existing rows (only q_blue_win is written inline above).
+    _patch_odds_columns()
+
     # --- Save checkpoint for next incremental run ---
     if last_processed_date is not None:
         _save_checkpoint(
