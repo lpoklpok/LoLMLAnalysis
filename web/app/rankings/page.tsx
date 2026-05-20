@@ -15,16 +15,16 @@ interface PlayerRow {
   elo: number
   team: string
   league: string
-  position: string
+  pos: string
   last_year: number | null
   last_split: string | null
 }
 
 interface RecentGame {
-  date: string
-  league: string
-  year: number
-  playoffs: number
+  game_date: string
+  game_league: string
+  game_year: number
+  game_playoffs: number
   blue_team: string
   red_team: string
   blue_win: number
@@ -156,7 +156,7 @@ export default function RankingsPage() {
                           {p.league}
                         </span>
                       </td>
-                      <td className="py-3 px-3 text-gray-400 capitalize">{POS_LABEL[p.position] ?? p.position}</td>
+                      <td className="py-3 px-3 text-gray-400 capitalize">{POS_LABEL[p.pos] ?? p.pos}</td>
                       <td className="py-3 px-4 text-right">
                         <EloBar elo={p.elo} />
                       </td>
@@ -258,9 +258,9 @@ function RecentGames({
             return (
               <tr key={i} className="border-t border-gray-800/50">
                 <td className="py-1.5 pr-4 text-gray-400">
-                  {new Date(g.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                  {new Date(g.game_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                 </td>
-                <td className="py-1.5 pr-4 text-gray-400">{g.league}{g.playoffs ? ' PO' : ''}</td>
+                <td className="py-1.5 pr-4 text-gray-400">{g.game_league}{g.game_playoffs ? ' PO' : ''}</td>
                 <td className="py-1.5 pr-4 text-gray-200">{opponent}</td>
                 <td className={`py-1.5 pr-4 font-medium ${playerOnBlue ? 'text-blue-400' : 'text-red-400'}`}>
                   {playerOnBlue ? 'Blue' : 'Red'}
