@@ -24,13 +24,23 @@ interface ProbGoldRow {
 
 interface ObjectiveStat { n: number; wins: number; win_rate: number | null }
 interface ObjectivesSet { dragons_4plus: ObjectiveStat; first_baron: ObjectiveStat }
+interface ProbObjRow {
+  prob_bucket: string
+  prob_lo:     number
+  prob_hi:     number
+  n:           number
+  wins:        number
+  win_rate:    number
+}
+interface ProbXObjectiveSet { dragons_4plus: ProbObjRow[]; first_baron: ProbObjRow[] }
 
 interface GoldLeadData {
-  generated:   string
-  year:        number
-  gold_lead:   { all: Record<string, GoldBucket[]>;   major: Record<string, GoldBucket[]> }
-  prob_x_gold: { all: Record<string, ProbGoldRow[]>;  major: Record<string, ProbGoldRow[]> }
-  objectives:  { all: ObjectivesSet;                  major: ObjectivesSet }
+  generated:        string
+  year:             number
+  gold_lead:        { all: Record<string, GoldBucket[]>;   major: Record<string, GoldBucket[]> }
+  prob_x_gold:      { all: Record<string, ProbGoldRow[]>;  major: Record<string, ProbGoldRow[]> }
+  objectives:       { all: ObjectivesSet;                  major: ObjectivesSet }
+  prob_x_objective: { all: ProbXObjectiveSet;              major: ProbXObjectiveSet }
 }
 
 // ── Champion types ───────────────────────────────────────────────────────────
@@ -188,6 +198,33 @@ function ProbXGoldTable({ rows, allBuckets }: { rows: ProbGoldRow[]; allBuckets:
               </tr>
             )
           })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function ProbXObjectiveTable({ rows }: { rows: ProbObjRow[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="text-xs w-full">
+        <thead>
+          <tr className="text-gray-500 border-b border-gray-800">
+            <th className="text-left pb-2 font-normal pr-4">Model prob (team that secured objective)</th>
+            <th className="text-right pb-2 font-normal pr-4">Win rate</th>
+            <th className="text-right pb-2 font-normal pl-4">n</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={row.prob_bucket} className={i % 2 === 0 ? 'bg-gray-900/40' : ''}>
+              <td className="py-2 pr-4 text-gray-300 font-mono whitespace-nowrap">{row.prob_bucket}</td>
+              <td className={`py-2 pr-4 text-right tabular-nums font-mono ${wrColor(row.win_rate)}`}>
+                {pct(row.win_rate)}
+              </td>
+              <td className="py-2 pl-4 text-right text-gray-600 tabular-nums">{row.n}</td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
@@ -569,6 +606,30 @@ export default function FindingsPage() {
                 <div className="flex flex-col md:flex-row gap-4">
                   {card('4+ Dragons', 'P(win | team got 4+ dragons)',  obj.dragons_4plus)}
                   {card('First Baron', 'P(win | team got first baron)', obj.first_baron)}
+                </div>
+              </section>
+            )
+          })()}
+
+          {/* ── Section 7: Pre-game prob × objective ── */}
+          {glData && (() => {
+            const pxo = majorOnly ? glData.prob_x_objective.major : glData.prob_x_objective.all
+            return (
+              <section>
+                <h2 className="text-lg font-semibold text-gray-100 mb-1">Pre-Game Probability × Objective</h2>
+                <p className="text-gray-500 text-sm mb-4">
+                  Win rate of the team that secured the objective, bucketed by their pre-game model probability.
+                  Side-agnostic — useful for spotting when objectives matter most relative to pre-game strength.
+                </p>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                    <h3 className="text-sm font-semibold text-gray-200 mb-3">4+ Dragons</h3>
+                    <ProbXObjectiveTable rows={pxo.dragons_4plus} />
+                  </div>
+                  <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                    <h3 className="text-sm font-semibold text-gray-200 mb-3">First Baron</h3>
+                    <ProbXObjectiveTable rows={pxo.first_baron} />
+                  </div>
                 </div>
               </section>
             )

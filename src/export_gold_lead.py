@@ -232,11 +232,61 @@ def objective_wrs(df: pd.DataFrame) -> dict:
     return out
 
 
+def prob_x_objective(df: pd.DataFrame) -> dict:
+    """
+    Win rate of a team that secured the objective, bucketed by that team's
+    pre-game model probability (10% buckets). Pools blue + red team-game rows.
+    """
+    base_cols = ['blue_team_result', 'model_pred',
+                 'blue_team_dragons', 'red_team_dragons',
+                 'blue_team_firstbaron', 'red_team_firstbaron']
+    sub = df[base_cols].copy()
+
+    def _pool(cond_blue: pd.Series, cond_red: pd.Series) -> pd.DataFrame:
+        # blue-perspective rows where blue secured the objective
+        b = sub[cond_blue & sub['model_pred'].notna() & sub['blue_team_result'].notna()].copy()
+        b['team_prob'] = b['model_pred']
+        b['team_won']  = b['blue_team_result']
+        # red-perspective rows where red secured the objective
+        r = sub[cond_red & sub['model_pred'].notna() & sub['blue_team_result'].notna()].copy()
+        r['team_prob'] = 1 - r['model_pred']
+        r['team_won']  = 1 - r['blue_team_result']
+        return pd.concat([b[['team_prob', 'team_won']], r[['team_prob', 'team_won']]], ignore_index=True)
+
+    def _bucket(pooled: pd.DataFrame) -> list[dict]:
+        rows = []
+        prob_edges = [i / 10 for i in range(11)]
+        for j in range(len(prob_edges) - 1):
+            p_lo, p_hi = prob_edges[j], prob_edges[j + 1]
+            chunk = pooled[(pooled['team_prob'] >= p_lo) & (pooled['team_prob'] < p_hi)]
+            n = len(chunk)
+            if n < 3:
+                continue
+            rows.append({
+                'prob_bucket': f'{int(p_lo * 100)}–{int(p_hi * 100)}%',
+                'prob_lo':     p_lo,
+                'prob_hi':     p_hi,
+                'n':           int(n),
+                'wins':        int(chunk['team_won'].sum()),
+                'win_rate':    round(float(chunk['team_won'].mean()), 4),
+            })
+        return rows
+
+    drag_pool = _pool(sub['blue_team_dragons'] >= 4, sub['red_team_dragons'] >= 4)
+    bar_pool  = _pool(sub['blue_team_firstbaron'] == 1, sub['red_team_firstbaron'] == 1)
+
+    return {
+        'dragons_4plus': _bucket(drag_pool),
+        'first_baron':   _bucket(bar_pool),
+    }
+
+
 def compute_set(df: pd.DataFrame, times: dict) -> dict:
     return {
-        'gold_lead':   {t: gold_lead_wr(df, col)   for t, col in times.items()},
-        'prob_x_gold': {t: prob_x_gold_wr(df, col) for t, col in times.items()},
-        'objectives':  objective_wrs(df),
+        'gold_lead':        {t: gold_lead_wr(df, col)   for t, col in times.items()},
+        'prob_x_gold':      {t: prob_x_gold_wr(df, col) for t, col in times.items()},
+        'objectives':       objective_wrs(df),
+        'prob_x_objective': prob_x_objective(df),
     }
 
 
@@ -270,12 +320,13 @@ def main():
     data_major = compute_set(df_major, times)
 
     out = {
-        'generated':   datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-        'year':        2026,
-        'gold_step':   GOLD_STEP,
-        'gold_lead':   {'all': data_all['gold_lead'],   'major': data_major['gold_lead']},
-        'prob_x_gold': {'all': data_all['prob_x_gold'], 'major': data_major['prob_x_gold']},
-        'objectives':  {'all': data_all['objectives'],  'major': data_major['objectives']},
+        'generated':        datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'year':             2026,
+        'gold_step':        GOLD_STEP,
+        'gold_lead':        {'all': data_all['gold_lead'],        'major': data_major['gold_lead']},
+        'prob_x_gold':      {'all': data_all['prob_x_gold'],      'major': data_major['prob_x_gold']},
+        'objectives':       {'all': data_all['objectives'],       'major': data_major['objectives']},
+        'prob_x_objective': {'all': data_all['prob_x_objective'], 'major': data_major['prob_x_objective']},
     }
 
     with open(OUT, 'w') as f:
