@@ -61,7 +61,7 @@ function outperfColor(v: number): string {
 
 function LeagueToggle({ majorOnly, setMajor }: { majorOnly: boolean; setMajor: (v: boolean) => void }) {
   return (
-    <div className="flex gap-2 mb-4">
+    <div className="flex gap-2">
       {[false, true].map(v => (
         <button key={String(v)} onClick={() => setMajor(v)}
           className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
@@ -254,6 +254,7 @@ export default function FindingsPage() {
   const [data, setData]       = useState<FindingsData | null>(null)
   const [pos, setPos]         = useState<typeof POSITIONS[number]>('mid')
   const [majorOnly, setMajor] = useState(false)
+  const [minGames, setMinGames] = useState(false)
   const [error, setError]     = useState<string | null>(null)
 
   useEffect(() => {
@@ -263,9 +264,12 @@ export default function FindingsPage() {
       .catch(() => setError('Failed to load findings data'))
   }, [])
 
-  const champRows   = data ? (majorOnly ? data.by_position_major : data.by_position)[pos]  ?? [] : []
-  const matchupRows = data ? (majorOnly ? data.matchups_major    : data.matchups)[pos]      ?? [] : []
-  const synergyRows = data ? (majorOnly ? data.synergies_major   : data.synergies)          ?? [] : []
+  const gFilter = <T extends { games: number }>(rows: T[]) =>
+    minGames ? rows.filter(r => r.games >= 10) : rows
+
+  const champRows   = gFilter(data ? (majorOnly ? data.by_position_major : data.by_position)[pos]  ?? [] : [])
+  const matchupRows = gFilter(data ? (majorOnly ? data.matchups_major    : data.matchups)[pos]      ?? [] : [])
+  const synergyRows = gFilter(data ? (majorOnly ? data.synergies_major   : data.synergies)          ?? [] : [])
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 p-6 max-w-5xl mx-auto">
@@ -285,7 +289,19 @@ export default function FindingsPage() {
       {data && (
         <div className="space-y-10">
           {/* Shared filters */}
-          <LeagueToggle majorOnly={majorOnly} setMajor={setMajor} />
+          <div className="flex flex-wrap items-center gap-3">
+            <LeagueToggle majorOnly={majorOnly} setMajor={setMajor} />
+            <button
+              onClick={() => setMinGames(v => !v)}
+              className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                minGames
+                  ? 'bg-gray-600 text-white'
+                  : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
+              }`}
+            >
+              Min 10 games
+            </button>
+          </div>
 
           {/* ── Section 1: Individual champion performance ── */}
           <section>
