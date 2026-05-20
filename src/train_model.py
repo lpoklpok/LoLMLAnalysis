@@ -110,20 +110,23 @@ def run():
     pred_market = test['q_blue_win'].fillna(0.5).values
 
     print(f"=== 2026 full year — games with odds ({n_odds:,}) ===")
-    yo = y_test[has_odds]
-    evaluate("Coin flip",               yo, np.full(n_odds, 0.5))
-    evaluate("Market odds",             yo, pred_market[has_odds])
-    evaluate("LR — ELO only",           yo, pred(lr_elo,    FEATURES_ELO)[has_odds])
-    evaluate("LR — full",               yo, pred(lr_full,   FEATURES_FULL)[has_odds])
-    evaluate("LR — role diffs",         yo, pred(lr_role,   FEATURES_ROLE)[has_odds])
-    evaluate("LR — role+sq",            yo, pred(lr_rsq,    FEATURES_ROLE_SQ)[has_odds])
-    evaluate("LR — full + gd15",        yo, pred(lr_gd15,   FEATURES_GD15)[has_odds])
-    evaluate("LR — role + gd15/role",   yo, pred(lr_gd15r,  FEATURES_GD15_ROLE)[has_odds])
-    evaluate("LR — full + outperf",     yo, pred(lr_op,     FEATURES_OUTPERF)[has_odds])
-    evaluate("LR — gd15 + outperf",     yo, pred(lr_kit,    FEATURES_KITCHEN)[has_odds])
-    evaluate("LR — elo + signed_sq",    yo, pred(lr_elosq,  FEATURES_ELO_SQ)[has_odds])
-    evaluate("LR — full + signed_sq",   yo, pred(lr_fullsq, FEATURES_FULL_SQ)[has_odds])
-    evaluate("LR — full+sq + rest",     yo, pred(lr_rest,   FEATURES_REST)[has_odds])
+    if n_odds == 0:
+        print("  (no 2026 games with odds in this run — skipping log-loss comparison)")
+    else:
+        yo = y_test[has_odds]
+        evaluate("Coin flip",               yo, np.full(n_odds, 0.5))
+        evaluate("Market odds",             yo, pred_market[has_odds])
+        evaluate("LR — ELO only",           yo, pred(lr_elo,    FEATURES_ELO)[has_odds])
+        evaluate("LR — full",               yo, pred(lr_full,   FEATURES_FULL)[has_odds])
+        evaluate("LR — role diffs",         yo, pred(lr_role,   FEATURES_ROLE)[has_odds])
+        evaluate("LR — role+sq",            yo, pred(lr_rsq,    FEATURES_ROLE_SQ)[has_odds])
+        evaluate("LR — full + gd15",        yo, pred(lr_gd15,   FEATURES_GD15)[has_odds])
+        evaluate("LR — role + gd15/role",   yo, pred(lr_gd15r,  FEATURES_GD15_ROLE)[has_odds])
+        evaluate("LR — full + outperf",     yo, pred(lr_op,     FEATURES_OUTPERF)[has_odds])
+        evaluate("LR — gd15 + outperf",     yo, pred(lr_kit,    FEATURES_KITCHEN)[has_odds])
+        evaluate("LR — elo + signed_sq",    yo, pred(lr_elosq,  FEATURES_ELO_SQ)[has_odds])
+        evaluate("LR — full + signed_sq",   yo, pred(lr_fullsq, FEATURES_FULL_SQ)[has_odds])
+        evaluate("LR — full+sq + rest",     yo, pred(lr_rest,   FEATURES_REST)[has_odds])
 
     print("\n=== Full + outperf coefficients ===")
     for feat, coef in zip(FEATURES_OUTPERF, lr_op.named_steps['lr'].coef_[0]):
