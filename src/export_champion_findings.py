@@ -117,6 +117,8 @@ MIN_SYNERGY         = 8
 MIN_SYNERGY_MAJOR   = 5
 MIN_FIRSTPICK       = 10
 MIN_FIRSTPICK_MAJOR = 5
+MIN_FLEX            = 20
+MIN_FLEX_MAJOR      = 10
 MAJOR_LEAGUES       = {'LCK', 'LEC', 'LCS', 'LPL'}
 
 
@@ -224,6 +226,44 @@ def _aggregate_synergies(df: pd.DataFrame, min_games: int) -> list:
     ]
 
 
+def _aggregate_flex(merged: pd.DataFrame, min_games: int) -> list:
+    """Per-champion role distribution and flex percentage.
+    flex_pct = 1 - (games in most-common role / total games played)."""
+    records = []
+    for pos in POS_MAP:
+        for side_col in (f'blue_{pos}_champion', f'red_{pos}_champion'):
+            sub = merged[[side_col]].rename(columns={side_col: 'champion'})
+            sub = sub.dropna(subset=['champion'])
+            sub['position'] = pos
+            records.append(sub)
+    rdf = pd.concat(records, ignore_index=True)
+    if rdf.empty:
+        return []
+    role_cols = list(POS_MAP.keys())
+    pivot = rdf.groupby(['champion', 'position']).size().unstack(fill_value=0)
+    for rc in role_cols:
+        if rc not in pivot.columns:
+            pivot[rc] = 0
+    pivot = pivot[role_cols]
+    pivot['total'] = pivot[role_cols].sum(axis=1)
+    pivot = pivot[pivot['total'] >= min_games].copy()
+    pivot['primary_share'] = pivot[role_cols].max(axis=1) / pivot['total']
+    pivot['flex_pct']      = 1 - pivot['primary_share']
+    pivot['primary_role']  = pivot[role_cols].idxmax(axis=1)
+    pivot = pivot.sort_values(['flex_pct', 'total'], ascending=[False, False])
+    out = []
+    for champ, r in pivot.iterrows():
+        total = int(r['total'])
+        out.append({
+            'champion': champ,
+            'games':    total,
+            'primary_role': r['primary_role'],
+            'flex_pct':     round(float(r['flex_pct']), 4),
+            'roles': {rc: int(r[rc]) for rc in role_cols},
+        })
+    return out
+
+
 def _build_firstpick_records(merged: pd.DataFrame) -> pd.DataFrame:
     """One row per game — identifies the first-picked champion, the team that picked it,
     and the role they ended up playing. Implied WR comes from the model from that team's POV."""
@@ -320,6 +360,10 @@ def main():
     first_picks       = _aggregate_firstpicks(_build_firstpick_records(m_all),   MIN_FIRSTPICK)
     first_picks_major = _aggregate_firstpicks(_build_firstpick_records(m_major), MIN_FIRSTPICK_MAJOR)
 
+    print("Flex picks…")
+    flex_picks       = _aggregate_flex(m_all,   MIN_FLEX)
+    flex_picks_major = _aggregate_flex(m_major, MIN_FLEX_MAJOR)
+
     print(f"  synergies: {len(synergies)} all / {len(synergies_major)} major")
     for pos in POS_MAP:
         print(f"  {pos}: {len(by_position[pos])} champs, {len(matchups[pos])} matchups all "
@@ -342,6 +386,10 @@ def main():
         'synergies_major':    synergies_major,
         'first_picks':        first_picks,
         'first_picks_major':  first_picks_major,
+        'min_flex':           MIN_FLEX,
+        'min_flex_major':     MIN_FLEX_MAJOR,
+        'flex_picks':         flex_picks,
+        'flex_picks_major':   flex_picks_major,
     }
 
     with open(OUT, 'w') as f:

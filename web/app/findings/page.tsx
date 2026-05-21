@@ -84,6 +84,14 @@ interface FirstPicksBlock {
   by_position:     Record<string, ChampionRow[]>
 }
 
+interface FlexRow {
+  champion:     string
+  games:        number
+  primary_role: string
+  flex_pct:     number
+  roles:        Record<string, number>
+}
+
 interface FindingsData {
   generated:           string
   year:                number
@@ -99,6 +107,10 @@ interface FindingsData {
   synergies_major:     SynergyRow[]
   first_picks?:        FirstPicksBlock
   first_picks_major?:  FirstPicksBlock
+  min_flex?:           number
+  min_flex_major?:     number
+  flex_picks?:         FlexRow[]
+  flex_picks_major?:   FlexRow[]
 }
 
 const POSITIONS = ['top', 'jng', 'mid', 'bot', 'sup'] as const
@@ -310,6 +322,77 @@ function SideBySide<T>({
       <h3 className={`text-sm font-semibold uppercase tracking-wide mb-3 ${accent}`}>{header}</h3>
       <div className="space-y-0">{sorted.map((r, i) => renderRow(r, i))}</div>
     </div>
+  )
+}
+
+// ---- Flex pick table ----
+const ROLE_COLORS: Record<string, string> = {
+  top: 'bg-rose-600',
+  jng: 'bg-emerald-600',
+  mid: 'bg-amber-500',
+  bot: 'bg-sky-600',
+  sup: 'bg-violet-600',
+}
+
+function FlexRoleBar({ roles, total }: { roles: Record<string, number>; total: number }) {
+  return (
+    <div className="flex h-4 w-full rounded overflow-hidden bg-gray-800">
+      {POSITIONS.map(p => {
+        const n = roles[p] ?? 0
+        if (n === 0) return null
+        const w = (n / total) * 100
+        return (
+          <div
+            key={p}
+            className={`${ROLE_COLORS[p]} h-full`}
+            style={{ width: `${w}%` }}
+            title={`${POS_LABEL[p]}: ${n} (${w.toFixed(0)}%)`}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+function FlexLegend() {
+  return (
+    <div className="flex flex-wrap gap-3 text-[11px] text-gray-500">
+      {POSITIONS.map(p => (
+        <div key={p} className="flex items-center gap-1.5">
+          <div className={`w-2.5 h-2.5 rounded ${ROLE_COLORS[p]}`} />
+          <span>{POS_LABEL[p]}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function FlexTable({ rows }: { rows: FlexRow[] }) {
+  return (
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="text-xs text-gray-500 border-b border-gray-800">
+          <th className="text-left pb-2 font-normal">Champion</th>
+          <th className="text-right pb-2 font-normal">G</th>
+          <th className="text-left pb-2 font-normal pl-3">Primary</th>
+          <th className="text-right pb-2 font-normal">Flex %</th>
+          <th className="text-left pb-2 font-normal pl-4 w-64">Role split</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r, i) => (
+          <tr key={r.champion} className={i % 2 === 0 ? 'bg-gray-900/40' : ''}>
+            <td className="py-1.5 pr-3 text-gray-200">{r.champion}</td>
+            <td className="py-1.5 text-right text-gray-500 tabular-nums">{r.games}</td>
+            <td className="py-1.5 pl-3 text-gray-400 tabular-nums">{POS_LABEL[r.primary_role]}</td>
+            <td className="py-1.5 text-right text-gray-200 tabular-nums font-mono">{pct(r.flex_pct)}</td>
+            <td className="py-1.5 pl-4">
+              <FlexRoleBar roles={r.roles} total={r.games} />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   )
 }
 
@@ -657,6 +740,29 @@ export default function FindingsPage() {
                       </div>
                     </>
                   )}
+                </div>
+              </section>
+            )
+          })()}
+
+          {/* ── Section: Flex Picks ── */}
+          {(() => {
+            const flex = majorOnly ? data.flex_picks_major : data.flex_picks
+            if (!flex || flex.length === 0) return null
+            const minThreshold = majorOnly ? data.min_flex_major : data.min_flex
+            const displayed = flex.slice(0, 25)
+            return (
+              <section>
+                <h2 className="text-lg font-semibold text-gray-100 mb-1">Flex Picks</h2>
+                <p className="text-gray-500 text-sm mb-4">
+                  Champions played across multiple roles. <span className="text-gray-300 font-mono">Flex %</span> = share of
+                  games played outside the champion&apos;s most-common role (higher = more genuinely flex). Useful for
+                  identifying drafts where the opponent can&apos;t pin a champion to a role.
+                  Min {minThreshold ?? 20} games.
+                </p>
+                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 space-y-3">
+                  <FlexLegend />
+                  <FlexTable rows={displayed} />
                 </div>
               </section>
             )
