@@ -1,0 +1,37 @@
+snapshot_time,slug,match_date,tournament,league_label,best_of,team1,team2,team1_mid,team2_mid,mid_source,volume
+2026-05-21T22:07:01.141911+00:00,lol-bro1-t1a-2026-05-22,2026-05-22T00:00:00+00:00,LCK Challengers League Rounds 1-2,Other,3,HANJIN BRION Challengers,T1 Academy,0.13,0.87,clob_mid,1894.0
+2026-05-21T22:07:01.141911+00:00,lol-bro2-t1-2026-05-24,2026-05-24T00:00:00+00:00,LCK Rounds 1-2,LCK,3,HANJIN BRION,T1,0.145,0.855,clob_mid,1031.0
+2026-05-21T22:07:01.141911+00:00,lol-vit-mkoi-2026-05-23,2026-05-23T00:00:00+00:00,LEC Playoffs,LEC,5,Team Vitality,Movistar KOI,0.435,0.565,clob_mid,9485.0
+2026-05-21T22:07:01.141911+00:00,lol-kc-g2-2026-05-24,2026-05-24T00:00:00+00:00,LEC Playoffs,LEC,5,Karmine Corp,G2 Esports,0.305,0.695,clob_mid,7573.0
+2026-05-21T22:07:01.141911+00:00,lol-vks-los-2026-05-23,2026-05-23T00:00:00+00:00,CBLOL Playoffs,Other,5,Vivo Keyd Stars,LOS,0.5,0.5,clob_mid,1460.0
+2026-05-21T22:07:01.141911+00:00,lol-dk-t1-2026-05-25,2026-05-25T00:00:00+00:00,Esports World Cup Korea Qualifier Playoffs,EWC,5,Dplus Kia,T1,0.285,0.715,clob_mid,536.0
+2026-05-21T22:07:01.141911+00:00,lol-ktc-foxy-2026-05-22,2026-05-22T00:00:00+00:00,LCK Challengers League Rounds 1-2,Other,3,KT Rolster Challengers,BNK FearX Youth,0.695,0.305,clob_mid,34515.0
+2026-05-21T22:07:01.141911+00:00,lol-dnf-drx-2026-05-22,2026-05-22T00:00:00+00:00,LCK Rounds 1-2,LCK,3,DN SOOPers,Kiwoom DRX,0.285,0.715,clob_mid,8078.0
+2026-05-21T22:07:01.141911+00:00,lol-kt-gen-2026-05-22,2026-05-22T00:00:00+00:00,LCK Rounds 1-2,LCK,3,KT Rolster,Gen.G,0.195,0.805,clob_mid,549021.0
+2026-05-21T22:07:01.141911+00:00,lol-dk-fox1-2026-05-23,2026-05-23T00:00:00+00:00,LCK Rounds 1-2,LCK,3,Dplus Kia,BNK FEARX,0.755,0.245,clob_mid,10985.0
+2026-05-21T22:07:01.141911+00:00,lol-ns-hle1-2026-05-25,2026-05-25T00:00:00+00:00,Esports World Cup Korea Qualifier Playoffs,EWC,3,Nongshim RedForce,Hanwha Life Esports,0.135,0.865,clob_mid,96.0
+2026-05-21T22:07:01.141911+00:00,lol-dnf-gen-2026-05-24,2026-05-24T00:00:00+00:00,LCK Rounds 1-2,LCK,3,DN SOOPers,Gen.G,0.04,0.96,clob_mid,1976.0
+2026-05-21T22:07:01.141911+00:00,lol-we-lng-2026-05-23,2026-05-23T00:00:00+00:00,LPL Play-In,LPL,5,Team WE,LNG Esports,0.375,0.625,clob_mid,29314.0
+2026-05-21T22:07:01.141911+00:00,lol-ig1-tt-2026-05-23,2026-05-23T00:00:00+00:00,LPL Play-In,LPL,5,Invictus Gaming,ThunderTalk Gaming,0.85,0.15,clob_mid,7414.0
+2026-05-21T22:07:01.141911+00:00,lol-nip-edg-2026-05-24,2026-05-24T00:00:00+00:00,LPL Play-In,LPL,5,Ninjas in Pyjamas,EDward Gaming,0.78,0.22,clob_mid,16069.0
+2026-05-21T22:07:01.141911+00:00,lol-wb-lgd-2026-05-24,2026-05-24T00:00:00+00:00,LPL Play-In,LPL,5,Weibo Gaming,LGD Gaming,0.915,0.085,clob_mid,366.0
+2026-05-21T22:07:01.141911+00:00,lol-red-fur-2026-05-24,2026-05-24T00:00:00+00:00,CBLOL Playoffs,Other,5,RED Canids,FURIA Esports,0.485,0.515,clob_mid,1963.0
+2026-05-21T22:07:01.141911+00:00,lol-dfma-rck-2026-05-22,2026-05-22T00:00:00+00:00,LJL Regular Season,Other,3,DetonatioN FocusMe Academy,RAYN Clocks,0.37,0.63,clob_mid,38.0
+2026-05-21T22:07:01.141911+00:00,lol-lguide-arb1-2026-05-22,2026-05-22T00:00:00+00:00,LJL Regular Season,Other,3,L Guide Gaming,Arneb,0.44,0.56,clob_mid,1902.0
+2026-05-21T22:07:01.141911+00:00,lol-c9-fly-2026-05-23,2026-05-23T00:00:00+00:00,LCS Playoffs,LCS,5,Cloud9,FlyQuest,0.705,0.295,clob_mid,534.0
+2026-05-21T22:07:01.141911+00:00,lol-ly-tl2-2026-05-24,2026-05-24T00:00:00+00:00,LCS Playoffs,LCS,5,LYON,Team Liquid,0.58,0.42,clob_mid,27.0
+2026-05-21T22:07:01.141911+00:00,lol-mvk-cfo-2026-05-23,2026-05-23T00:00:00+00:00,LCP Playoffs,Other,5,MVK Esports,CTBC Flying Oyster,0.715,0.285,clob_mid,40.0
+2026-05-21T22:07:01.141911+00:00,lol-shg-dcg-2026-05-24,2026-05-24T00:00:00+00:00,LCP Playoffs,Other,5,Fukuoka SoftBank Hawks Gaming,Deep Cross Gaming,0.625,0.375,clob_mid,41.0
+2026-05-21T22:07:01.141911+00:00,lol-es1-ewi-2026-05-26,2026-05-26T00:00:00+00:00,SPORTS (BO5) - Prime League 1st Division Playoffs,Other,5,Eintracht Spandau,E WIE EINFACH E-SPORTS,0.82,0.18,clob_mid,0.0
+2026-05-21T22:07:01.141911+00:00,lol-est-pnga-2026-05-26,2026-05-26T00:00:00+00:00,Circuito Desafiante Playoffs,Other,5,Estral Esports,paiN Gaming Academy,0.84,0.16,clob_mid,0.0
+2026-05-21T22:07:01.141911+00:00,lol-jdg-wb-2026-05-22,2026-05-22T00:00:00+00:00,Esports World Cup China Qualifier Phase 2,EWC,5,JD Gaming,Weibo Gaming,0.595,0.405,clob_mid,51920.0
+2026-05-21T22:07:01.141911+00:00,lol-su-pcific-2026-05-22,2026-05-22T00:00:00+00:00,TCL Playoffs,Other,5,SU Esports,PCIFIC,0.75,0.25,clob_mid,31.0
+2026-05-21T22:07:01.141911+00:00,lol-dkc-hle-2026-05-25,2026-05-25T00:00:00+00:00,LCK Challengers League Rounds 1-2,Other,3,Dplus KIA Challengers,Hanwha Life Esports Challengers,0.81,0.19,clob_mid,0.0
+2026-05-21T22:07:01.141911+00:00,lol-bro1-drxc-2026-05-25,2026-05-25T00:00:00+00:00,LCK Challengers League Rounds 1-2,Other,3,HANJIN BRION Challengers,Kiwoom DRX Challengers,0.5,0.5,clob_mid,0.0
+2026-05-21T22:07:01.141911+00:00,lol-genga-ktc-2026-05-26,2026-05-26T00:00:00+00:00,LCK Challengers League Rounds 1-2,Other,3,Gen.G Global Academy,KT Rolster Challengers,0.15,0.85,clob_mid,0.0
+2026-05-21T22:07:01.141911+00:00,lol-dnsc-nsea-2026-05-26,2026-05-26T00:00:00+00:00,LCK Challengers League Rounds 1-2,Other,3,DN SOOPers Challengers,Nongshim Esports Academy,0.5,0.5,clob_mid,0.0
+2026-05-21T22:07:01.141911+00:00,lol-t1a-ktc-2026-05-28,2026-05-28T00:00:00+00:00,LCK Challengers League Rounds 1-2,Other,3,T1 Academy,KT Rolster Challengers,0.5,0.5,clob_mid,0.0
+2026-05-21T22:07:01.141911+00:00,lol-drxc-foxy-2026-05-28,2026-05-28T00:00:00+00:00,LCK Challengers League Rounds 1-2,Other,3,Kiwoom DRX Challengers,BNK FearX Youth,0.5,0.5,clob_mid,0.0
+2026-05-21T22:07:01.141911+00:00,lol-hle-bro1-2026-05-28,2026-05-28T00:00:00+00:00,LCK Challengers League Rounds 1-2,Other,3,Hanwha Life Esports Challengers,HANJIN BRION Challengers,0.56,0.44,clob_mid,0.0
+2026-05-21T22:07:01.141911+00:00,lol-nsea-dkc-2026-05-29,2026-05-29T00:00:00+00:00,LCK Challengers League Rounds 1-2,Other,3,Nongshim Esports Academy,Dplus KIA Challengers,0.5,0.5,clob_mid,0.0
+2026-05-21T22:07:01.141911+00:00,lol-genga-dnsc-2026-05-29,2026-05-29T00:00:00+00:00,LCK Challengers League Rounds 1-2,Other,3,Gen.G Global Academy,DN SOOPers Challengers,0.5,0.5,clob_mid,0.0

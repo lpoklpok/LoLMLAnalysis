@@ -392,10 +392,12 @@ def fetch_polymarket_odds() -> dict:
         if not winner:
             continue
 
-        prices   = winner.get('outcomePrices', [])
-        outcomes = winner.get('outcomes', [])
-        if isinstance(prices,   str): prices   = json.loads(prices)
-        if isinstance(outcomes, str): outcomes = json.loads(outcomes)
+        prices    = winner.get('outcomePrices', [])
+        outcomes  = winner.get('outcomes', [])
+        token_ids = winner.get('clobTokenIds', [])
+        if isinstance(prices,    str): prices    = json.loads(prices)
+        if isinstance(outcomes,  str): outcomes  = json.loads(outcomes)
+        if isinstance(token_ids, str): token_ids = json.loads(token_ids)
         if len(prices) < 2 or len(outcomes) < 2:
             continue
 
@@ -410,15 +412,100 @@ def fetch_polymarket_odds() -> dict:
         tournament = _infer_tournament(event)
         result[frozenset([t1, t2])] = {
             'prob_team1': prob1, 'team1': t1, 'team2': t2, 'volume': vol,
-            'slug':         event.get('slug', ''),
-            'best_of':      _infer_best_of(event),
-            'match_date':   _infer_match_date(event),
-            'tournament':   tournament,
-            'league_label': _tournament_to_league(tournament),
+            'slug':            event.get('slug', ''),
+            'best_of':         _infer_best_of(event),
+            'match_date':      _infer_match_date(event),
+            'tournament':      tournament,
+            'league_label':    _tournament_to_league(tournament),
+            'token_id_team1':  token_ids[0] if len(token_ids) >= 1 else None,
+            'token_id_team2':  token_ids[1] if len(token_ids) >= 2 else None,
         }
 
     print(f"  Polymarket: found {len(result)} active LoL match markets")
     return result
+
+
+_CLOB_MIDPOINT_URL = 'https://clob.polymarket.com/midpoint'
+
+
+def _fetch_clob_midpoint(token_id: str | None) -> float | None:
+    """Best-bid / best-ask midpoint for a CLOB token. Returns None if either side
+    of the book is empty or the request fails."""
+    if not token_id:
+        return None
+    try:
+        r = requests.get(_CLOB_MIDPOINT_URL, params={'token_id': token_id}, timeout=8)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+    except Exception:
+        return None
+    mid = data.get('mid')
+    try:
+        return float(mid) if mid is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def snapshot_polymarket_odds(poly_odds: dict) -> None:
+    """For each upcoming Polymarket LoL market, capture team1 / team2 mid-market
+    win probabilities and append to data/processed/polymarket_snapshots.csv.
+
+    One row per (run, series). The merge step downstream picks the snapshot
+    closest to the actual match start time (or the first opening snapshot, depending
+    on preference)."""
+    out_path = PROCESSED_DIR / 'polymarket_snapshots.csv'
+    now      = pd.Timestamp.now('UTC')
+    rows = []
+    for key, pm in poly_odds.items():
+        md = pm.get('match_date')
+        if md is None:
+            continue
+        if md.tzinfo is None:
+            md = md.tz_localize('UTC')
+        # Only snapshot future / today markets; skip past ones (already played, market may be stuck active).
+        if md < now - pd.Timedelta(hours=12):
+            continue
+        mid1 = _fetch_clob_midpoint(pm.get('token_id_team1'))
+        if mid1 is None:
+            # Fallback to gamma indicative price if CLOB book is empty.
+            mid1   = float(pm['prob_team1'])
+            source = 'gamma_last'
+        else:
+            source = 'clob_mid'
+        mid2 = 1.0 - mid1
+        rows.append({
+            'snapshot_time': now.isoformat(),
+            'slug':          pm.get('slug') or '',
+            'match_date':    md.isoformat(),
+            'tournament':    pm.get('tournament') or '',
+            'league_label':  pm.get('league_label') or '',
+            'best_of':       int(pm.get('best_of') or 0),
+            'team1':         pm['team1'],
+            'team2':         pm['team2'],
+            'team1_mid':     round(mid1, 4),
+            'team2_mid':     round(mid2, 4),
+            'mid_source':    source,
+            'volume':        round(float(pm.get('volume') or 0), 0),
+        })
+
+    if not rows:
+        print("  No upcoming Polymarket markets to snapshot.")
+        return
+
+    new_df = pd.DataFrame(rows)
+    if out_path.exists():
+        try:
+            old_df = pd.read_csv(out_path)
+            combined = pd.concat([old_df, new_df], ignore_index=True)
+        except Exception as e:
+            print(f"  Could not read existing snapshot CSV ({e}); starting fresh.")
+            combined = new_df
+    else:
+        combined = new_df
+    combined.to_csv(out_path, index=False)
+    print(f"  Polymarket snapshots: appended {len(rows)} row(s) to {out_path.name} "
+          f"(total {len(combined)})")
 
 
 def fetch_upcoming(poly_odds: dict, days_ahead: int = 21) -> pd.DataFrame:
@@ -833,6 +920,9 @@ def run():
 
     print("Fetching Polymarket odds...")
     poly_odds = fetch_polymarket_odds()
+
+    print("Snapshotting Polymarket mid-market odds for upcoming series...")
+    snapshot_polymarket_odds(poly_odds)
 
     print("Building upcoming matches from Polymarket (+ manual fallback)...")
     upcoming = fetch_upcoming(poly_odds, days_ahead=21)
