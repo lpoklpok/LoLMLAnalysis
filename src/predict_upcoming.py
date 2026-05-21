@@ -253,8 +253,9 @@ def fetch_oddsportal_odds() -> dict:
         return {}
 
 
-_BO_RE   = re.compile(r'(?:best\s*of|\bbo)\s*(\d+)', re.IGNORECASE)
-_DATE_RE = re.compile(r'(\d{4})-(\d{2})-(\d{2})')
+_BO_RE         = re.compile(r'(?:best\s*of|\bbo)\s*(\d+)', re.IGNORECASE)
+_DATE_RE       = re.compile(r'(\d{4})-(\d{2})-(\d{2})')
+_TOURNAMENT_RE = re.compile(r'-\s*(.+?)\s*$')  # text after last " - " in a Polymarket title
 
 
 def _infer_best_of(event: dict) -> int:
@@ -270,6 +271,42 @@ def _infer_best_of(event: dict) -> int:
             except ValueError:
                 pass
     return 3
+
+
+def _infer_tournament(event: dict) -> str | None:
+    """Extract the tournament suffix from a Polymarket title.
+    Format observed: 'LoL: A vs B (BO3) - LPL Group Ascend' → 'LPL Group Ascend'."""
+    title = event.get('title') or ''
+    m = _TOURNAMENT_RE.search(title)
+    if not m:
+        return None
+    suffix = m.group(1).strip()
+    return suffix if suffix else None
+
+
+def _tournament_to_league(tournament: str | None) -> str | None:
+    """Map a Polymarket tournament suffix to a coarse league bucket.
+    Returns None if the suffix is missing or unrecognised — caller falls back to team lookup."""
+    if not tournament:
+        return None
+    t = tournament.strip()
+    tl = t.lower()
+    # Order matters: more-specific tournaments first (e.g. 'LCK Challengers' before 'LCK').
+    if 'challengers' in tl or 'academy' in tl:
+        return 'Other'  # LCK Challengers League etc. — not the top tier
+    if tl.startswith('esports world cup') or 'esports world cup' in tl:
+        return 'EWC'
+    if 'mid-season' in tl or tl.startswith('msi'):
+        return 'MSI'
+    if 'world championship' in tl or tl.startswith('worlds'):
+        return 'Worlds'
+    if 'first stand' in tl:
+        return 'First Stand'
+    if tl.startswith('lck'): return 'LCK'
+    if tl.startswith('lec'): return 'LEC'
+    if tl.startswith('lpl'): return 'LPL'
+    if tl.startswith('lcs'): return 'LCS'
+    return 'Other'
 
 
 def _infer_match_date(event: dict) -> 'pd.Timestamp | None':
@@ -339,11 +376,14 @@ def fetch_polymarket_odds() -> dict:
 
         t1 = _norm_team(outcomes[0])
         t2 = _norm_team(outcomes[1])
+        tournament = _infer_tournament(event)
         result[frozenset([t1, t2])] = {
             'prob_team1': prob1, 'team1': t1, 'team2': t2, 'volume': vol,
-            'slug':       event.get('slug', ''),
-            'best_of':    _infer_best_of(event),
-            'match_date': _infer_match_date(event),
+            'slug':         event.get('slug', ''),
+            'best_of':      _infer_best_of(event),
+            'match_date':   _infer_match_date(event),
+            'tournament':   tournament,
+            'league_label': _tournament_to_league(tournament),
         }
 
     print(f"  Polymarket: found {len(result)} active LoL match markets")
@@ -366,13 +406,17 @@ def fetch_upcoming(poly_odds: dict, days_ahead: int = 21) -> pd.DataFrame:
     skipped_no_league = 0
     for key, pm in poly_odds.items():
         t1, t2 = pm['team1'], pm['team2']
-        # Need at least one team to be tagged with a known league.
+        # Prefer the league parsed from Polymarket's tournament suffix; fall back to a
+        # major-region team membership. Need at least one side to anchor a major-league
+        # team so the model has rosters/ELO to work with.
+        league_from_tournament = pm.get('league_label')
         lg1 = _TEAM_LEAGUE.get(t1)
         lg2 = _TEAM_LEAGUE.get(t2)
-        league = lg1 or lg2
-        if league is None:
+        has_major_team = bool(lg1 or lg2)
+        if not has_major_team:
             skipped_no_league += 1
             continue
+        league = league_from_tournament or lg1 or lg2 or 'Other'
         match_date = pm.get('match_date')
         if match_date is None:
             # Without a date we can't sort or filter; skip.

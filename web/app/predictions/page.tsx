@@ -438,10 +438,15 @@ function EquationPanel({ info }: { info: ModelInfo }) {
 // ---------- page ----------
 
 const LEAGUE_STYLE: Record<string, string> = {
-  LCK: 'text-blue-400 border-blue-700',
-  LEC: 'text-purple-400 border-purple-700',
-  LPL: 'text-red-400 border-red-700',
-  LCS: 'text-emerald-400 border-emerald-700',
+  LCK:           'text-blue-400 border-blue-700',
+  LEC:           'text-purple-400 border-purple-700',
+  LPL:           'text-red-400 border-red-700',
+  LCS:           'text-emerald-400 border-emerald-700',
+  EWC:           'text-amber-400 border-amber-700',
+  MSI:           'text-orange-400 border-orange-700',
+  Worlds:        'text-pink-400 border-pink-700',
+  'First Stand': 'text-cyan-400 border-cyan-700',
+  Other:         'text-gray-400 border-gray-700',
 }
 
 export default function PredictionsPage() {
@@ -466,7 +471,20 @@ export default function PredictionsPage() {
     load()
   }, [])
 
-  const leagues = ['LCK', 'LEC', 'LPL', 'LCS']
+  // Show majors in stable order; collect any other league labels present (EWC, MSI, Worlds, Other, …).
+  const MAJORS = ['LCK', 'LEC', 'LPL', 'LCS']
+  const PREFERRED_NON_MAJOR_ORDER = ['EWC', 'MSI', 'Worlds', 'First Stand', 'Other']
+  const presentNonMajors = Array.from(new Set(predictions.map(p => p.league)))
+    .filter(lg => !MAJORS.includes(lg))
+    .sort((a, b) => {
+      const ai = PREFERRED_NON_MAJOR_ORDER.indexOf(a)
+      const bi = PREFERRED_NON_MAJOR_ORDER.indexOf(b)
+      if (ai === -1 && bi === -1) return a.localeCompare(b)
+      if (ai === -1) return 1
+      if (bi === -1) return -1
+      return ai - bi
+    })
+  const leagues = [...MAJORS, ...presentNonMajors]
 
   const byLeagueDate = leagues.reduce<Record<string, Record<string, Prediction[]>>>(
     (acc, lg) => {
