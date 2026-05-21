@@ -123,6 +123,8 @@ MIN_BLINDPICK       = 15
 MIN_BLINDPICK_MAJOR = 8
 MIN_COUNTERPICK     = 15
 MIN_COUNTERPICK_MAJOR = 8
+MIN_VS              = 3
+MIN_VS_MAJOR        = 2
 MAJOR_LEAGUES       = {'LCK', 'LEC', 'LCS', 'LPL'}
 
 # Standard pro draft snake order: B1, R1, R2, B2, B3, R3, R4, B4, B5, R5
@@ -320,6 +322,55 @@ def _aggregate_blindpicks(df: pd.DataFrame, min_games: int) -> dict:
     ]
     return {'overall': overall, 'by_role_overall': by_role_overall,
             'by_position': by_pos, 'top_overall': overall_list}
+
+
+def _build_vs_records(merged: pd.DataFrame) -> pd.DataFrame:
+    """One row per (game, role) — keeps the blind champ as a key alongside the counter's
+    perspective record so we can pivot on the blind side later."""
+    records = []
+    for _, row in merged.iterrows():
+        pred = row['model_pred']; result = row['blue_team_result']
+        if pd.isna(pred) or pd.isna(result): continue
+        bfp = row.get('blue_team_firstPick'); rfp = row.get('red_team_firstPick')
+        if   bfp == 1 and rfp != 1: order = ORDER_BLUE_FIRST
+        elif rfp == 1 and bfp != 1: order = ORDER_RED_FIRST
+        else: continue
+        pick_order: dict = {}
+        for idx, (side, n) in enumerate(order, start=1):
+            c = row.get(f'{side}_team_pick{n}')
+            if pd.notna(c):
+                pick_order[(side, c)] = idx
+        for pos, (bc, rc) in POS_MAP.items():
+            bv = row.get(bc); rv = row.get(rc)
+            if pd.isna(bv) or pd.isna(rv): continue
+            bi = pick_order.get(('blue', bv)); ri = pick_order.get(('red', rv))
+            if bi is None or ri is None or bi == ri: continue
+            if bi < ri:
+                blind, counter, exp, won = bv, rv, 1 - pred, 1 - int(result)
+            else:
+                blind, counter, exp, won = rv, bv, pred,     int(result)
+            records.append({'blind': blind, 'counter': counter, 'position': pos,
+                            'expected': exp, 'won': won})
+    return pd.DataFrame(records, columns=['blind', 'counter', 'position', 'expected', 'won'])
+
+
+def _aggregate_vs_champion(df: pd.DataFrame, min_games: int) -> dict:
+    """Pivot on blind champion. Returns {blind_champ: {position: [counter rows...]}}."""
+    if df.empty: return {}
+    agg = df.groupby(['blind', 'counter', 'position']).agg(
+        games=('won', 'count'), actual=('won', 'mean'), expected=('expected', 'mean')
+    ).reset_index()
+    agg['outperf'] = agg['actual'] - agg['expected']
+    agg = agg[agg['games'] >= min_games]
+    out: dict = {}
+    for (blind, pos), group in agg.groupby(['blind', 'position']):
+        out.setdefault(blind, {})[pos] = [
+            {'champion': r['counter'], 'games': int(r['games']),
+             'actual': round(float(r['actual']), 4), 'expected': round(float(r['expected']), 4),
+             'outperf': round(float(r['outperf']), 4)}
+            for _, r in group.sort_values('games', ascending=False).iterrows()
+        ]
+    return out
 
 
 def _aggregate_counterpicks(pair_df: pd.DataFrame, min_games: int) -> dict:
@@ -542,6 +593,10 @@ def main():
     counter_picks       = _aggregate_counterpicks(pair_all,   MIN_COUNTERPICK)
     counter_picks_major = _aggregate_counterpicks(pair_major, MIN_COUNTERPICK_MAJOR)
 
+    print("Counters-vs-champion lookup…")
+    vs_champion       = _aggregate_vs_champion(_build_vs_records(m_all),   MIN_VS)
+    vs_champion_major = _aggregate_vs_champion(_build_vs_records(m_major), MIN_VS_MAJOR)
+
     print(f"  synergies: {len(synergies)} all / {len(synergies_major)} major")
     for pos in POS_MAP:
         print(f"  {pos}: {len(by_position[pos])} champs, {len(matchups[pos])} matchups all "
@@ -576,6 +631,10 @@ def main():
         'min_counterpick_major': MIN_COUNTERPICK_MAJOR,
         'counter_picks':      counter_picks,
         'counter_picks_major': counter_picks_major,
+        'min_vs':             MIN_VS,
+        'min_vs_major':       MIN_VS_MAJOR,
+        'vs_champion':        vs_champion,
+        'vs_champion_major':  vs_champion_major,
     }
 
     with open(OUT, 'w') as f:

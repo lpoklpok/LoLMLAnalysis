@@ -117,6 +117,8 @@ interface CounterPicksBlock {
   top_overall:     CounterPickRow[]
 }
 
+type VsChampionData = Record<string, Record<string, ChampionRow[]>>
+
 interface FindingsData {
   generated:           string
   year:                number
@@ -144,6 +146,10 @@ interface FindingsData {
   min_counterpick_major?: number
   counter_picks?:      CounterPicksBlock
   counter_picks_major?: CounterPicksBlock
+  min_vs?:             number
+  min_vs_major?:       number
+  vs_champion?:        VsChampionData
+  vs_champion_major?:  VsChampionData
 }
 
 const POSITIONS = ['top', 'jng', 'mid', 'bot', 'sup'] as const
@@ -707,6 +713,7 @@ export default function FindingsPage() {
   const [fpPos, setFpPos]     = useState<typeof POSITIONS[number]>('top')
   const [bpPos, setBpPos]     = useState<'overall' | typeof POSITIONS[number]>('overall')
   const [cpPos, setCpPos]     = useState<'overall' | typeof POSITIONS[number]>('overall')
+  const [vsChamp, setVsChamp] = useState<string>('')
   const [majorOnly, setMajor] = useState(false)
   const [minGames, setMinGames] = useState(false)
   const [error, setError]     = useState<string | null>(null)
@@ -1018,6 +1025,81 @@ export default function FindingsPage() {
                   ) : (
                     <CounterPickTable rows={rows} />
                   )}
+                </div>
+              </section>
+            )
+          })()}
+
+          {/* ── Section: Counters vs Specific Champion ── */}
+          {(() => {
+            const vs = majorOnly ? data.vs_champion_major : data.vs_champion
+            if (!vs) return null
+            const minThreshold = majorOnly ? data.min_vs_major : data.min_vs
+            const champions = Object.keys(vs).sort()
+            if (champions.length === 0) return null
+            const selected = vsChamp && vs[vsChamp] ? vsChamp : champions[0]
+            const byRole = vs[selected] ?? {}
+            const rolesPresent = POSITIONS.filter(p => (byRole[p]?.length ?? 0) > 0)
+            return (
+              <section>
+                <h2 className="text-lg font-semibold text-gray-100 mb-1">Counters Against a Champion</h2>
+                <p className="text-gray-500 text-sm mb-4">
+                  Pick a champion to see the most-common counter picks against them — i.e. champions picked
+                  <span className="text-gray-300"> second </span>in the role pair when this champion was
+                  blind-picked. <span className="text-gray-300">Actual WR</span> is from the counter
+                  champion&apos;s perspective. Min {minThreshold ?? 3} games per matchup.
+                </p>
+                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 mb-4 flex items-center gap-3 flex-wrap">
+                  <label htmlFor="vs-champ" className="text-sm text-gray-400">Show counters against</label>
+                  <select
+                    id="vs-champ"
+                    value={selected}
+                    onChange={e => setVsChamp(e.target.value)}
+                    className="bg-gray-800 text-gray-100 text-sm rounded-md px-3 py-1.5 border border-gray-700 focus:outline-none focus:border-blue-500"
+                  >
+                    {champions.map(c => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-gray-600 ml-auto">
+                    {champions.length} champions with blind-pick data{majorOnly ? ' (major leagues)' : ''}
+                  </span>
+                </div>
+                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 space-y-6">
+                  {rolesPresent.length === 0 ? (
+                    <div className="text-gray-500 text-sm">No counter data for {selected}.</div>
+                  ) : rolesPresent.map(role => {
+                    const rows = byRole[role] ?? []
+                    return (
+                      <div key={role}>
+                        <h3 className="text-sm font-semibold text-gray-200 mb-3">
+                          {POS_LABEL[role]} <span className="text-gray-600 font-normal text-xs ml-1">{rows.length} counters</span>
+                        </h3>
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-xs text-gray-500 border-b border-gray-800">
+                              <th className="text-left pb-2 font-normal">Counter</th>
+                              <th className="text-right pb-2 font-normal">Games</th>
+                              <th className="text-right pb-2 font-normal">Actual WR</th>
+                              <th className="text-right pb-2 font-normal">Model</th>
+                              <th className="text-right pb-2 font-normal">Δ</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rows.slice(0, 12).map((r, i) => (
+                              <tr key={r.champion} className={i % 2 === 0 ? 'bg-gray-900/40' : ''}>
+                                <td className="py-1.5 pr-3 text-gray-200">{r.champion}</td>
+                                <td className="py-1.5 text-right text-gray-500 tabular-nums">{r.games}</td>
+                                <td className={`py-1.5 text-right tabular-nums ${wrColor(r.actual)}`}>{pct(r.actual)}</td>
+                                <td className="py-1.5 text-right text-gray-500 tabular-nums">{pct(r.expected)}</td>
+                                <td className={`py-1.5 text-right tabular-nums ${outperfColor(r.outperf)}`}>{sign(r.outperf)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )
+                  })}
                 </div>
               </section>
             )
