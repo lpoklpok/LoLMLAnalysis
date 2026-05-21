@@ -440,6 +440,8 @@ function EquationPanel({ info }: { info: ModelInfo }) {
 const LEAGUE_STYLE: Record<string, string> = {
   LCK: 'text-blue-400 border-blue-700',
   LEC: 'text-purple-400 border-purple-700',
+  LPL: 'text-red-400 border-red-700',
+  LCS: 'text-emerald-400 border-emerald-700',
 }
 
 export default function PredictionsPage() {
@@ -464,7 +466,7 @@ export default function PredictionsPage() {
     load()
   }, [])
 
-  const leagues = ['LCK', 'LEC']
+  const leagues = ['LCK', 'LEC', 'LPL', 'LCS']
 
   const byLeagueDate = leagues.reduce<Record<string, Record<string, Prediction[]>>>(
     (acc, lg) => {
