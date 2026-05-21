@@ -253,13 +253,44 @@ def fetch_oddsportal_odds() -> dict:
         return {}
 
 
-_BO_RE         = re.compile(r'(?:best\s*of|\bbo)\s*(\d+)', re.IGNORECASE)
-_DATE_RE       = re.compile(r'(\d{4})-(\d{2})-(\d{2})')
-_TOURNAMENT_RE = re.compile(r'-\s*(.+?)\s*$')  # text after last " - " in a Polymarket title
+_BO_RE          = re.compile(r'(?:best\s*of|\bbo)\s*(\d+)', re.IGNORECASE)
+_DATE_RE        = re.compile(r'(\d{4})-(\d{2})-(\d{2})')
+_TOURNAMENT_RE  = re.compile(r'-\s*(.+?)\s*$')  # text after last " - " in a Polymarket title
+_GAME_WINNER_RE = re.compile(r'Game\s+(\d+)\s+Winner', re.IGNORECASE)
 
 
 def _infer_best_of(event: dict) -> int:
-    """Try to detect BO from event title / description. Default Bo3."""
+    """Detect BO from the event's per-game 'Game N Winner' sub-markets.
+
+    Heuristic (from the Polymarket structure): the event lists a separate winner
+    market for each game that may be played, so:
+      - has a 'Game 4 Winner' sub-market  → Bo5
+      - has a 'Game 2 Winner' sub-market but no Game 4 → Bo3
+      - has only 'Game 1 Winner' (or no per-game winner markets) → Bo1
+
+    Falls back to a title/description regex ('best of N' / 'Bo N') and then to Bo3
+    if nothing is detectable — useful for events listed before per-game markets are
+    published.
+    """
+    max_game = 0
+    for m in event.get('markets', []):
+        gt = (m.get('groupItemTitle') or '').strip()
+        mm = _GAME_WINNER_RE.match(gt)
+        if mm:
+            try:
+                n = int(mm.group(1))
+                if n > max_game:
+                    max_game = n
+            except ValueError:
+                pass
+    if max_game >= 4:
+        return 5
+    if max_game >= 2:
+        return 3
+    if max_game == 1:
+        return 1
+
+    # Fallback: text-based BO regex in title/description
     for field in ('title', 'description', 'groupItemTitle'):
         text = event.get(field) or ''
         m = _BO_RE.search(text)
