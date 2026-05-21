@@ -1,17 +1,23 @@
 """
 predict_upcoming.py
-Fetches upcoming LCK/LEC matches from the lolesports.com schedule API,
-infers current rosters from the last known OE game per team, applies
-current ELO state, and generates model predictions for games not yet played.
+Builds the upcoming-match list from active Polymarket LoL markets (plus
+data/manual_upcoming.json for tournaments Polymarket doesn't list), infers
+current rosters from the last known OE game per team, applies current ELO
+state, and generates model predictions for any market with at least one team
+in LCK/LEC/LPL/LCS.
 
 Predictions are side-neutral: the logistic regression intercept (blue-side
 baseline advantage ≈ +2%) is excluded so that equal teams → 50%.
+
+Best-of is inferred from the Polymarket event title/description (regex
+'best of N' / 'bo N'), defaulting to 3 if not stated.
 
 Output: data/processed/upcoming_predictions.csv
 """
 
 import json
 import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -89,16 +95,29 @@ FEAT_LABELS = {
     'outperf_diff': 'Market Outperf Diff',
 }
 
-# lolesports.com schedule API
-_LS_URL     = 'https://esports-api.lolesports.com/persisted/gw/getSchedule'
-_LS_API_KEY = '0TvQnueqKa5mxJntVWt0w4LpLfEkrV1Ta8rQBb9Z'
-_LS_LEAGUES = {
-    'LCK': '98767991310872058',
-    'LEC': '98767991302996019',
-    'LPL': '98767991314006698',
-    'LCS': '98767991299243165',
-    'MSI': '98767991325878492',
+# Canonical team -> league. Used to label predictions when Polymarket is the source of
+# the matchup list (Polymarket doesn't tell us the league directly). Teams not in this
+# map fall through to 'Other' and are still predicted if rosters exist.
+_TEAM_LEAGUE = {
+    # LCK
+    'T1': 'LCK', 'Gen.G': 'LCK', 'KT Rolster': 'LCK', 'Hanwha Life Esports': 'LCK',
+    'Kiwoom DRX': 'LCK', 'BNK FEARX': 'LCK', 'Nongshim RedForce': 'LCK',
+    'DN SOOPers': 'LCK', 'Dplus Kia': 'LCK', 'HANJIN BRION': 'LCK',
+    # LEC
+    'G2 Esports': 'LEC', 'Fnatic': 'LEC', 'Team Vitality': 'LEC',
+    'Karmine Corp': 'LEC', 'Movistar KOI': 'LEC', 'Natus Vincere': 'LEC',
+    'SK Gaming': 'LEC', 'GiantX': 'LEC', 'Team Heretics': 'LEC', 'Shifters': 'LEC',
+    # LPL
+    "Anyone's Legend": 'LPL', 'Bilibili Gaming': 'LPL', 'JD Gaming': 'LPL',
+    'EDward Gaming': 'LPL', 'Invictus Gaming': 'LPL', 'LGD Gaming': 'LPL',
+    'Oh My God': 'LPL', 'Ninjas in Pyjamas': 'LPL', 'LNG Esports': 'LPL',
+    'ThunderTalk Gaming': 'LPL', 'Top Esports': 'LPL', 'Ultra Prime': 'LPL',
+    'Weibo Gaming': 'LPL', 'Team WE': 'LPL', 'FunPlus Phoenix': 'LPL',
+    # LCS
+    'Cloud9': 'LCS', 'Dignitas': 'LCS', 'Disguised': 'LCS', 'FlyQuest': 'LCS',
+    'LYON': 'LCS', 'Sentinels': 'LCS', 'Shopify Rebellion': 'LCS', 'Team Liquid': 'LCS',
 }
+MAJOR_LEAGUES = {'LCK', 'LEC', 'LPL', 'LCS'}
 
 # Manual schedule fallback for tournaments not on lolesports (e.g. EWC).
 # Path: data/manual_upcoming.json
@@ -234,11 +253,48 @@ def fetch_oddsportal_odds() -> dict:
         return {}
 
 
+_BO_RE   = re.compile(r'(?:best\s*of|\bbo)\s*(\d+)', re.IGNORECASE)
+_DATE_RE = re.compile(r'(\d{4})-(\d{2})-(\d{2})')
+
+
+def _infer_best_of(event: dict) -> int:
+    """Try to detect BO from event title / description. Default Bo3."""
+    for field in ('title', 'description', 'groupItemTitle'):
+        text = event.get(field) or ''
+        m = _BO_RE.search(text)
+        if m:
+            try:
+                n = int(m.group(1))
+                if 1 <= n <= 7:
+                    return n
+            except ValueError:
+                pass
+    return 3
+
+
+def _infer_match_date(event: dict) -> 'pd.Timestamp | None':
+    """Best-effort match date: slug YYYY-MM-DD trumps event endDate."""
+    slug = event.get('slug') or ''
+    m = _DATE_RE.search(slug)
+    if m:
+        try:
+            return pd.Timestamp(f'{m.group(1)}-{m.group(2)}-{m.group(3)}T00:00:00+00:00')
+        except Exception:
+            pass
+    end_date = event.get('endDate')
+    if end_date:
+        try:
+            return pd.Timestamp(end_date)
+        except Exception:
+            return None
+    return None
+
+
 def fetch_polymarket_odds() -> dict:
     """
     Fetch all active LoL match markets from Polymarket.
     Returns dict mapping frozenset({team1, team2}) ->
-        {'prob_team1': float, 'team1': str, 'team2': str, 'volume': float}
+        {'prob_team1', 'team1', 'team2', 'volume', 'slug', 'best_of', 'match_date'}
     where team1/team2 are OE-canonical names and prob_team1 is the win
     probability for outcomes[0].
     """
@@ -285,71 +341,62 @@ def fetch_polymarket_odds() -> dict:
         t2 = _norm_team(outcomes[1])
         result[frozenset([t1, t2])] = {
             'prob_team1': prob1, 'team1': t1, 'team2': t2, 'volume': vol,
-            'slug': event.get('slug', ''),
+            'slug':       event.get('slug', ''),
+            'best_of':    _infer_best_of(event),
+            'match_date': _infer_match_date(event),
         }
 
     print(f"  Polymarket: found {len(result)} active LoL match markets")
     return result
 
 
-def fetch_upcoming(days_ahead: int = 14) -> pd.DataFrame:
-    """Query the lolesports schedule API for upcoming matches.
-    Also merges any games from data/manual_upcoming.json (for EWC etc.)."""
+def fetch_upcoming(poly_odds: dict, days_ahead: int = 21) -> pd.DataFrame:
+    """Build the upcoming-matches table from active Polymarket LoL markets.
+
+    Falls back to data/manual_upcoming.json for tournaments not on Polymarket.
+    `poly_odds` is the dict returned by fetch_polymarket_odds() — reused to avoid a
+    second API call.
+    """
     now    = pd.Timestamp.now('UTC')
     cutoff = now + pd.Timedelta(days=days_ahead)
     rows   = []
 
-    for league, league_id in _LS_LEAGUES.items():
-        page_token = None
-        while True:
-            params = {'hl': 'en-US', 'leagueId': league_id}
-            if page_token:
-                params['pageToken'] = page_token
+    skipped_past      = 0
+    skipped_far       = 0
+    skipped_no_league = 0
+    for key, pm in poly_odds.items():
+        t1, t2 = pm['team1'], pm['team2']
+        # Need at least one team to be tagged with a known league.
+        lg1 = _TEAM_LEAGUE.get(t1)
+        lg2 = _TEAM_LEAGUE.get(t2)
+        league = lg1 or lg2
+        if league is None:
+            skipped_no_league += 1
+            continue
+        match_date = pm.get('match_date')
+        if match_date is None:
+            # Without a date we can't sort or filter; skip.
+            continue
+        if match_date.tzinfo is None:
+            match_date = match_date.tz_localize('UTC')
+        if match_date < now - pd.Timedelta(days=1):
+            skipped_past += 1
+            continue
+        if match_date > cutoff:
+            skipped_far += 1
+            continue
+        rows.append({
+            'Team1':        t1,
+            'Team2':        t2,
+            'DateTime_UTC': match_date,
+            'BestOf':       int(pm.get('best_of', 3)),
+            'league':       league,
+        })
+    if skipped_past or skipped_far or skipped_no_league:
+        print(f"  Polymarket filter: {skipped_past} past, {skipped_far} >{days_ahead}d out, "
+              f"{skipped_no_league} no major team")
 
-            try:
-                r = requests.get(
-                    _LS_URL, params=params,
-                    headers={'x-api-key': _LS_API_KEY},
-                    timeout=15,
-                )
-                r.raise_for_status()
-                data = r.json()
-            except Exception as e:
-                print(f"  Error fetching {league} schedule: {e}")
-                break
-
-            schedule = data.get('data', {}).get('schedule', {})
-            events   = schedule.get('events', [])
-
-            past_window = False
-            for event in events:
-                if event.get('type') != 'match':
-                    continue
-                start = pd.Timestamp(event['startTime'])
-                if start > cutoff:
-                    past_window = True
-                    break
-                if event.get('state') != 'unstarted' or start <= now:
-                    continue
-                match = event.get('match', {})
-                teams = match.get('teams', [])
-                if len(teams) < 2:
-                    continue
-                rows.append({
-                    'Team1':        teams[0]['name'],
-                    'Team2':        teams[1]['name'],
-                    'DateTime_UTC': start,
-                    'BestOf':       int(match.get('strategy', {}).get('count', 1)),
-                    'league':       league,
-                })
-
-            newer = schedule.get('pages', {}).get('newer')
-            if newer and not past_window:
-                page_token = newer
-            else:
-                break
-
-    # Merge manual schedule (EWC and other non-lolesports tournaments)
+    # Merge manual schedule (EWC and other non-Polymarket tournaments)
     if _MANUAL_SCHEDULE_PATH.exists():
         import json as _json
         try:
@@ -373,7 +420,7 @@ def fetch_upcoming(days_ahead: int = 14) -> pd.DataFrame:
             print(f"  Warning: could not read manual_upcoming.json: {e}")
 
     if not rows:
-        print("  No upcoming matches found in the lolesports schedule.")
+        print("  No upcoming matches found in Polymarket.")
         return pd.DataFrame()
 
     df = pd.DataFrame(rows).sort_values('DateTime_UTC').reset_index(drop=True)
@@ -709,15 +756,15 @@ def run():
     print("Training model on 2024-2025...")
     model, fim_inv, model_stats = train_model(features)
 
-    print("Fetching upcoming matches from lolesports...")
-    upcoming = fetch_upcoming(days_ahead=14)
+    print("Fetching Polymarket odds...")
+    poly_odds = fetch_polymarket_odds()
+
+    print("Building upcoming matches from Polymarket (+ manual fallback)...")
+    upcoming = fetch_upcoming(poly_odds, days_ahead=21)
 
     if upcoming.empty:
         print("No upcoming matches found.")
         return
-
-    print("Fetching Polymarket odds...")
-    poly_odds = fetch_polymarket_odds()
 
     print("Loading OddsPortal upcoming odds...")
     op_odds = fetch_oddsportal_odds()
