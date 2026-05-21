@@ -115,6 +115,8 @@ MIN_MATCHUP         = 5
 MIN_MATCHUP_MAJOR   = 3
 MIN_SYNERGY         = 8
 MIN_SYNERGY_MAJOR   = 5
+MIN_FIRSTPICK       = 10
+MIN_FIRSTPICK_MAJOR = 5
 MAJOR_LEAGUES       = {'LCK', 'LEC', 'LCS', 'LPL'}
 
 
@@ -222,6 +224,64 @@ def _aggregate_synergies(df: pd.DataFrame, min_games: int) -> list:
     ]
 
 
+def _build_firstpick_records(merged: pd.DataFrame) -> pd.DataFrame:
+    """One row per game — identifies the first-picked champion, the team that picked it,
+    and the role they ended up playing. Implied WR comes from the model from that team's POV."""
+    records = []
+    for _, row in merged.iterrows():
+        pred = row['model_pred']; result = row['blue_team_result']
+        if pd.isna(pred) or pd.isna(result): continue
+        bfp = row.get('blue_team_firstPick'); rfp = row.get('red_team_firstPick')
+        if bfp == 1 and rfp != 1:
+            side, champ, exp, won = 'blue', row.get('blue_team_pick1'), pred,     int(result)
+        elif rfp == 1 and bfp != 1:
+            side, champ, exp, won = 'red',  row.get('red_team_pick1'),  1 - pred, 1 - int(result)
+        else:
+            continue
+        if pd.isna(champ): continue
+        role = None
+        for pos in POS_MAP:
+            if row.get(f'{side}_{pos}_champion') == champ:
+                role = pos; break
+        if role is None: continue
+        records.append({'champion': champ, 'position': role, 'expected': exp, 'won': won})
+    return pd.DataFrame(records, columns=['champion', 'position', 'expected', 'won'])
+
+
+def _aggregate_firstpicks(df: pd.DataFrame, min_games: int) -> dict:
+    """Per-role rows for each first-picked champion + overall summary."""
+    overall = {
+        'games':    int(len(df)),
+        'actual':   round(float(df['won'].mean()),      4) if len(df) else None,
+        'expected': round(float(df['expected'].mean()), 4) if len(df) else None,
+        'outperf':  round(float((df['won'] - df['expected']).mean()), 4) if len(df) else None,
+    }
+    by_role_overall = {}
+    for pos in POS_MAP:
+        sub = df[df['position'] == pos]
+        by_role_overall[pos] = {
+            'games':    int(len(sub)),
+            'actual':   round(float(sub['won'].mean()),      4) if len(sub) else None,
+            'expected': round(float(sub['expected'].mean()), 4) if len(sub) else None,
+            'outperf':  round(float((sub['won'] - sub['expected']).mean()), 4) if len(sub) else None,
+        }
+    agg = df.groupby(['champion', 'position']).agg(
+        games=('won', 'count'), actual=('won', 'mean'), expected=('expected', 'mean')
+    ).reset_index()
+    agg['outperf'] = agg['actual'] - agg['expected']
+    agg = agg[agg['games'] >= min_games]
+    by_pos: dict = {}
+    for pos in POS_MAP:
+        sub = agg[agg['position'] == pos].sort_values('games', ascending=False)
+        by_pos[pos] = [
+            {'champion': r['champion'], 'games': int(r['games']),
+             'actual': round(float(r['actual']), 4), 'expected': round(float(r['expected']), 4),
+             'outperf': round(float(r['outperf']), 4)}
+            for _, r in sub.iterrows()
+        ]
+    return {'overall': overall, 'by_role_overall': by_role_overall, 'by_position': by_pos}
+
+
 def main():
     print("Loading data…")
     feat = pd.read_csv(PROCESSED / 'features_all.csv', low_memory=False)
@@ -233,7 +293,9 @@ def main():
     print(f"2026 games: {len(feat26)}")
 
     champ_cols = (
-        ['gameid', 'league', 'blue_team_result'] +
+        ['gameid', 'league', 'blue_team_result',
+         'blue_team_firstPick', 'red_team_firstPick',
+         'blue_team_pick1', 'red_team_pick1'] +
         [c for pos in POS_MAP.values() for c in pos]
     )
     gwo26  = gwo[gwo['year'] == 2026][champ_cols].copy()
@@ -254,22 +316,32 @@ def main():
     synergies       = _aggregate_synergies(_build_synergy_records(m_all),   MIN_SYNERGY)
     synergies_major = _aggregate_synergies(_build_synergy_records(m_major), MIN_SYNERGY_MAJOR)
 
+    print("First-pick deltas…")
+    first_picks       = _aggregate_firstpicks(_build_firstpick_records(m_all),   MIN_FIRSTPICK)
+    first_picks_major = _aggregate_firstpicks(_build_firstpick_records(m_major), MIN_FIRSTPICK_MAJOR)
+
     print(f"  synergies: {len(synergies)} all / {len(synergies_major)} major")
     for pos in POS_MAP:
         print(f"  {pos}: {len(by_position[pos])} champs, {len(matchups[pos])} matchups all "
               f"/ {len(by_position_major[pos])} champs, {len(matchups_major[pos])} matchups major")
+    print(f"  first picks: overall {first_picks['overall']['games']} games "
+          f"({first_picks['overall']['actual']} actual vs {first_picks['overall']['expected']} model)")
 
     out = {
         'generated':          datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         'year':               2026,
         'min_games':          MIN_GAMES,
         'min_games_major':    MIN_GAMES_MAJOR,
+        'min_firstpick':      MIN_FIRSTPICK,
+        'min_firstpick_major': MIN_FIRSTPICK_MAJOR,
         'by_position':        by_position,
         'by_position_major':  by_position_major,
         'matchups':           matchups,
         'matchups_major':     matchups_major,
         'synergies':          synergies,
         'synergies_major':    synergies_major,
+        'first_picks':        first_picks,
+        'first_picks_major':  first_picks_major,
     }
 
     with open(OUT, 'w') as f:

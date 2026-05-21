@@ -71,17 +71,34 @@ interface SynergyRow {
   outperf:  number
 }
 
+interface FirstPickSummary {
+  games:    number
+  actual:   number | null
+  expected: number | null
+  outperf:  number | null
+}
+
+interface FirstPicksBlock {
+  overall:         FirstPickSummary
+  by_role_overall: Record<string, FirstPickSummary>
+  by_position:     Record<string, ChampionRow[]>
+}
+
 interface FindingsData {
-  generated:         string
-  year:              number
-  min_games:         number
-  min_games_major:   number
-  by_position:       Record<string, ChampionRow[]>
-  by_position_major: Record<string, ChampionRow[]>
-  matchups:          Record<string, MatchupRow[]>
-  matchups_major:    Record<string, MatchupRow[]>
-  synergies:         SynergyRow[]
-  synergies_major:   SynergyRow[]
+  generated:           string
+  year:                number
+  min_games:           number
+  min_games_major:     number
+  min_firstpick?:      number
+  min_firstpick_major?: number
+  by_position:         Record<string, ChampionRow[]>
+  by_position_major:   Record<string, ChampionRow[]>
+  matchups:            Record<string, MatchupRow[]>
+  matchups_major:      Record<string, MatchupRow[]>
+  synergies:           SynergyRow[]
+  synergies_major:     SynergyRow[]
+  first_picks?:        FirstPicksBlock
+  first_picks_major?:  FirstPicksBlock
 }
 
 const POSITIONS = ['top', 'jng', 'mid', 'bot', 'sup'] as const
@@ -296,6 +313,38 @@ function SideBySide<T>({
   )
 }
 
+// ---- Most-common champion table (sorted by games desc) ----
+function MostCommonHalf({ rows }: { rows: ChampionRow[] }) {
+  const sorted = [...rows].sort((a, b) => b.games - a.games).slice(0, TOP_N)
+  return (
+    <div className="flex-1 min-w-0">
+      <h3 className="text-sm font-semibold uppercase tracking-wide mb-3 text-gray-300">Most Common</h3>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-xs text-gray-500 border-b border-gray-800">
+            <th className="text-left pb-2 font-normal">Champion</th>
+            <th className="text-right pb-2 font-normal">G</th>
+            <th className="text-right pb-2 font-normal">Actual</th>
+            <th className="text-right pb-2 font-normal">Model</th>
+            <th className="text-right pb-2 font-normal">Δ</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((r, i) => (
+            <tr key={r.champion} className={i % 2 === 0 ? 'bg-gray-900/40' : ''}>
+              <td className="py-1.5 pr-3 text-gray-200">{r.champion}</td>
+              <td className="py-1.5 text-right text-gray-500 tabular-nums">{r.games}</td>
+              <td className="py-1.5 text-right text-gray-300 tabular-nums">{pct(r.actual)}</td>
+              <td className="py-1.5 text-right text-gray-500 tabular-nums">{pct(r.expected)}</td>
+              <td className={`py-1.5 text-right tabular-nums ${outperfColor(r.outperf)}`}>{sign(r.outperf)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 // ---- Individual champion table ----
 function ChampionHalf({ rows, direction }: { rows: ChampionRow[]; direction: 'over' | 'under' }) {
   const sorted = direction === 'over'
@@ -437,6 +486,7 @@ export default function FindingsPage() {
   const [glData, setGlData]   = useState<GoldLeadData | null>(null)
   const [glTime, setGlTime]   = useState('10')
   const [pos, setPos]         = useState<typeof POSITIONS[number]>('mid')
+  const [fpPos, setFpPos]     = useState<typeof POSITIONS[number]>('top')
   const [majorOnly, setMajor] = useState(false)
   const [minGames, setMinGames] = useState(false)
   const [error, setError]     = useState<string | null>(null)
@@ -548,6 +598,69 @@ export default function FindingsPage() {
               </div>
             </div>
           </section>
+
+          {/* ── Section: First Picks ── */}
+          {(() => {
+            const fp = majorOnly ? data.first_picks_major : data.first_picks
+            if (!fp) return null
+            const overall = fp.overall
+            const roleStats = fp.by_role_overall[fpPos]
+            const roleRows = gFilter(fp.by_position[fpPos] ?? [])
+            const stat = (label: string, sub: string, s: FirstPickSummary) => (
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-gray-500 mb-1">{label}</div>
+                <div className="text-[10px] text-gray-600 mb-2">{sub}</div>
+                <div className="flex items-baseline gap-3">
+                  <div className={`text-2xl font-bold tabular-nums ${s.actual != null ? wrColor(s.actual) : 'text-gray-500'}`}>
+                    {s.actual != null ? pct(s.actual) : '—'}
+                  </div>
+                  <div className="text-xs text-gray-500 tabular-nums">
+                    vs {s.expected != null ? pct(s.expected) : '—'} model
+                  </div>
+                  <div className={`text-sm font-mono tabular-nums ${s.outperf != null ? outperfColor(s.outperf) : 'text-gray-500'}`}>
+                    {s.outperf != null ? sign(s.outperf) : ''}
+                  </div>
+                </div>
+                <div className="text-[10px] text-gray-600 mt-1">{s.games.toLocaleString()} games</div>
+              </div>
+            )
+            return (
+              <section>
+                <h2 className="text-lg font-semibold text-gray-100 mb-1">First Picks</h2>
+                <p className="text-gray-500 text-sm mb-4">
+                  When a team has first pick (B1 in draft order, or the team flagged with first-pick priority),
+                  this is the win rate of the champion they opened with — and how it compares to the model&apos;s pre-game expectation
+                  for that team. The first-picked role is inferred from the post-game role assignment.
+                </p>
+                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 mb-4">
+                  <div className="flex flex-col md:flex-row gap-6">
+                    {stat('Overall first-pick team',  'Across all roles, this year',     overall)}
+                    <div className="w-px bg-gray-800 shrink-0 hidden md:block" />
+                    {stat(`${POS_LABEL[fpPos]} first picks`, 'Games where pick1 ended up in this role', roleStats)}
+                  </div>
+                </div>
+                <PosTabs pos={fpPos} setPos={setFpPos} />
+                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 space-y-6">
+                  {roleRows.length === 0 ? (
+                    <div className="text-gray-500 text-sm">
+                      No champions meet the minimum-games threshold for {POS_LABEL[fpPos]} first picks
+                      {majorOnly ? ' in major leagues' : ''}.
+                    </div>
+                  ) : (
+                    <>
+                      <MostCommonHalf rows={roleRows} />
+                      <div className="h-px bg-gray-800" />
+                      <div className="flex gap-8">
+                        <ChampionHalf rows={roleRows} direction="over" />
+                        <div className="w-px bg-gray-800 shrink-0" />
+                        <ChampionHalf rows={roleRows} direction="under" />
+                      </div>
+                    </>
+                  )}
+                </div>
+              </section>
+            )
+          })()}
 
           {/* ── Section 4: Gold lead win rate ── */}
           {glData && (
