@@ -99,6 +99,24 @@ interface BlindPicksBlock {
   top_overall:     ChampionRow[]
 }
 
+interface CounterPickRow {
+  champion:         string
+  games_counter:    number
+  actual_counter:   number
+  expected_counter: number
+  delta_counter:    number
+  games_blind:      number
+  delta_blind:      number | null
+  lift:             number | null
+}
+
+interface CounterPicksBlock {
+  overall:         FirstPickSummary
+  by_role_overall: Record<string, FirstPickSummary>
+  by_position:     Record<string, CounterPickRow[]>
+  top_overall:     CounterPickRow[]
+}
+
 interface FindingsData {
   generated:           string
   year:                number
@@ -122,6 +140,10 @@ interface FindingsData {
   min_blindpick_major?: number
   blind_picks?:        BlindPicksBlock
   blind_picks_major?:  BlindPicksBlock
+  min_counterpick?:    number
+  min_counterpick_major?: number
+  counter_picks?:      CounterPicksBlock
+  counter_picks_major?: CounterPicksBlock
 }
 
 const POSITIONS = ['top', 'jng', 'mid', 'bot', 'sup'] as const
@@ -366,6 +388,60 @@ function BlindPickTable({ rows }: { rows: ChampionRow[] }) {
 }
 
 function BlindPosTabs({ pos, setPos }: { pos: 'overall' | typeof POSITIONS[number]; setPos: (p: 'overall' | typeof POSITIONS[number]) => void }) {
+  const items: ('overall' | typeof POSITIONS[number])[] = ['overall', ...POSITIONS]
+  const label: Record<string, string> = { overall: 'Overall', ...POS_LABEL }
+  return (
+    <div className="flex gap-2 mb-6 flex-wrap">
+      {items.map(p => (
+        <button key={p} onClick={() => setPos(p)}
+          className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            pos === p
+              ? 'bg-blue-600 text-white'
+              : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
+          }`}>
+          {label[p]}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// ---- Counter pick table ----
+function CounterPickTable({ rows }: { rows: CounterPickRow[] }) {
+  const sorted = [...rows].sort((a, b) => b.games_counter - a.games_counter).slice(0, 15)
+  return (
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="text-xs text-gray-500 border-b border-gray-800">
+          <th className="text-left pb-2 font-normal">Champion</th>
+          <th className="text-right pb-2 font-normal">Counter G</th>
+          <th className="text-right pb-2 font-normal">Δ Counter</th>
+          <th className="text-right pb-2 font-normal pl-3">Blind G</th>
+          <th className="text-right pb-2 font-normal">Δ Blind</th>
+          <th className="text-right pb-2 font-normal pl-3" title="Δ Counter − Δ Blind">Lift</th>
+        </tr>
+      </thead>
+      <tbody>
+        {sorted.map((r, i) => (
+          <tr key={r.champion} className={i % 2 === 0 ? 'bg-gray-900/40' : ''}>
+            <td className="py-1.5 pr-3 text-gray-200">{r.champion}</td>
+            <td className="py-1.5 text-right text-gray-500 tabular-nums">{r.games_counter}</td>
+            <td className={`py-1.5 text-right tabular-nums ${outperfColor(r.delta_counter)}`}>{sign(r.delta_counter)}</td>
+            <td className="py-1.5 pl-3 text-right text-gray-600 tabular-nums">{r.games_blind}</td>
+            <td className={`py-1.5 text-right tabular-nums ${r.delta_blind != null ? outperfColor(r.delta_blind) : 'text-gray-700'}`}>
+              {r.delta_blind != null ? sign(r.delta_blind) : '—'}
+            </td>
+            <td className={`py-1.5 pl-3 text-right tabular-nums font-semibold ${r.lift != null ? outperfColor(r.lift) : 'text-gray-700'}`}>
+              {r.lift != null ? sign(r.lift) : '—'}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function CounterPosTabs({ pos, setPos }: { pos: 'overall' | typeof POSITIONS[number]; setPos: (p: 'overall' | typeof POSITIONS[number]) => void }) {
   const items: ('overall' | typeof POSITIONS[number])[] = ['overall', ...POSITIONS]
   const label: Record<string, string> = { overall: 'Overall', ...POS_LABEL }
   return (
@@ -630,6 +706,7 @@ export default function FindingsPage() {
   const [pos, setPos]         = useState<typeof POSITIONS[number]>('mid')
   const [fpPos, setFpPos]     = useState<typeof POSITIONS[number]>('top')
   const [bpPos, setBpPos]     = useState<'overall' | typeof POSITIONS[number]>('overall')
+  const [cpPos, setCpPos]     = useState<'overall' | typeof POSITIONS[number]>('overall')
   const [majorOnly, setMajor] = useState(false)
   const [minGames, setMinGames] = useState(false)
   const [error, setError]     = useState<string | null>(null)
@@ -880,6 +957,66 @@ export default function FindingsPage() {
                     </div>
                   ) : (
                     <BlindPickTable rows={rows} />
+                  )}
+                </div>
+              </section>
+            )
+          })()}
+
+          {/* ── Section: Counter Picks ── */}
+          {(() => {
+            const cp = majorOnly ? data.counter_picks_major : data.counter_picks
+            if (!cp) return null
+            const minThreshold = majorOnly ? data.min_counterpick_major : data.min_counterpick
+            const rows = cpPos === 'overall'
+              ? cp.top_overall
+              : (cp.by_position[cpPos] ?? [])
+            const summarySelected = cpPos === 'overall' ? cp.overall : cp.by_role_overall[cpPos]
+            const headerLabel = cpPos === 'overall' ? 'Across all roles' : `${POS_LABEL[cpPos]} role`
+            const stat = (label: string, sub: string, s: FirstPickSummary) => (
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-gray-500 mb-1">{label}</div>
+                <div className="text-[10px] text-gray-600 mb-2">{sub}</div>
+                <div className="flex items-baseline gap-3">
+                  <div className={`text-2xl font-bold tabular-nums ${s.actual != null ? wrColor(s.actual) : 'text-gray-500'}`}>
+                    {s.actual != null ? pct(s.actual) : '—'}
+                  </div>
+                  <div className="text-xs text-gray-500 tabular-nums">
+                    vs {s.expected != null ? pct(s.expected) : '—'} model
+                  </div>
+                  <div className={`text-sm font-mono tabular-nums ${s.outperf != null ? outperfColor(s.outperf) : 'text-gray-500'}`}>
+                    {s.outperf != null ? sign(s.outperf) : ''}
+                  </div>
+                </div>
+                <div className="text-[10px] text-gray-600 mt-1">{s.games.toLocaleString()} counter-pick instances</div>
+              </div>
+            )
+            return (
+              <section>
+                <h2 className="text-lg font-semibold text-gray-100 mb-1">Counter Picks</h2>
+                <p className="text-gray-500 text-sm mb-4">
+                  Champions picked <span className="text-gray-300">second</span> in their role pair — the team
+                  knew what they were facing. Most popular counter picks per role, with each champion&apos;s
+                  delta when counter-picked, their delta when <span className="text-gray-300">blind</span>-picked
+                  for comparison, and the <span className="text-gray-300 font-mono">Lift</span> column =
+                  Δ counter − Δ blind. Positive lift means the champion benefits from being counter-picked.
+                  Min {minThreshold ?? 15} counter-pick games.
+                </p>
+                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 mb-4">
+                  <div className="flex flex-col md:flex-row gap-6">
+                    {stat('Overall counter-pick team', 'Pooled across all 5 roles', cp.overall)}
+                    <div className="w-px bg-gray-800 shrink-0 hidden md:block" />
+                    {stat(`${headerLabel} counter-pick team`, 'Currently selected tab', summarySelected ?? cp.overall)}
+                  </div>
+                </div>
+                <CounterPosTabs pos={cpPos} setPos={setCpPos} />
+                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                  {rows.length === 0 ? (
+                    <div className="text-gray-500 text-sm">
+                      No champions meet the minimum-games threshold for this view.
+                    </div>
+                  ) : (
+                    <CounterPickTable rows={rows} />
                   )}
                 </div>
               </section>

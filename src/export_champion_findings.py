@@ -121,6 +121,8 @@ MIN_FLEX            = 20
 MIN_FLEX_MAJOR      = 10
 MIN_BLINDPICK       = 15
 MIN_BLINDPICK_MAJOR = 8
+MIN_COUNTERPICK     = 15
+MIN_COUNTERPICK_MAJOR = 8
 MAJOR_LEAGUES       = {'LCK', 'LEC', 'LCS', 'LPL'}
 
 # Standard pro draft snake order: B1, R1, R2, B2, B3, R3, R4, B4, B5, R5
@@ -234,10 +236,11 @@ def _aggregate_synergies(df: pd.DataFrame, min_games: int) -> list:
     ]
 
 
-def _build_blindpick_records(merged: pd.DataFrame) -> pd.DataFrame:
-    """For each (game, role) pair, identify which team's role champion was picked first
-    overall and label it the blind pick. Compares actual result to model expectation
-    from that team's perspective."""
+def _build_draft_pair_records(merged: pd.DataFrame) -> pd.DataFrame:
+    """For every (game, role) pair, emit two rows tagged with pick_role:
+    - 'blind'   = the side whose role champion was picked first overall
+    - 'counter' = the side that picked second
+    Each row is from that team's win-rate perspective."""
     records = []
     for _, row in merged.iterrows():
         pred = row['model_pred']; result = row['blue_team_result']
@@ -257,11 +260,19 @@ def _build_blindpick_records(merged: pd.DataFrame) -> pd.DataFrame:
             bi = pick_order.get(('blue', bv)); ri = pick_order.get(('red', rv))
             if bi is None or ri is None or bi == ri: continue
             if bi < ri:
-                champ, exp, won = bv, pred,     int(result)
+                blind_champ, blind_exp, blind_won       = bv, pred,     int(result)
+                counter_champ, counter_exp, counter_won = rv, 1 - pred, 1 - int(result)
             else:
-                champ, exp, won = rv, 1 - pred, 1 - int(result)
-            records.append({'champion': champ, 'position': pos, 'expected': exp, 'won': won})
-    return pd.DataFrame(records, columns=['champion', 'position', 'expected', 'won'])
+                blind_champ, blind_exp, blind_won       = rv, 1 - pred, 1 - int(result)
+                counter_champ, counter_exp, counter_won = bv, pred,     int(result)
+            records.append({'champion': blind_champ,   'position': pos, 'expected': blind_exp,   'won': blind_won,   'pick_role': 'blind'})
+            records.append({'champion': counter_champ, 'position': pos, 'expected': counter_exp, 'won': counter_won, 'pick_role': 'counter'})
+    return pd.DataFrame(records, columns=['champion', 'position', 'expected', 'won', 'pick_role'])
+
+
+def _build_blindpick_records(merged: pd.DataFrame) -> pd.DataFrame:
+    pair = _build_draft_pair_records(merged)
+    return pair[pair['pick_role'] == 'blind'][['champion', 'position', 'expected', 'won']].reset_index(drop=True)
 
 
 def _aggregate_blindpicks(df: pd.DataFrame, min_games: int) -> dict:
@@ -309,6 +320,76 @@ def _aggregate_blindpicks(df: pd.DataFrame, min_games: int) -> dict:
     ]
     return {'overall': overall, 'by_role_overall': by_role_overall,
             'by_position': by_pos, 'top_overall': overall_list}
+
+
+def _aggregate_counterpicks(pair_df: pd.DataFrame, min_games: int) -> dict:
+    """Most-popular counter picks (champion picked second in its role-pair) and lift over
+    that same champion's blind-pick delta in the same role.
+
+    lift = delta_counter - delta_blind (positive = champ benefits more from being counter-picked)."""
+    counter = pair_df[pair_df['pick_role'] == 'counter']
+    blind   = pair_df[pair_df['pick_role'] == 'blind']
+
+    def _summary(df: pd.DataFrame) -> dict:
+        return {
+            'games':    int(len(df)),
+            'actual':   round(float(df['won'].mean()),      4) if len(df) else None,
+            'expected': round(float(df['expected'].mean()), 4) if len(df) else None,
+            'outperf':  round(float((df['won'] - df['expected']).mean()), 4) if len(df) else None,
+        }
+
+    overall_counter = _summary(counter)
+    by_role_overall_counter = {pos: _summary(counter[counter['position'] == pos]) for pos in POS_MAP}
+
+    def _agg(df: pd.DataFrame, group_cols: list, suffix: str) -> pd.DataFrame:
+        if len(df) == 0:
+            cols = group_cols + [f'games{suffix}', f'actual{suffix}', f'expected{suffix}', f'delta{suffix}']
+            return pd.DataFrame(columns=cols)
+        agg = df.groupby(group_cols).agg(
+            games=('won', 'count'), actual=('won', 'mean'), expected=('expected', 'mean')
+        ).reset_index()
+        agg[f'delta{suffix}'] = agg['actual'] - agg['expected']
+        return agg.rename(columns={'games': f'games{suffix}', 'actual': f'actual{suffix}', 'expected': f'expected{suffix}'})
+
+    # per (champion, position)
+    c_pos = _agg(counter, ['champion', 'position'], '_counter')
+    b_pos = _agg(blind,   ['champion', 'position'], '_blind')[['champion', 'position', 'games_blind', 'delta_blind']]
+    joined_pos = c_pos.merge(b_pos, on=['champion', 'position'], how='left')
+    joined_pos = joined_pos[joined_pos['games_counter'] >= min_games].copy()
+    joined_pos['lift'] = joined_pos['delta_counter'] - joined_pos['delta_blind']
+
+    def _row(r: pd.Series) -> dict:
+        return {
+            'champion':         r['champion'],
+            'games_counter':    int(r['games_counter']),
+            'actual_counter':   round(float(r['actual_counter']), 4),
+            'expected_counter': round(float(r['expected_counter']), 4),
+            'delta_counter':    round(float(r['delta_counter']), 4),
+            'games_blind':      int(r['games_blind'])   if pd.notna(r.get('games_blind'))   else 0,
+            'delta_blind':      round(float(r['delta_blind']), 4) if pd.notna(r.get('delta_blind')) else None,
+            'lift':             round(float(r['lift']),         4) if pd.notna(r.get('lift'))        else None,
+        }
+
+    by_pos: dict = {}
+    for pos in POS_MAP:
+        sub = joined_pos[joined_pos['position'] == pos].sort_values('games_counter', ascending=False)
+        by_pos[pos] = [_row(r) for _, r in sub.iterrows()]
+
+    # cross-role totals
+    c_all = _agg(counter, ['champion'], '_counter')
+    b_all = _agg(blind,   ['champion'], '_blind')[['champion', 'games_blind', 'delta_blind']]
+    joined_all = c_all.merge(b_all, on='champion', how='left')
+    joined_all = joined_all[joined_all['games_counter'] >= min_games].copy()
+    joined_all['lift'] = joined_all['delta_counter'] - joined_all['delta_blind']
+    joined_all = joined_all.sort_values('games_counter', ascending=False)
+    top_overall = [_row(r) for _, r in joined_all.iterrows()]
+
+    return {
+        'overall':         overall_counter,
+        'by_role_overall': by_role_overall_counter,
+        'by_position':     by_pos,
+        'top_overall':     top_overall,
+    }
 
 
 def _aggregate_flex(merged: pd.DataFrame, min_games: int) -> list:
@@ -450,8 +531,16 @@ def main():
     flex_picks_major = _aggregate_flex(m_major, MIN_FLEX_MAJOR)
 
     print("Blind picks…")
-    blind_picks       = _aggregate_blindpicks(_build_blindpick_records(m_all),   MIN_BLINDPICK)
-    blind_picks_major = _aggregate_blindpicks(_build_blindpick_records(m_major), MIN_BLINDPICK_MAJOR)
+    pair_all   = _build_draft_pair_records(m_all)
+    pair_major = _build_draft_pair_records(m_major)
+    blind_only_all   = pair_all  [pair_all  ['pick_role'] == 'blind'][['champion', 'position', 'expected', 'won']]
+    blind_only_major = pair_major[pair_major['pick_role'] == 'blind'][['champion', 'position', 'expected', 'won']]
+    blind_picks       = _aggregate_blindpicks(blind_only_all,   MIN_BLINDPICK)
+    blind_picks_major = _aggregate_blindpicks(blind_only_major, MIN_BLINDPICK_MAJOR)
+
+    print("Counter picks…")
+    counter_picks       = _aggregate_counterpicks(pair_all,   MIN_COUNTERPICK)
+    counter_picks_major = _aggregate_counterpicks(pair_major, MIN_COUNTERPICK_MAJOR)
 
     print(f"  synergies: {len(synergies)} all / {len(synergies_major)} major")
     for pos in POS_MAP:
@@ -483,6 +572,10 @@ def main():
         'min_blindpick_major': MIN_BLINDPICK_MAJOR,
         'blind_picks':        blind_picks,
         'blind_picks_major':  blind_picks_major,
+        'min_counterpick':    MIN_COUNTERPICK,
+        'min_counterpick_major': MIN_COUNTERPICK_MAJOR,
+        'counter_picks':      counter_picks,
+        'counter_picks_major': counter_picks_major,
     }
 
     with open(OUT, 'w') as f:
