@@ -92,6 +92,13 @@ interface FlexRow {
   roles:        Record<string, number>
 }
 
+interface BlindPicksBlock {
+  overall:         FirstPickSummary
+  by_role_overall: Record<string, FirstPickSummary>
+  by_position:     Record<string, ChampionRow[]>
+  top_overall:     ChampionRow[]
+}
+
 interface FindingsData {
   generated:           string
   year:                number
@@ -111,6 +118,10 @@ interface FindingsData {
   min_flex_major?:     number
   flex_picks?:         FlexRow[]
   flex_picks_major?:   FlexRow[]
+  min_blindpick?:      number
+  min_blindpick_major?: number
+  blind_picks?:        BlindPicksBlock
+  blind_picks_major?:  BlindPicksBlock
 }
 
 const POSITIONS = ['top', 'jng', 'mid', 'bot', 'sup'] as const
@@ -321,6 +332,54 @@ function SideBySide<T>({
     <div className="flex-1 min-w-0">
       <h3 className={`text-sm font-semibold uppercase tracking-wide mb-3 ${accent}`}>{header}</h3>
       <div className="space-y-0">{sorted.map((r, i) => renderRow(r, i))}</div>
+    </div>
+  )
+}
+
+// ---- Blind pick table ----
+function BlindPickTable({ rows }: { rows: ChampionRow[] }) {
+  const sorted = [...rows].sort((a, b) => b.games - a.games).slice(0, 15)
+  return (
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="text-xs text-gray-500 border-b border-gray-800">
+          <th className="text-left pb-2 font-normal">Champion</th>
+          <th className="text-right pb-2 font-normal">Games</th>
+          <th className="text-right pb-2 font-normal">Actual WR</th>
+          <th className="text-right pb-2 font-normal">Model</th>
+          <th className="text-right pb-2 font-normal">Δ</th>
+        </tr>
+      </thead>
+      <tbody>
+        {sorted.map((r, i) => (
+          <tr key={r.champion} className={i % 2 === 0 ? 'bg-gray-900/40' : ''}>
+            <td className="py-1.5 pr-3 text-gray-200">{r.champion}</td>
+            <td className="py-1.5 text-right text-gray-500 tabular-nums">{r.games}</td>
+            <td className="py-1.5 text-right text-gray-300 tabular-nums">{pct(r.actual)}</td>
+            <td className="py-1.5 text-right text-gray-500 tabular-nums">{pct(r.expected)}</td>
+            <td className={`py-1.5 text-right tabular-nums ${outperfColor(r.outperf)}`}>{sign(r.outperf)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function BlindPosTabs({ pos, setPos }: { pos: 'overall' | typeof POSITIONS[number]; setPos: (p: 'overall' | typeof POSITIONS[number]) => void }) {
+  const items: ('overall' | typeof POSITIONS[number])[] = ['overall', ...POSITIONS]
+  const label: Record<string, string> = { overall: 'Overall', ...POS_LABEL }
+  return (
+    <div className="flex gap-2 mb-6 flex-wrap">
+      {items.map(p => (
+        <button key={p} onClick={() => setPos(p)}
+          className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            pos === p
+              ? 'bg-blue-600 text-white'
+              : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
+          }`}>
+          {label[p]}
+        </button>
+      ))}
     </div>
   )
 }
@@ -570,6 +629,7 @@ export default function FindingsPage() {
   const [glTime, setGlTime]   = useState('10')
   const [pos, setPos]         = useState<typeof POSITIONS[number]>('mid')
   const [fpPos, setFpPos]     = useState<typeof POSITIONS[number]>('top')
+  const [bpPos, setBpPos]     = useState<'overall' | typeof POSITIONS[number]>('overall')
   const [majorOnly, setMajor] = useState(false)
   const [minGames, setMinGames] = useState(false)
   const [error, setError]     = useState<string | null>(null)
@@ -763,6 +823,64 @@ export default function FindingsPage() {
                 <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 space-y-3">
                   <FlexLegend />
                   <FlexTable rows={displayed} />
+                </div>
+              </section>
+            )
+          })()}
+
+          {/* ── Section: Blind Picks ── */}
+          {(() => {
+            const bp = majorOnly ? data.blind_picks_major : data.blind_picks
+            if (!bp) return null
+            const minThreshold = majorOnly ? data.min_blindpick_major : data.min_blindpick
+            const rows = bpPos === 'overall'
+              ? bp.top_overall
+              : (bp.by_position[bpPos] ?? [])
+            const summarySelected = bpPos === 'overall' ? bp.overall : bp.by_role_overall[bpPos]
+            const headerLabel = bpPos === 'overall' ? 'Across all roles' : `${POS_LABEL[bpPos]} role`
+            const stat = (label: string, sub: string, s: FirstPickSummary) => (
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-gray-500 mb-1">{label}</div>
+                <div className="text-[10px] text-gray-600 mb-2">{sub}</div>
+                <div className="flex items-baseline gap-3">
+                  <div className={`text-2xl font-bold tabular-nums ${s.actual != null ? wrColor(s.actual) : 'text-gray-500'}`}>
+                    {s.actual != null ? pct(s.actual) : '—'}
+                  </div>
+                  <div className="text-xs text-gray-500 tabular-nums">
+                    vs {s.expected != null ? pct(s.expected) : '—'} model
+                  </div>
+                  <div className={`text-sm font-mono tabular-nums ${s.outperf != null ? outperfColor(s.outperf) : 'text-gray-500'}`}>
+                    {s.outperf != null ? sign(s.outperf) : ''}
+                  </div>
+                </div>
+                <div className="text-[10px] text-gray-600 mt-1">{s.games.toLocaleString()} blind-pick instances</div>
+              </div>
+            )
+            return (
+              <section>
+                <h2 className="text-lg font-semibold text-gray-100 mb-1">Blind Picks</h2>
+                <p className="text-gray-500 text-sm mb-4">
+                  In each role, the team that picked their role champion first overall (in draft order) is &quot;blind&quot; —
+                  they committed before seeing the opposing role pick. This counts all blind-pick instances
+                  (every game has 5 blind picks, one per role) and shows the most-popular blind picks with their
+                  team&apos;s win rate vs the model&apos;s pre-game expectation. Min {minThreshold ?? 15} games.
+                </p>
+                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 mb-4">
+                  <div className="flex flex-col md:flex-row gap-6">
+                    {stat('Overall blind-pick team', 'Pooled across all 5 roles', bp.overall)}
+                    <div className="w-px bg-gray-800 shrink-0 hidden md:block" />
+                    {stat(`${headerLabel} blind-pick team`, 'Currently selected tab', summarySelected ?? bp.overall)}
+                  </div>
+                </div>
+                <BlindPosTabs pos={bpPos} setPos={setBpPos} />
+                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                  {rows.length === 0 ? (
+                    <div className="text-gray-500 text-sm">
+                      No champions meet the minimum-games threshold for this view.
+                    </div>
+                  ) : (
+                    <BlindPickTable rows={rows} />
+                  )}
                 </div>
               </section>
             )

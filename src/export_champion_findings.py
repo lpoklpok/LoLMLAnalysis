@@ -119,7 +119,15 @@ MIN_FIRSTPICK       = 10
 MIN_FIRSTPICK_MAJOR = 5
 MIN_FLEX            = 20
 MIN_FLEX_MAJOR      = 10
+MIN_BLINDPICK       = 15
+MIN_BLINDPICK_MAJOR = 8
 MAJOR_LEAGUES       = {'LCK', 'LEC', 'LCS', 'LPL'}
+
+# Standard pro draft snake order: B1, R1, R2, B2, B3, R3, R4, B4, B5, R5
+ORDER_BLUE_FIRST = [('blue', 1), ('red', 1), ('red', 2), ('blue', 2), ('blue', 3),
+                    ('red',  3), ('red', 4), ('blue', 4), ('blue', 5), ('red',  5)]
+ORDER_RED_FIRST  = [('red',  1), ('blue', 1), ('blue', 2), ('red', 2), ('red', 3),
+                    ('blue', 3), ('blue', 4), ('red',  4), ('red', 5), ('blue', 5)]
 
 
 def _filter(merged: pd.DataFrame, league_filter: set | None) -> pd.DataFrame:
@@ -224,6 +232,83 @@ def _aggregate_synergies(df: pd.DataFrame, min_games: int) -> list:
          'outperf': round(float(r['outperf']), 4)}
         for _, r in agg.iterrows()
     ]
+
+
+def _build_blindpick_records(merged: pd.DataFrame) -> pd.DataFrame:
+    """For each (game, role) pair, identify which team's role champion was picked first
+    overall and label it the blind pick. Compares actual result to model expectation
+    from that team's perspective."""
+    records = []
+    for _, row in merged.iterrows():
+        pred = row['model_pred']; result = row['blue_team_result']
+        if pd.isna(pred) or pd.isna(result): continue
+        bfp = row.get('blue_team_firstPick'); rfp = row.get('red_team_firstPick')
+        if   bfp == 1 and rfp != 1: order = ORDER_BLUE_FIRST
+        elif rfp == 1 and bfp != 1: order = ORDER_RED_FIRST
+        else: continue
+        pick_order: dict = {}
+        for idx, (side, n) in enumerate(order, start=1):
+            c = row.get(f'{side}_team_pick{n}')
+            if pd.notna(c):
+                pick_order[(side, c)] = idx
+        for pos, (bc, rc) in POS_MAP.items():
+            bv = row.get(bc); rv = row.get(rc)
+            if pd.isna(bv) or pd.isna(rv): continue
+            bi = pick_order.get(('blue', bv)); ri = pick_order.get(('red', rv))
+            if bi is None or ri is None or bi == ri: continue
+            if bi < ri:
+                champ, exp, won = bv, pred,     int(result)
+            else:
+                champ, exp, won = rv, 1 - pred, 1 - int(result)
+            records.append({'champion': champ, 'position': pos, 'expected': exp, 'won': won})
+    return pd.DataFrame(records, columns=['champion', 'position', 'expected', 'won'])
+
+
+def _aggregate_blindpicks(df: pd.DataFrame, min_games: int) -> dict:
+    """Per-role and overall blind-pick rows, plus overall summary."""
+    overall = {
+        'games':    int(len(df)),
+        'actual':   round(float(df['won'].mean()),      4) if len(df) else None,
+        'expected': round(float(df['expected'].mean()), 4) if len(df) else None,
+        'outperf':  round(float((df['won'] - df['expected']).mean()), 4) if len(df) else None,
+    }
+    by_role_overall: dict = {}
+    for pos in POS_MAP:
+        sub = df[df['position'] == pos]
+        by_role_overall[pos] = {
+            'games':    int(len(sub)),
+            'actual':   round(float(sub['won'].mean()),      4) if len(sub) else None,
+            'expected': round(float(sub['expected'].mean()), 4) if len(sub) else None,
+            'outperf':  round(float((sub['won'] - sub['expected']).mean()), 4) if len(sub) else None,
+        }
+    agg = df.groupby(['champion', 'position']).agg(
+        games=('won', 'count'), actual=('won', 'mean'), expected=('expected', 'mean')
+    ).reset_index()
+    agg['outperf'] = agg['actual'] - agg['expected']
+    agg = agg[agg['games'] >= min_games]
+    by_pos: dict = {}
+    for pos in POS_MAP:
+        sub = agg[agg['position'] == pos].sort_values('games', ascending=False)
+        by_pos[pos] = [
+            {'champion': r['champion'], 'games': int(r['games']),
+             'actual': round(float(r['actual']), 4), 'expected': round(float(r['expected']), 4),
+             'outperf': round(float(r['outperf']), 4)}
+            for _, r in sub.iterrows()
+        ]
+    # Cross-role total per champion (a champ can be blind picked in multiple roles).
+    overall_agg = df.groupby('champion').agg(
+        games=('won', 'count'), actual=('won', 'mean'), expected=('expected', 'mean')
+    ).reset_index()
+    overall_agg['outperf'] = overall_agg['actual'] - overall_agg['expected']
+    overall_agg = overall_agg[overall_agg['games'] >= min_games].sort_values('games', ascending=False)
+    overall_list = [
+        {'champion': r['champion'], 'games': int(r['games']),
+         'actual': round(float(r['actual']), 4), 'expected': round(float(r['expected']), 4),
+         'outperf': round(float(r['outperf']), 4)}
+        for _, r in overall_agg.iterrows()
+    ]
+    return {'overall': overall, 'by_role_overall': by_role_overall,
+            'by_position': by_pos, 'top_overall': overall_list}
 
 
 def _aggregate_flex(merged: pd.DataFrame, min_games: int) -> list:
@@ -334,8 +419,8 @@ def main():
 
     champ_cols = (
         ['gameid', 'league', 'blue_team_result',
-         'blue_team_firstPick', 'red_team_firstPick',
-         'blue_team_pick1', 'red_team_pick1'] +
+         'blue_team_firstPick', 'red_team_firstPick'] +
+        [f'{side}_team_pick{n}' for side in ('blue', 'red') for n in range(1, 6)] +
         [c for pos in POS_MAP.values() for c in pos]
     )
     gwo26  = gwo[gwo['year'] == 2026][champ_cols].copy()
@@ -364,6 +449,10 @@ def main():
     flex_picks       = _aggregate_flex(m_all,   MIN_FLEX)
     flex_picks_major = _aggregate_flex(m_major, MIN_FLEX_MAJOR)
 
+    print("Blind picks…")
+    blind_picks       = _aggregate_blindpicks(_build_blindpick_records(m_all),   MIN_BLINDPICK)
+    blind_picks_major = _aggregate_blindpicks(_build_blindpick_records(m_major), MIN_BLINDPICK_MAJOR)
+
     print(f"  synergies: {len(synergies)} all / {len(synergies_major)} major")
     for pos in POS_MAP:
         print(f"  {pos}: {len(by_position[pos])} champs, {len(matchups[pos])} matchups all "
@@ -390,6 +479,10 @@ def main():
         'min_flex_major':     MIN_FLEX_MAJOR,
         'flex_picks':         flex_picks,
         'flex_picks_major':   flex_picks_major,
+        'min_blindpick':      MIN_BLINDPICK,
+        'min_blindpick_major': MIN_BLINDPICK_MAJOR,
+        'blind_picks':        blind_picks,
+        'blind_picks_major':  blind_picks_major,
     }
 
     with open(OUT, 'w') as f:
