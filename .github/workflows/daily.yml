@@ -48,6 +48,10 @@ jobs:
       - name: Merge game + odds data
         run: python src/merge_data.py
 
+      - name: Merge Polymarket per-game implied odds (no-op if snapshot CSV missing)
+        run: python src/merge_polymarket_data.py
+        continue-on-error: true
+
       - name: Build features + ELO state
         run: python src/feature_engineering.py
 
