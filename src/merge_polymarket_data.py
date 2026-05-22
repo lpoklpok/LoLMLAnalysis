@@ -144,8 +144,11 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
         axis=1
     )
 
-    poly_probs: list[float | None] = []
-    poly_sources: list[str | None] = []
+    # NOTE: must build a per-gameid map then assign — using positional list
+    # assignment via `games['poly_blue_win_prob'] = list` is order-dependent
+    # on groupby traversal and silently misaligns rows.
+    prob_by_gameid: dict[str, float | None] = {}
+    source_by_gameid: dict[str, str | None] = {}
 
     # Debug counters
     snap_keys = set(snaps['_series_key'].unique())
@@ -215,13 +218,13 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
                         p = bo5_g5_prob(p_s, p_g1, p_g2, p_g3, p_g4)
                         source = 'derived_g5'
 
-            poly_probs.append(None if p is None else round(float(p), 4))
-            poly_sources.append(source)
+            gid = g['gameid']
+            prob_by_gameid[gid]   = None if p is None else round(float(p), 4)
+            source_by_gameid[gid] = source
             if p is not None:
-                n_series_merged += 1  # actually counts games, not series
+                n_series_merged += 1
                 if n_series_merged <= 20:
-                    gid = g.get('gameid', '?')
-                    dt  = str(g.get('date', ''))[:10]
+                    dt = str(g.get('date', ''))[:10]
                     print('  merged: gameid=%s  date=%s  series_key=%s  src=%s  p=%.3f'
                           % (gid, dt, series_key, source, p))
 
@@ -234,8 +237,9 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
     if sample_miss_snap_post:
         print(f'  diag: recent series with snapshots that all post-date first game:')
         for k, t, n in sample_miss_snap_post: print(f'    {k}  first_game={t}  n_snaps={n}')
-    games['poly_blue_win_prob'] = poly_probs
-    games['poly_source']        = poly_sources
+    # Map by gameid (NOT positional assignment — see comment above)
+    games['poly_blue_win_prob'] = games['gameid'].map(prob_by_gameid)
+    games['poly_source']        = games['gameid'].map(source_by_gameid)
 
     # Drop the helper columns
     games = games.drop(columns=['_date_ts', '_date_day', '_series_key'])
