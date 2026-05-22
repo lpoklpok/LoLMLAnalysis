@@ -256,7 +256,7 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
 }
 
 function MainPanel({
-  pred, detail, loading, lastRefreshed, onRefresh, onPlanTrade, positions,
+  pred, detail, loading, lastRefreshed, onRefresh, onPlanTrade, positions, onClosePosition,
 }: {
   pred: Prediction
   detail: EventDetail | null
@@ -265,6 +265,7 @@ function MainPanel({
   onRefresh: () => void
   onPlanTrade: (thisRow: Row, oppositeRow: Row) => void
   positions: PolyPosition[]
+  onClosePosition: (thisRow: Row, oppositeRow: Row) => void
 }) {
   const rows = useMemo(() => buildRows(pred, detail), [pred, detail])
 
@@ -341,6 +342,11 @@ function MainPanel({
               const mid  = t.mid ?? 0
               const mtm  = size * (mid - avg)
               const pnl  = num(t.pos!.cashPnl) + num(t.pos!.realizedPnl)
+              // Look up the matching row + its opposite so the Close button can fire a synthetic-sell.
+              const thisRow = rows.find(r => r.token_id === t.token_id)
+              const thisRowIdx = thisRow ? rows.indexOf(thisRow) : -1
+              const oppRow = thisRowIdx >= 0 ? (thisRowIdx % 2 === 0 ? rows[thisRowIdx + 1] : rows[thisRowIdx - 1]) : null
+              const canClose = thisRow && oppRow
               return (
                 <div key={t.token_id} className="bg-gray-900/60 border border-gray-800 rounded-md px-3 py-2">
                   <div className="flex items-baseline justify-between">
@@ -350,13 +356,21 @@ function MainPanel({
                   <div className="flex items-baseline gap-3 mt-1 text-xs font-mono">
                     <span className="text-gray-400">{size > 0 ? '+' : ''}{size.toFixed(2)} @ {avg.toFixed(3)}</span>
                     <span className="text-gray-500">mid {mid.toFixed(3)}</span>
-                    <span className={`ml-auto ${mtm >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    <span className={`${mtm >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                       mtm {mtm >= 0 ? '+' : ''}${mtm.toFixed(2)}
                     </span>
                     {pnl !== 0 && (
                       <span className={`${pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
                         pnl {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
                       </span>
+                    )}
+                    {canClose && (
+                      <button
+                        onClick={() => onClosePosition(thisRow, oppRow)}
+                        className="ml-auto px-2 py-0.5 rounded text-[10px] bg-red-700 hover:bg-red-600 text-white font-bold"
+                        title={`Synthetic-sell ${size.toFixed(2)} ${t.outcome} via best-bid (BUY ${oppRow.outcome_label} at 1−bid)`}>
+                        Close
+                      </button>
                     )}
                   </div>
                 </div>
@@ -743,6 +757,20 @@ function LadderModal({
     const oppPrice = roundPx(1 - price)
     fire(oppTokenId, oppPrice, `SELL ${thisRow.outcome_label} (=BUY ${oppositeRow.outcome_label})`)
   }
+  // Quick-action: market-sell at best bid (synthetic = BUY opposite at 1-bestBid)
+  function sellAtBestBid() {
+    const thisBookSnap = thisTokenId ? books[thisTokenId] : null
+    const bb = thisBookSnap?.best_bid ?? null
+    if (bb == null) { log(false, `no best bid available for ${thisRow.outcome_label}`); return }
+    onClickBid(bb)
+  }
+  // Quick-action: market-buy at best ask
+  function buyAtBestAsk() {
+    const thisBookSnap = thisTokenId ? books[thisTokenId] : null
+    const ba = thisBookSnap?.best_ask ?? null
+    if (ba == null) { log(false, `no best ask available for ${thisRow.outcome_label}`); return }
+    onClickAsk(ba)
+  }
 
   // ── Render the book ──────────────────────────────────────────────────
   // Centered around mid: N levels above + mid + N levels below at 1¢ granularity.
@@ -814,19 +842,41 @@ function LadderModal({
           </div>
         </div>
 
+        {/* Quick action bar */}
+        <div className="px-6 py-2 border-b border-gray-800 bg-gray-900/40 flex items-center gap-3 text-xs">
+          <span className="text-gray-500">Quick:</span>
+          <button
+            onClick={sellAtBestBid}
+            disabled={!secret || !oppTokenId}
+            className="px-3 py-1.5 rounded bg-green-700 hover:bg-green-600 text-white font-bold disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed"
+            title="Synthetic-sell at best bid (= BUY opposite outcome at 1−best_bid)">
+            ▼ SELL {thisRow.outcome_label} at best bid
+          </button>
+          <button
+            onClick={buyAtBestAsk}
+            disabled={!secret || !thisTokenId}
+            className="px-3 py-1.5 rounded bg-red-700 hover:bg-red-600 text-white font-bold disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed"
+            title="Buy at best ask (lifts the offer)">
+            ▲ BUY {thisRow.outcome_label} at best ask
+          </button>
+          <span className="text-gray-600 ml-2 hidden md:inline">
+            (or click any price cell in the ladder — green BIDS = sell, red ASKS = buy)
+          </span>
+        </div>
+
         {/* Ladder + Kalshi side */}
         <div className="flex-1 overflow-y-auto px-6 py-4 grid gap-6" style={{ gridTemplateColumns: kalshiSide ? '2fr 1fr' : '1fr' }}>
           {/* Polymarket ladder */}
           <div>
             <div className="text-xs uppercase text-gray-500 tracking-wide mb-2">Polymarket — click to fire</div>
             <div className="grid grid-cols-3 gap-px text-xs bg-gray-800 rounded overflow-hidden">
-              <div className="bg-gray-900 px-3 py-1.5 text-gray-500 text-right">BID SIZE</div>
+              <div className="bg-green-900/30 px-3 py-1.5 text-green-400 text-right font-bold">▼ SELL HERE · BID SIZE</div>
               <div className="bg-gray-900 px-3 py-1.5 text-center">
                 <span className="text-green-400">BID</span>
                 <span className="text-gray-700 mx-1.5">/</span>
                 <span className="text-red-400">OFFER</span>
               </div>
-              <div className="bg-gray-900 px-3 py-1.5 text-gray-500">ASK SIZE</div>
+              <div className="bg-red-900/30 px-3 py-1.5 text-red-400 font-bold">▲ BUY HERE · ASK SIZE</div>
               {sortedPrices.map(px => {
                 const bidSz = bidsByCent.get(px) ?? 0
                 const askSz = asksByCent.get(px) ?? 0
@@ -1148,6 +1198,22 @@ export default function TraderPage() {
               lastRefreshed={lastRefreshed}
               onRefresh={refreshDetail}
               positions={positions}
+              onClosePosition={(thisRow, oppositeRow) => {
+                // Open ladder modal focused on this position — user can then click bid or use the Sell button
+                const kalshi = detail?.kalshi
+                let kalshiSide: KalshiSide | null = null
+                let kalshiOpp:  KalshiSide | null = null
+                if (kalshi && thisRow.market_type === 'match_winner') {
+                  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, '')
+                  const k0 = kalshi.sides[0]; const k1 = kalshi.sides[1]
+                  if (k0 && norm(k0.team).includes(norm(thisRow.outcome_label).slice(0, 4))) {
+                    kalshiSide = k0; kalshiOpp = k1
+                  } else if (k1 && norm(k1.team).includes(norm(thisRow.outcome_label).slice(0, 4))) {
+                    kalshiSide = k1; kalshiOpp = k0
+                  }
+                }
+                setLadderPlan({ thisRow, oppositeRow, kalshiSide, kalshiOpposite: kalshiOpp })
+              }}
               onPlanTrade={(thisRow, oppositeRow) => {
                 // Find kalshi sides if this is the match_winner row
                 const kalshi = detail?.kalshi
