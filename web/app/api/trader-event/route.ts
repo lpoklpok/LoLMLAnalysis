@@ -54,6 +54,7 @@ interface Submarket {
 
 interface KalshiSide {
   team: string
+  ticker: string           // full market ticker (e.g. 'KXLOLGAME-...-NS') — for orderbook polling
   yes_bid: number | null
   yes_ask: number | null
   yes_mid: number | null
@@ -117,7 +118,8 @@ async function fetchKalshiSeriesWinner(team1: string, team2: string): Promise<Ka
           const yes_ask = Number.isFinite(ya) ? ya : null
           const yes_mid = yes_bid != null && yes_ask != null ? (yes_bid + yes_ask) / 2 : null
           return {
-            team: teams[idx],
+            team:    teams[idx],
+            ticker:  String(m['ticker'] ?? ''),
             yes_bid, yes_ask, yes_mid,
             volume_24h: Number.isFinite(v24) ? v24 : null,
           }

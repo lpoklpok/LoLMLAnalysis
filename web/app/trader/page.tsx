@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -33,6 +33,7 @@ interface Submarket {
 
 interface KalshiSide {
   team: string
+  ticker: string
   yes_bid: number | null
   yes_ask: number | null
   yes_mid: number | null
@@ -247,15 +248,14 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
 }
 
 function MainPanel({
-  pred, detail, loading, lastRefreshed, onRefresh, onPlanTrade, relayReady,
+  pred, detail, loading, lastRefreshed, onRefresh, onPlanTrade,
 }: {
   pred: Prediction
   detail: EventDetail | null
   loading: boolean
   lastRefreshed: Date | null
   onRefresh: () => void
-  onPlanTrade: (row: Row) => void
-  relayReady: boolean
+  onPlanTrade: (thisRow: Row, oppositeRow: Row) => void
 }) {
   const rows = useMemo(() => buildRows(pred, detail), [pred, detail])
 
@@ -378,11 +378,15 @@ function MainPanel({
                     </td>
                     <td className="px-4 py-2 text-right">
                       <button
-                        onClick={() => onPlanTrade(r)}
-                        disabled={!relayReady || !r.token_id}
-                        title={!relayReady ? 'Connect trader relay first' : !r.token_id ? 'Missing token id' : `Buy ${r.outcome_label} via Toronto relay`}
-                        className="px-3 py-1 text-xs rounded bg-green-600 hover:bg-green-500 text-white disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed transition-colors"
-                      >Buy</button>
+                        onClick={() => {
+                          // Each submarket has 2 consecutive rows. The opposite is i-1 or i+1.
+                          const opp = isFirstOfPair ? rows[i + 1] : rows[i - 1]
+                          if (opp) onPlanTrade(r, opp)
+                        }}
+                        disabled={!r.token_id}
+                        title={!r.token_id ? 'Missing token id' : `Open ladder for ${r.outcome_label}`}
+                        className="px-3 py-1 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed transition-colors"
+                      >Ladder</button>
                     </td>
                   </tr>
                 )
@@ -428,138 +432,346 @@ async function placeOrder(secret: string, req: RelayOrderRequest): Promise<Relay
   return body as RelayOrderResponse
 }
 
-// ── Trade modal ────────────────────────────────────────────────────────────
+// ── Ladder modal (live book + click-to-trade) ─────────────────────────────
 
-interface TradePlan {
-  row: Row
-  side: 'BUY'           // sells are not supported yet — clicking SELL on outcome = BUY on opposite outcome (manual for now)
-  pair_outcome: string  // label shown in title
+const POLY_WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market'
+const LADDER_LEVELS_EACH_SIDE = 10
+
+interface LadderPlan {
+  thisRow:     Row     // the outcome the user clicked on
+  oppositeRow: Row     // the other outcome of the same submarket
+  kalshiSide:     KalshiSide | null   // kalshi market for "this" outcome, if available
+  kalshiOpposite: KalshiSide | null
 }
 
-function TradeModal({
+interface BookState {
+  bids: Map<number, number>     // price → size
+  asks: Map<number, number>
+  best_bid: number | null
+  best_ask: number | null
+  connected: boolean
+}
+
+const emptyBook = (): BookState => ({ bids: new Map(), asks: new Map(), best_bid: null, best_ask: null, connected: false })
+
+function recalcBest(b: Map<number, number>): number | null {
+  if (b.size === 0) return null
+  let best = -Infinity
+  for (const px of b.keys()) if (px > best) best = px
+  return best === -Infinity ? null : best
+}
+function recalcMinAsk(a: Map<number, number>): number | null {
+  if (a.size === 0) return null
+  let best = Infinity
+  for (const px of a.keys()) if (px < best) best = px
+  return best === Infinity ? null : best
+}
+
+function roundPx(p: number): number { return Math.round(p * 1000) / 1000 }
+
+interface KalshiBook { bids: Map<number, number>; asks: Map<number, number>; updated: number }
+
+async function fetchKalshiBook(ticker: string): Promise<KalshiBook | null> {
+  if (!ticker) return null
+  try {
+    const r = await fetch(`https://api.elections.kalshi.com/trade-api/v2/markets/${encodeURIComponent(ticker)}/orderbook`)
+    if (!r.ok) return null
+    const d = await r.json() as { orderbook?: { yes?: [number, number][], no?: [number, number][] } }
+    const ob = d.orderbook ?? {}
+    // Kalshi book schema: yes = [[cents, size], ...] ascending. We're showing "YES" side for this team.
+    // Convert cents to dollar probabilities and split: yes bids on left, yes asks (which are NO bids inverted) on right.
+    const bids = new Map<number, number>()
+    const asks = new Map<number, number>()
+    for (const [cents, sz] of (ob.yes ?? [])) {
+      const px = roundPx(cents / 100)
+      bids.set(px, (bids.get(px) ?? 0) + sz)
+    }
+    // Kalshi "no" entries become "yes asks" via 1-price
+    for (const [cents, sz] of (ob.no ?? [])) {
+      const px = roundPx(1 - cents / 100)
+      asks.set(px, (asks.get(px) ?? 0) + sz)
+    }
+    return { bids, asks, updated: Date.now() }
+  } catch { return null }
+}
+
+function LadderModal({
   plan, secret, onClose,
 }: {
-  plan: TradePlan
+  plan: LadderPlan
   secret: string | null
   onClose: () => void
 }) {
+  const { thisRow, oppositeRow, kalshiSide, kalshiOpposite } = plan
+  const thisTokenId = thisRow.token_id
+  const oppTokenId  = oppositeRow.token_id
+
+  // Books indexed by token_id; we render thisRow's book in the main grid.
+  const [books, setBooks] = useState<Record<string, BookState>>({})
+  const [kalshiThis, setKalshiThis] = useState<KalshiBook | null>(null)
+  const [kalshiOpp,  setKalshiOpp]  = useState<KalshiBook | null>(null)
   const [size, setSize] = useState<number>(100)
-  const [orderType, setOrderType] = useState<'FAK' | 'GTD'>('FAK')
-  // Default price = current mid for FAK (will execute against the book) or mid for GTD
-  const [price, setPrice] = useState<number>(() => Math.round((plan.row.mid ?? 0.5) * 1000) / 1000)
-  const [submitting, setSubmitting] = useState(false)
-  const [result, setResult] = useState<RelayOrderResponse | null>(null)
+  const [mode, setMode] = useState<'FAK' | 'GTD'>('FAK')
+  const [logLines, setLogLines] = useState<{ ts: string; ok: boolean; text: string }[]>([])
+  const [wsStatus, setWsStatus] = useState<'connecting' | 'open' | 'closed'>('connecting')
+  const wsRef = useRef<WebSocket | null>(null)
 
-  const tokenId = plan.row.token_id
-  const canSubmit = !!tokenId && !!secret && size > 0 && price > 0 && price < 1 && !submitting
-
-  async function submit() {
-    if (!tokenId || !secret) return
-    setSubmitting(true)
-    setResult(null)
-    const t0 = Date.now()
-    const resp = await placeOrder(secret, {
-      token_id:   tokenId,
-      side:       plan.side,
-      price,
-      size,
-      order_type: orderType,
-      gtd_seconds: orderType === 'GTD' ? 300 : undefined,
-    })
-    setSubmitting(false)
-    setResult({ ...resp, elapsed_ms: resp.elapsed_ms ?? Date.now() - t0 })
+  function log(ok: boolean, text: string) {
+    const ts = new Date().toLocaleTimeString('en-US', { hour12: false })
+    setLogLines(prev => [{ ts, ok, text }, ...prev].slice(0, 30))
   }
 
+  // ── Polymarket WS ────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!thisTokenId) return
+    const tokens = [thisTokenId, oppTokenId].filter(Boolean) as string[]
+    let stopped = false
+    let backoff = 500
+    function connect() {
+      if (stopped) return
+      const ws = new WebSocket(POLY_WS_URL)
+      wsRef.current = ws
+      setWsStatus('connecting')
+      ws.onopen = () => {
+        setWsStatus('open')
+        backoff = 500
+        ws.send(JSON.stringify({ assets_ids: tokens, type: 'market' }))
+      }
+      ws.onmessage = (e) => {
+        let data: unknown
+        try { data = JSON.parse(e.data) } catch { return }
+        const msgs = Array.isArray(data) ? data : [data]
+        setBooks(prev => {
+          const next = { ...prev }
+          for (const m of msgs as Record<string, unknown>[]) {
+            const et = m['event_type'] as string | undefined
+            if (et === 'book') {
+              const aid = String(m['asset_id'] ?? '')
+              if (!tokens.includes(aid)) continue
+              const b = new Map<number, number>()
+              const a = new Map<number, number>()
+              for (const lvl of (m['bids'] as Array<Record<string, unknown>> ?? [])) {
+                const px = roundPx(parseFloat(String(lvl['price'] ?? 0)))
+                const sz = parseFloat(String(lvl['size'] ?? 0))
+                if (px > 0 && sz > 0) b.set(px, (b.get(px) ?? 0) + sz)
+              }
+              for (const lvl of (m['asks'] as Array<Record<string, unknown>> ?? [])) {
+                const px = roundPx(parseFloat(String(lvl['price'] ?? 0)))
+                const sz = parseFloat(String(lvl['size'] ?? 0))
+                if (px > 0 && sz > 0) a.set(px, (a.get(px) ?? 0) + sz)
+              }
+              next[aid] = { bids: b, asks: a, best_bid: recalcBest(b), best_ask: recalcMinAsk(a), connected: true }
+            } else if (et === 'price_change') {
+              for (const ch of (m['price_changes'] as Array<Record<string, unknown>> ?? [])) {
+                const aid = String(ch['asset_id'] ?? '')
+                if (!tokens.includes(aid)) continue
+                const cur = next[aid] ?? emptyBook()
+                const b = new Map(cur.bids); const a = new Map(cur.asks)
+                const px = roundPx(parseFloat(String(ch['price'] ?? 0)))
+                const sz = parseFloat(String(ch['size'] ?? 0))
+                const side = String(ch['side'] ?? '').toUpperCase()
+                const book = side === 'BUY' ? b : a
+                if (sz <= 0) book.delete(px); else book.set(px, sz)
+                next[aid] = { bids: b, asks: a, best_bid: recalcBest(b), best_ask: recalcMinAsk(a), connected: true }
+              }
+            }
+          }
+          return next
+        })
+      }
+      ws.onerror = () => {/* swallow, onclose will handle */}
+      ws.onclose = () => {
+        setWsStatus('closed')
+        if (stopped) return
+        setTimeout(connect, backoff)
+        backoff = Math.min(backoff * 2, 8000)
+      }
+    }
+    connect()
+    return () => { stopped = true; wsRef.current?.close(); wsRef.current = null }
+  }, [thisTokenId, oppTokenId])
+
+  // ── Kalshi polling (REST) ────────────────────────────────────────────
+  useEffect(() => {
+    if (!kalshiSide?.ticker) return
+    let stopped = false
+    async function poll() {
+      if (stopped) return
+      const [tb, ob] = await Promise.all([
+        fetchKalshiBook(kalshiSide!.ticker),
+        kalshiOpposite?.ticker ? fetchKalshiBook(kalshiOpposite.ticker) : Promise.resolve(null),
+      ])
+      if (!stopped) { setKalshiThis(tb); setKalshiOpp(ob) }
+      setTimeout(poll, 2000)
+    }
+    poll()
+    return () => { stopped = true }
+  }, [kalshiSide?.ticker, kalshiOpposite?.ticker])
+
+  // ── Click-to-trade ───────────────────────────────────────────────────
+  async function fire(tokenId: string, price: number, label: string) {
+    if (!secret) { log(false, 'no relay secret set — connect trader first'); return }
+    if (!tokenId) { log(false, `no token_id for ${label}`); return }
+    if (size * price < 1.0) { log(false, `notional $${(size*price).toFixed(2)} < $1 min`); return }
+    const t0 = Date.now()
+    log(true, `→ ${label} ${size} @ ${price.toFixed(3)} (${mode})`)
+    const resp = await placeOrder(secret, {
+      token_id: tokenId,
+      side: 'BUY',
+      price,
+      size,
+      order_type: mode,
+      gtd_seconds: mode === 'GTD' ? 300 : undefined,
+    })
+    const dt = Date.now() - t0
+    const summary = resp.ok
+      ? `✓ ${label} ${size}@${price.toFixed(3)} ${dt}ms — ${JSON.stringify(resp.response).slice(0, 120)}`
+      : `✗ ${label} ${size}@${price.toFixed(3)} ${dt}ms — ${resp.detail ?? 'unknown error'}`
+    log(resp.ok, summary)
+  }
+
+  function onClickAsk(price: number) {
+    if (!thisTokenId) return
+    fire(thisTokenId, price, `BUY ${thisRow.outcome_label}`)
+  }
+  function onClickBid(price: number) {
+    // Synthetic sell: BUY the opposite outcome at 1-price
+    if (!oppTokenId) return
+    const oppPrice = roundPx(1 - price)
+    fire(oppTokenId, oppPrice, `SELL ${thisRow.outcome_label} (=BUY ${oppositeRow.outcome_label})`)
+  }
+
+  // ── Render the book ──────────────────────────────────────────────────
+  const thisBook = thisTokenId ? books[thisTokenId] ?? emptyBook() : emptyBook()
+  const bidPrices = Array.from(thisBook.bids.keys()).sort((a, b) => b - a).slice(0, LADDER_LEVELS_EACH_SIDE)
+  const askPrices = Array.from(thisBook.asks.keys()).sort((a, b) => a - b).slice(0, LADDER_LEVELS_EACH_SIDE)
+  const priceSet = new Set([...bidPrices, ...askPrices])
+  // Fill in 1-cent steps around the mid so the ladder doesn't have holes
+  if (thisBook.best_bid != null && thisBook.best_ask != null) {
+    const lo = Math.max(0.001, thisBook.best_bid - LADDER_LEVELS_EACH_SIDE * 0.001)
+    const hi = Math.min(0.999, thisBook.best_ask + LADDER_LEVELS_EACH_SIDE * 0.001)
+    for (let p = lo; p <= hi + 0.0001; p += 0.001) priceSet.add(roundPx(p))
+  }
+  const sortedPrices = Array.from(priceSet).sort((a, b) => b - a).slice(0, LADDER_LEVELS_EACH_SIDE * 2 + 2)
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
-      <div className="bg-gray-900 border border-gray-700 rounded-xl w-[480px] p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
-        <div className="flex items-baseline justify-between mb-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-gray-800 flex items-baseline gap-4 flex-wrap">
           <div>
-            <div className="text-xs text-gray-500 uppercase tracking-wide">{plan.row.market_label}</div>
+            <div className="text-xs text-gray-500 uppercase tracking-wide">{thisRow.market_label}</div>
             <div className="text-lg font-bold text-gray-100 mt-0.5">
-              BUY <span className="text-green-400">{plan.row.outcome_label}</span>
+              <span className="text-green-400">{thisRow.outcome_label}</span>
+              <span className="text-gray-600 mx-2">·</span>
+              <span className="text-gray-500 text-sm">opp: {oppositeRow.outcome_label}</span>
             </div>
           </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-xl leading-none">×</button>
+          <span className={`text-[10px] px-2 py-0.5 rounded ${wsStatus === 'open' ? 'bg-green-900/40 text-green-400' : wsStatus === 'connecting' ? 'bg-amber-900/40 text-amber-400' : 'bg-red-900/40 text-red-400'}`}>
+            poly ws {wsStatus}
+          </span>
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-xs text-gray-500">size</span>
+            {[100, 500, 1000, 5000].map(s => (
+              <button key={s} onClick={() => setSize(s)}
+                className={`px-3 py-1 text-xs rounded font-mono ${size === s ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>
+                {s.toLocaleString()}
+              </button>
+            ))}
+            <input type="number" value={size} onChange={e => setSize(parseFloat(e.target.value) || 0)}
+              className="w-20 px-2 py-1 text-xs font-mono bg-gray-800 text-gray-100 rounded border border-gray-700" />
+            <button onClick={() => setMode(mode === 'FAK' ? 'GTD' : 'FAK')}
+              className={`px-3 py-1 text-xs rounded font-bold ${mode === 'FAK' ? 'bg-orange-900/40 text-orange-300' : 'bg-blue-900/40 text-blue-300'}`}
+              title={mode === 'FAK' ? 'Fill-or-kill (clicks fire IOC orders)' : 'GTD 5min (clicks fire post-only resting orders)'}>
+              {mode === 'FAK' ? 'IOC' : 'GTD 5m'}
+            </button>
+            <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-2xl leading-none ml-1">×</button>
+          </div>
         </div>
 
-        {plan.row.fv != null && (
-          <div className="bg-gray-800/60 rounded-md p-3 mb-4 text-sm space-y-1">
-            <div className="flex justify-between"><span className="text-gray-500">Model fair value</span><span className="font-mono text-gray-100">{fmtPct(plan.row.fv)}</span></div>
-            <div className="flex justify-between"><span className="text-gray-500">Market mid</span><span className="font-mono text-gray-100">{fmtPct(plan.row.mid)}</span></div>
-            <div className="flex justify-between"><span className="text-gray-500">Edge</span><span className={`font-mono ${edgeColor(plan.row.edge)}`}>{plan.row.edge != null ? fmtPct(plan.row.edge, true) : '—'}</span></div>
-          </div>
-        )}
-
-        <div className="space-y-4">
+        {/* Ladder + Kalshi side */}
+        <div className="flex-1 overflow-y-auto px-6 py-4 grid gap-6" style={{ gridTemplateColumns: kalshiSide ? '2fr 1fr' : '1fr' }}>
+          {/* Polymarket ladder */}
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Size (shares)</label>
-            <div className="flex gap-1.5">
-              {SIZE_PRESETS.map(s => (
-                <button key={s} onClick={() => setSize(s)}
-                  className={`flex-1 py-1.5 rounded text-sm font-mono ${size === s ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>
-                  {s.toLocaleString()}
-                </button>
+            <div className="text-xs uppercase text-gray-500 tracking-wide mb-2">Polymarket — click to fire</div>
+            <div className="grid grid-cols-3 gap-px text-xs bg-gray-800 rounded overflow-hidden">
+              <div className="bg-gray-900 px-3 py-1.5 text-gray-500 text-right">BID SIZE</div>
+              <div className="bg-gray-900 px-3 py-1.5 text-gray-500 text-center">PRICE</div>
+              <div className="bg-gray-900 px-3 py-1.5 text-gray-500">ASK SIZE</div>
+              {sortedPrices.map(px => {
+                const bidSz = thisBook.bids.get(px) ?? 0
+                const askSz = thisBook.asks.get(px) ?? 0
+                const isBestBid = px === thisBook.best_bid
+                const isBestAsk = px === thisBook.best_ask
+                return (
+                  <Fragment key={px}>
+                    <button
+                      onClick={() => onClickBid(px)}
+                      disabled={!secret || !oppTokenId}
+                      className={`px-3 py-1.5 text-right font-mono tabular-nums hover:bg-green-900/40 cursor-pointer disabled:cursor-not-allowed disabled:hover:bg-transparent ${bidSz > 0 ? (isBestBid ? 'bg-green-900/60 text-green-200' : 'bg-green-900/20 text-green-300') : 'bg-gray-900 text-gray-700'}`}
+                      title={bidSz > 0 ? `Click → synthetic SELL ${thisRow.outcome_label} at ${px.toFixed(3)} (= BUY ${oppositeRow.outcome_label} at ${(1-px).toFixed(3)})` : ''}>
+                      {bidSz > 0 ? Math.round(bidSz).toLocaleString() : ''}
+                    </button>
+                    <div className={`px-3 py-1.5 text-center font-mono font-bold ${isBestBid ? 'bg-green-900/30 text-green-300' : isBestAsk ? 'bg-red-900/30 text-red-300' : 'bg-gray-900 text-gray-200'}`}>
+                      {px.toFixed(3)}
+                    </div>
+                    <button
+                      onClick={() => onClickAsk(px)}
+                      disabled={!secret || !thisTokenId}
+                      className={`px-3 py-1.5 text-left font-mono tabular-nums hover:bg-red-900/40 cursor-pointer disabled:cursor-not-allowed disabled:hover:bg-transparent ${askSz > 0 ? (isBestAsk ? 'bg-red-900/60 text-red-200' : 'bg-red-900/20 text-red-300') : 'bg-gray-900 text-gray-700'}`}
+                      title={askSz > 0 ? `Click → BUY ${thisRow.outcome_label} at ${px.toFixed(3)}` : ''}>
+                      {askSz > 0 ? Math.round(askSz).toLocaleString() : ''}
+                    </button>
+                  </Fragment>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Kalshi (display-only for now) */}
+          {kalshiSide && (
+            <div>
+              <div className="text-xs uppercase text-gray-500 tracking-wide mb-2">
+                Kalshi · {kalshiSide.team}
+                <span className="ml-2 text-gray-700 normal-case">(display only)</span>
+              </div>
+              <div className="grid grid-cols-3 gap-px text-xs bg-gray-800 rounded overflow-hidden">
+                <div className="bg-gray-900 px-2 py-1.5 text-gray-500 text-right">BID</div>
+                <div className="bg-gray-900 px-2 py-1.5 text-gray-500 text-center">PRICE</div>
+                <div className="bg-gray-900 px-2 py-1.5 text-gray-500">ASK</div>
+                {(() => {
+                  const k = kalshiThis ?? { bids: new Map(), asks: new Map(), updated: 0 }
+                  const allPx = new Set<number>([...k.bids.keys(), ...k.asks.keys()])
+                  const px = Array.from(allPx).sort((a, b) => b - a).slice(0, 16)
+                  if (px.length === 0) return <div className="col-span-3 px-3 py-3 text-gray-600 text-center">loading…</div>
+                  return px.map(p => {
+                    const bs = k.bids.get(p) ?? 0
+                    const as_ = k.asks.get(p) ?? 0
+                    return (
+                      <Fragment key={p}>
+                        <div className={`px-2 py-1 text-right font-mono ${bs > 0 ? 'bg-green-900/20 text-green-300' : 'bg-gray-900 text-gray-700'}`}>{bs > 0 ? Math.round(bs).toLocaleString() : ''}</div>
+                        <div className="px-2 py-1 text-center font-mono bg-gray-900 text-gray-200">{p.toFixed(2)}</div>
+                        <div className={`px-2 py-1 font-mono ${as_ > 0 ? 'bg-red-900/20 text-red-300' : 'bg-gray-900 text-gray-700'}`}>{as_ > 0 ? Math.round(as_).toLocaleString() : ''}</div>
+                      </Fragment>
+                    )
+                  })
+                })()}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Activity log */}
+        <div className="border-t border-gray-800 px-6 py-3 max-h-32 overflow-y-auto bg-gray-950/50">
+          {logLines.length === 0 ? (
+            <div className="text-xs text-gray-600">Click an ask to BUY, click a bid to synthetic-SELL. {mode === 'FAK' ? 'IOC: fills immediately or cancels.' : 'GTD 5m: rests on the book for 5 minutes.'}</div>
+          ) : (
+            <div className="space-y-1 font-mono text-[11px]">
+              {logLines.map((l, i) => (
+                <div key={i} className={l.ok ? 'text-gray-300' : 'text-red-400'}>
+                  <span className="text-gray-600">{l.ts}</span> {l.text}
+                </div>
               ))}
-              <input
-                type="number"
-                value={size}
-                onChange={e => setSize(parseFloat(e.target.value) || 0)}
-                className="w-24 px-2 py-1.5 text-sm font-mono bg-gray-800 text-gray-100 rounded border border-gray-700 focus:outline-none focus:border-blue-500"
-              />
-            </div>
-          </div>
-
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <label className="block text-xs text-gray-500 mb-1">Price</label>
-              <input
-                type="number" step="0.001" min="0.001" max="0.999"
-                value={price}
-                onChange={e => setPrice(parseFloat(e.target.value) || 0)}
-                className="w-full px-3 py-1.5 text-sm font-mono bg-gray-800 text-gray-100 rounded border border-gray-700 focus:outline-none focus:border-blue-500"
-              />
-            </div>
-            <div className="flex-1">
-              <label className="block text-xs text-gray-500 mb-1">Type</label>
-              <div className="flex gap-1.5">
-                {(['FAK', 'GTD'] as const).map(t => (
-                  <button key={t} onClick={() => setOrderType(t)}
-                    className={`flex-1 py-1.5 rounded text-sm ${orderType === t ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>
-                    {t === 'FAK' ? 'IOC' : 'GTD 5m'}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-gray-800/40 rounded-md p-2 text-xs text-gray-400 font-mono">
-            Notional: <span className="text-gray-100">${(size * price).toFixed(2)}</span>
-            {(size * price < 1) && <span className="text-red-400 ml-2">⚠ below Polymarket $1 min</span>}
-          </div>
-
-          <button
-            onClick={submit}
-            disabled={!canSubmit}
-            className="w-full py-3 rounded-md font-bold text-white bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed transition-colors"
-          >
-            {submitting
-              ? 'Sending…'
-              : !secret
-                ? 'Set RELAY_SECRET in Settings first'
-                : !tokenId
-                  ? 'No token ID for this submarket'
-                  : `BUY ${size.toLocaleString()} @ ${price.toFixed(3)}`}
-          </button>
-
-          {result && (
-            <div className={`mt-2 p-3 rounded-md text-xs font-mono ${result.ok ? 'bg-green-900/40 text-green-300 border border-green-800' : 'bg-red-900/40 text-red-300 border border-red-800'}`}>
-              <div className="font-bold mb-1">
-                {result.ok ? '✓ submitted' : '✗ failed'} {result.elapsed_ms != null && <span className="text-gray-500 ml-2">{result.elapsed_ms}ms</span>}
-              </div>
-              <pre className="whitespace-pre-wrap break-all text-[11px]">
-                {JSON.stringify(result.response ?? result.detail, null, 2)}
-              </pre>
             </div>
           )}
         </div>
@@ -630,7 +842,7 @@ export default function TraderPage() {
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [relaySecret, setRelaySecret] = useState<string | null>(null)
-  const [tradePlan, setTradePlan] = useState<TradePlan | null>(null)
+  const [ladderPlan, setLadderPlan] = useState<LadderPlan | null>(null)
   const detailReqId = useRef(0)
 
   // Load saved relay secret from localStorage
@@ -747,19 +959,37 @@ export default function TraderPage() {
               loading={loadingDetail}
               lastRefreshed={lastRefreshed}
               onRefresh={refreshDetail}
-              onPlanTrade={r => setTradePlan({ row: r, side: 'BUY', pair_outcome: r.outcome_label })}
-              relayReady={!!relaySecret}
+              onPlanTrade={(thisRow, oppositeRow) => {
+                // Find kalshi sides if this is the match_winner row
+                const kalshi = detail?.kalshi
+                let kalshiSide: KalshiSide | null = null
+                let kalshiOpp:  KalshiSide | null = null
+                if (kalshi && thisRow.market_type === 'match_winner') {
+                  // outcomes align: kalshi.sides[0] matches the polymarket outcome[0]
+                  const idxThis = thisRow.outcome_label === detail?.title?.split(' vs ')[0]?.split(': ')[1] ? 0 : null
+                  // Simpler: match by team name fuzzy
+                  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, '')
+                  const k0 = kalshi.sides[0]; const k1 = kalshi.sides[1]
+                  if (k0 && norm(k0.team).includes(norm(thisRow.outcome_label).slice(0, 4))) {
+                    kalshiSide = k0; kalshiOpp = k1
+                  } else if (k1 && norm(k1.team).includes(norm(thisRow.outcome_label).slice(0, 4))) {
+                    kalshiSide = k1; kalshiOpp = k0
+                  }
+                  void idxThis
+                }
+                setLadderPlan({ thisRow, oppositeRow, kalshiSide, kalshiOpposite: kalshiOpp })
+              }}
             />
           ) : (
             <div className="p-6 text-gray-500 text-sm">Select an event.</div>
           )}
         </main>
       </div>
-      {tradePlan && (
-        <TradeModal
-          plan={tradePlan}
+      {ladderPlan && (
+        <LadderModal
+          plan={ladderPlan}
           secret={relaySecret}
-          onClose={() => setTradePlan(null)}
+          onClose={() => setLadderPlan(null)}
         />
       )}
     </div>
