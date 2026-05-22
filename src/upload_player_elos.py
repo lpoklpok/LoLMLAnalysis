@@ -50,7 +50,13 @@ def run():
             pos_records.append(sub)
 
     pos_df = pd.concat(pos_records).sort_values('date', ascending=False)
-    player_pos = pos_df.drop_duplicates('player').set_index('player')['position'].to_dict()
+    player_pos       = pos_df.drop_duplicates('player').set_index('player')['position'].to_dict()
+    player_last_team = pos_df.drop_duplicates('player').set_index('player')['team_from_game'].to_dict()
+    player_last_date = pos_df.drop_duplicates('player').set_index('player')['date'].to_dict()
+
+    # Include players from the last 90 days even if they've since been subbed out
+    # of the current roster (so recent substitutes like Peter still show up).
+    cutoff = pos_df['date'].max() - pd.Timedelta(days=90)
 
     # Home league = most frequent main-league appearance (LCK/LEC/LCS/LPL)
     # Falls back to most frequent league overall if team never played in a main league
@@ -76,7 +82,13 @@ def run():
     for player, elo in elo_map.items():
         team = player_team.get(player, '')
         if not team:
-            continue  # skip players not on a current roster
+            # Not on a current roster — keep them if they played in the last 90 days
+            last_date = player_last_date.get(player)
+            if last_date is None or last_date < cutoff:
+                continue
+            team = player_last_team.get(player, '')
+            if not team:
+                continue
         league = team_to_league.get(team, '')
         pos    = player_pos.get(player, '')
         ls     = last_split.get(player, [None, None])
