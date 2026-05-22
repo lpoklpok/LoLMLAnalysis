@@ -220,8 +220,10 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
             if p is not None:
                 n_series_merged += 1  # actually counts games, not series
                 if n_series_merged <= 20:
-                    print(f'  merged: gameid={g[\"gameid\"]}  date={g[\"date\"][:10] if isinstance(g[\"date\"],str) else g[\"_date_day\"]}  '
-                          f'series_key={series_key}  src={source}  p={p:.3f}')
+                    gid = g.get('gameid', '?')
+                    dt  = str(g.get('date', ''))[:10]
+                    print('  merged: gameid=%s  date=%s  series_key=%s  src=%s  p=%.3f'
+                          % (gid, dt, series_key, source, p))
 
     print(f'  diag: {n_series:,} OE series total')
     print(f'  diag:   {n_series_with_any_snap:,} have at least 1 snapshot (any time)')
