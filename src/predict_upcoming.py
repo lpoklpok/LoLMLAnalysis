@@ -439,6 +439,7 @@ def fetch_upcoming(poly_odds: dict, days_ahead: int = 21) -> pd.DataFrame:
     skipped_past      = 0
     skipped_far       = 0
     skipped_no_league = 0
+    skipped_resolved  = 0
     for key, pm in poly_odds.items():
         t1, t2 = pm['team1'], pm['team2']
         # Prefer the league parsed from Polymarket's tournament suffix; fall back to a
@@ -452,6 +453,13 @@ def fetch_upcoming(poly_odds: dict, days_ahead: int = 21) -> pd.DataFrame:
             skipped_no_league += 1
             continue
         league = league_from_tournament or lg1 or lg2 or 'Other'
+        # Skip resolved / near-resolved markets — Polymarket leaves them in the
+        # `active` list until officially settled, so a finished match still appears.
+        # A mid pegged at the extreme is the cleanest "game is decided" signal.
+        poly_prob = pm.get('prob_team1')
+        if poly_prob is not None and (poly_prob <= 0.02 or poly_prob >= 0.98):
+            skipped_resolved += 1
+            continue
         match_date = pm.get('match_date')
         if match_date is None:
             # Without a date we can't sort or filter; skip.
@@ -471,9 +479,9 @@ def fetch_upcoming(poly_odds: dict, days_ahead: int = 21) -> pd.DataFrame:
             'BestOf':       int(pm.get('best_of', 3)),
             'league':       league,
         })
-    if skipped_past or skipped_far or skipped_no_league:
+    if skipped_past or skipped_far or skipped_no_league or skipped_resolved:
         print(f"  Polymarket filter: {skipped_past} past, {skipped_far} >{days_ahead}d out, "
-              f"{skipped_no_league} no major team")
+              f"{skipped_no_league} no major team, {skipped_resolved} resolved")
 
     # Merge manual schedule (EWC and other non-Polymarket tournaments)
     if _MANUAL_SCHEDULE_PATH.exists():
