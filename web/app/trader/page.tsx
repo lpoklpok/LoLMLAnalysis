@@ -300,11 +300,11 @@ function MainPanel({
     .filter(t => t.pos && Math.abs(num(t.pos.size)) > 0.0001)
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3 md:p-6 space-y-4 md:space-y-6">
       {/* Header */}
-      <div className="flex items-baseline gap-4 flex-wrap">
-        <h1 className="text-3xl font-bold text-gray-100">
-          {pred.blue_team} <span className="text-gray-600 mx-2 font-normal">vs</span> {pred.red_team}
+      <div className="flex items-baseline gap-2 md:gap-4 flex-wrap">
+        <h1 className="text-xl md:text-3xl font-bold text-gray-100">
+          {pred.blue_team} <span className="text-gray-600 mx-1 md:mx-2 font-normal">vs</span> {pred.red_team}
         </h1>
         <span className={`text-xs uppercase tracking-wide px-2 py-1 rounded ${
           pred.league === 'LCK' ? 'bg-blue-900/60 text-blue-300' :
@@ -409,8 +409,70 @@ function MainPanel({
         </div>
       </div>
 
-      {/* Submarket table */}
-      <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+      {/* Mobile-only card list (md+ uses the table below) */}
+      <div className="md:hidden space-y-2">
+        {detail == null && !loading ? (
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-gray-500 text-sm">No Polymarket event found for this matchup.</div>
+        ) : rows.length === 0 ? (
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-gray-500 text-sm">{loading ? 'loading…' : 'no rows'}</div>
+        ) : (
+          // Group by market_type so each "submarket" is one card with the 2 outcomes inside.
+          Array.from(new Set(rows.map(r => `${r.market_type}|${r.market_label}`))).map(key => {
+            const [mt, mlabel] = key.split('|')
+            const pair = rows.filter(r => r.market_type === mt)
+            return (
+              <div key={key} className="bg-gray-900 border border-gray-800 rounded-xl p-3">
+                <div className="text-[10px] uppercase tracking-wide text-gray-500 mb-2">{mlabel}</div>
+                <div className="space-y-2">
+                  {pair.map((r, idx) => {
+                    const opp = pair[1 - idx] ?? null
+                    return (
+                      <div key={`${r.outcome_label}-${idx}`} className="bg-gray-950/60 rounded-lg p-3">
+                        <div className="flex items-baseline justify-between mb-1">
+                          <div className="text-base font-semibold text-gray-100 truncate pr-2">{r.outcome_label}</div>
+                          <div className="text-xs text-gray-400 font-mono">fair {fmtPct(r.fv)}</div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-xs font-mono mb-3">
+                          <div className="bg-gray-900 rounded px-2 py-1.5">
+                            <div className="text-[10px] uppercase text-gray-600 mb-0.5">Polymarket</div>
+                            {r.bid != null || r.ask != null ? (
+                              <div>
+                                <span className="text-green-400">{r.bid != null ? (r.bid*100).toFixed(1) : '–'}</span>
+                                <span className="text-gray-700 mx-1">·</span>
+                                <span className="text-red-400">{r.ask != null ? (r.ask*100).toFixed(1) : '–'}</span>
+                              </div>
+                            ) : <span className="text-gray-300">{fmtPct(r.mid)}</span>}
+                            <div className={`text-[11px] ${edgeColor(r.edge)}`}>{r.edge != null ? fmtPct(r.edge, true) : ''}</div>
+                          </div>
+                          <div className="bg-gray-900 rounded px-2 py-1.5">
+                            <div className="text-[10px] uppercase text-gray-600 mb-0.5">Kalshi</div>
+                            {r.kalshi_bid != null && r.kalshi_ask != null ? (
+                              <div>
+                                <span className="text-green-400">{(r.kalshi_bid*100).toFixed(0)}</span>
+                                <span className="text-gray-700 mx-1">·</span>
+                                <span className="text-red-400">{(r.kalshi_ask*100).toFixed(0)}</span>
+                              </div>
+                            ) : <span className="text-gray-700">—</span>}
+                            <div className={`text-[11px] ${edgeColor(r.kalshi_edge_vs_fv)}`}>{r.kalshi_edge_vs_fv != null ? fmtPct(r.kalshi_edge_vs_fv, true) : ''}</div>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => opp && onPlanTrade(r, opp)}
+                          disabled={!r.token_id || !opp}
+                          className="w-full px-3 py-2.5 text-sm rounded-lg bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold disabled:bg-gray-700 disabled:text-gray-500 transition-colors"
+                        >Ladder ↗</button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })
+        )}
+      </div>
+
+      {/* Submarket table (md+ only) */}
+      <div className="hidden md:block bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
         {detail == null && !loading ? (
           <div className="p-6 text-gray-500 text-sm">No Polymarket event found for this matchup.</div>
         ) : (
@@ -831,10 +893,10 @@ function LadderModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={onClose}>
-      <div className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-1 md:p-4" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-full max-w-4xl max-h-[95vh] md:max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
         {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-800 flex items-baseline gap-4 flex-wrap">
+        <div className="px-3 md:px-6 py-3 md:py-4 border-b border-gray-800 flex items-baseline gap-2 md:gap-4 flex-wrap">
           <div>
             <div className="text-xs text-gray-500 uppercase tracking-wide">{thisRow.market_label}</div>
             <div className="text-lg font-bold text-gray-100 mt-0.5">
@@ -866,29 +928,31 @@ function LadderModal({
         </div>
 
         {/* Quick action bar */}
-        <div className="px-6 py-2 border-b border-gray-800 bg-gray-900/40 flex items-center gap-3 text-xs">
-          <span className="text-gray-500">Quick:</span>
+        <div className="px-3 md:px-6 py-2 border-b border-gray-800 bg-gray-900/40 flex flex-wrap items-center gap-2 md:gap-3 text-xs">
+          <span className="text-gray-500 hidden md:inline">Quick:</span>
           <button
             onClick={sellAtBestBid}
             disabled={!secret || !oppTokenId}
-            className="px-3 py-1.5 rounded bg-green-700 hover:bg-green-600 text-white font-bold disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed"
+            className="flex-1 md:flex-none px-3 py-2 md:py-1.5 rounded bg-green-700 hover:bg-green-600 active:bg-green-800 text-white font-bold disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed"
             title="Synthetic-sell at best bid (= BUY opposite outcome at 1−best_bid)">
-            ▼ SELL {thisRow.outcome_label} at best bid
+            ▼ SELL <span className="truncate inline-block max-w-[120px] align-bottom">{thisRow.outcome_label}</span>
           </button>
           <button
             onClick={buyAtBestAsk}
             disabled={!secret || !thisTokenId}
-            className="px-3 py-1.5 rounded bg-red-700 hover:bg-red-600 text-white font-bold disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed"
+            className="flex-1 md:flex-none px-3 py-2 md:py-1.5 rounded bg-red-700 hover:bg-red-600 active:bg-red-800 text-white font-bold disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed"
             title="Buy at best ask (lifts the offer)">
-            ▲ BUY {thisRow.outcome_label} at best ask
+            ▲ BUY <span className="truncate inline-block max-w-[120px] align-bottom">{thisRow.outcome_label}</span>
           </button>
           <span className="text-gray-600 ml-2 hidden md:inline">
             (or click any price cell in the ladder — green BIDS = sell, red ASKS = buy)
           </span>
         </div>
 
-        {/* Ladder + Kalshi side */}
-        <div className="flex-1 overflow-y-auto px-6 py-4 grid gap-6" style={{ gridTemplateColumns: kalshiSide ? '2fr 1fr' : '1fr' }}>
+        {/* Ladder + Kalshi side. On mobile: stack vertically. On md+: side-by-side. */}
+        <div
+          className={`flex-1 overflow-y-auto px-3 md:px-6 py-3 md:py-4 flex flex-col gap-4 md:gap-6 ${kalshiSide ? 'md:grid md:[grid-template-columns:2fr_1fr]' : 'md:grid md:grid-cols-1'}`}
+        >
           {/* Polymarket ladder */}
           <div>
             <div className="text-xs uppercase text-gray-500 tracking-wide mb-2">Polymarket — click to fire</div>
