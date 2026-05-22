@@ -110,7 +110,10 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
     games = games.copy()
     if 'best_of' not in games.columns:
         # Fall back: infer best_of per series from max(game) observed.
-        max_game = games.groupby('gameid_series')['game'].transform('max')
+        # gameid format is "{series_id}-{series_id}_game_{N}", so the series_id
+        # is everything up to the "_game_N" suffix.
+        series_id = games['gameid'].astype(str).str.replace(r'_game_\d+$', '', regex=True)
+        max_game = games.groupby(series_id)['game'].transform('max')
         games['best_of'] = np.where(max_game <= 1, 1, np.where(max_game <= 3, 3, 5))
 
     games['_date_ts']  = pd.to_datetime(games['date'], errors='coerce', utc=True)

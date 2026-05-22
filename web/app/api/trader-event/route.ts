@@ -75,6 +75,10 @@ interface KalshiMatch {
 interface KalshiBundle {
   series_winner: KalshiMatch | null    // KXLOLGAME (Match Winner)
   by_game: Record<number, KalshiMatch> // KXLOLMAP keyed by game number (1, 2, 3, ...)
+  // KXLOLTOTALMAPS — Over/Under total maps played. Keyed by line (e.g., "2.5").
+  // sides[0] = "Over" side (yes_bid/ask of the Kalshi market),
+  // sides[1] = "Under" side (1 − yes_ask, 1 − yes_bid of the same Kalshi market).
+  total_maps: Record<string, KalshiMatch>
 }
 
 interface EventDetail {
@@ -136,12 +140,51 @@ async function fetchKalshiSeries(seriesTicker: string): Promise<Record<string, u
   return (data.markets ?? []) as Record<string, unknown>[]
 }
 
+// Build an O/U KalshiMatch from a single KXLOLTOTALMAPS market.
+//   sides[0] = "Over"  side  → yes_bid/yes_ask  of the Kalshi market
+//   sides[1] = "Under" side  → (1 − yes_ask) / (1 − yes_bid)  of the same market
+function buildOverUnderFromMarket(m: Record<string, unknown>): KalshiMatch | null {
+  const ticker = String(m['ticker'] ?? '')
+  if (!ticker) return null
+  const yb = parseFloat(String(m['yes_bid_dollars'] ?? ''))
+  const ya = parseFloat(String(m['yes_ask_dollars'] ?? ''))
+  const v24 = parseFloat(String(m['volume_24h_fp'] ?? ''))
+  const yes_bid = Number.isFinite(yb) ? yb : null
+  const yes_ask = Number.isFinite(ya) ? ya : null
+  const yes_mid = yes_bid != null && yes_ask != null ? (yes_bid + yes_ask) / 2 : null
+  const overSide: KalshiSide = {
+    team: 'Over', ticker,
+    yes_bid, yes_ask, yes_mid,
+    volume_24h: Number.isFinite(v24) ? v24 : null,
+  }
+  const underSide: KalshiSide = {
+    team: 'Under', ticker,
+    yes_bid: yes_ask != null ? Math.round((1 - yes_ask) * 100) / 100 : null,
+    yes_ask: yes_bid != null ? Math.round((1 - yes_bid) * 100) / 100 : null,
+    yes_mid: yes_mid != null ? Math.round((1 - yes_mid) * 100) / 100 : null,
+    volume_24h: Number.isFinite(v24) ? v24 : null,
+  }
+  return {
+    event_ticker: String(m['event_ticker'] ?? ''),
+    sides: [overSide, underSide],
+  }
+}
+
+// Pull team names out of a KXLOLTOTALMAPS market title like:
+//   "Will over 2.5 maps be played in the BNK FEARX vs. Nongshim Red Force League of Legends match?"
+function parseTeamsFromTotalMapsTitle(title: string): [string, string] | null {
+  const m = title.match(/in the\s+(.+?)\s+vs\.?\s+(.+?)\s+(?:League of Legends|LoL|LCK|LEC|LCS|LPL|EWC|MSI|Worlds)/i)
+  if (!m) return null
+  return [m[1].trim(), m[2].trim()]
+}
+
 async function fetchKalshiBundle(team1: string, team2: string): Promise<KalshiBundle> {
-  const out: KalshiBundle = { series_winner: null, by_game: {} }
+  const out: KalshiBundle = { series_winner: null, by_game: {}, total_maps: {} }
   try {
-    const [seriesMarkets, mapMarkets] = await Promise.all([
-      fetchKalshiSeries('KXLOLGAME'),   // Match Winner (series-level)
-      fetchKalshiSeries('KXLOLMAP'),    // Per-map (per-game) markets
+    const [seriesMarkets, mapMarkets, totalMapsMarkets] = await Promise.all([
+      fetchKalshiSeries('KXLOLGAME'),       // Match Winner (series-level)
+      fetchKalshiSeries('KXLOLMAP'),        // Per-map (per-game) markets
+      fetchKalshiSeries('KXLOLTOTALMAPS'),  // Over/Under total maps played
     ])
 
     const t1c = canonTeam(team1)
@@ -175,6 +218,23 @@ async function fetchKalshiBundle(team1: string, team2: string): Promise<KalshiBu
     for (const { game_num, markets } of Object.values(mapByGroup)) {
       const match = buildMatchFromGroup(markets, t1c, t2c)
       if (match) out.by_game[game_num] = match
+    }
+
+    // 3. Total maps O/U (KXLOLTOTALMAPS): one market per line.
+    // yes_sub_title is "Over X.5 maps". Match by team names parsed from the
+    // market title field, then key by line.
+    for (const m of totalMapsMarkets) {
+      const title = String(m['title'] ?? '')
+      const teams = parseTeamsFromTotalMapsTitle(title)
+      if (!teams) continue
+      const [a, b] = teams.map(canonTeam)
+      if (!({[a]: 1, [b]: 1}[t1c]) || !({[a]: 1, [b]: 1}[t2c])) continue
+      const ysub = String(m['yes_sub_title'] ?? '')
+      const lm = ysub.match(/Over\s+(\d+(?:\.\d+)?)\s+maps?/i)
+      if (!lm) continue
+      const line = lm[1]
+      const km = buildOverUnderFromMarket(m)
+      if (km) out.total_maps[line] = km
     }
   } catch {
     /* swallow — kalshi is best-effort */
@@ -224,6 +284,10 @@ function classifyMarket(q: string, gt: string, eventTitle: string): string | nul
   const gw = gt.match(/^Game\s+(\d+)\s+Winner$/i)
   if (gw) return `game_${gw[1]}_winner`
   if (gt.startsWith('Game Handicap') || q.startsWith('Game Handicap')) return 'game_handicap'
+  // Games Total O/U markets:  gt like "O/U 2.5 Games", q like "Games Total: O/U 2.5"
+  const ou = gt.match(/^O\/U\s+(\d+(?:\.\d+)?)\s+Games?$/i)
+            ?? q.match(/Games?\s+Total[:\s]+O\/U\s+(\d+(?:\.\d+)?)/i)
+  if (ou) return `games_total_${ou[1]}`
   return null
 }
 
@@ -337,18 +401,20 @@ export async function GET(req: Request) {
     })
   })
 
-  // Stable ordering: match winner, game 1..5, handicap
+  // Stable ordering: match winner, game 1..5, games_total (O/U), handicap
   const order = (mt: string) => {
     if (mt === 'match_winner') return 0
     const m = mt.match(/^game_(\d+)_winner$/)
     if (m) return parseInt(m[1], 10)
+    const ou = mt.match(/^games_total_(\d+(?:\.\d+)?)$/)
+    if (ou) return 50 + parseFloat(ou[1])
     if (mt === 'game_handicap') return 99
     return 100
   }
   submarkets.sort((a, b) => order(a.market_type) - order(b.market_type))
 
   // Pull Kalshi for both series-level (Match Winner) and per-game markets
-  const kalshiBundle = team1 && team2 ? await fetchKalshiBundle(team1, team2) : { series_winner: null, by_game: {} }
+  const kalshiBundle: KalshiBundle = team1 && team2 ? await fetchKalshiBundle(team1, team2) : { series_winner: null, by_game: {}, total_maps: {} }
 
   // Attach kalshi_sides per submarket using the bundle.
   // Polymarket outcomes order may differ from Kalshi's; we align by canonical team.
@@ -362,12 +428,26 @@ export async function GET(req: Request) {
     const o0c = canonTeam(outcomes[0])
     return o0c === t1c ? [s0, s1] : [s1, s0]
   }
+  // For Over/Under markets the sides are ["Over", "Under"], not teams.
+  // KalshiBundle.total_maps[line].sides is already pre-ordered [Over, Under],
+  // so we can just align by outcome label.
+  function alignOverUnder(km: KalshiMatch | null, outcomes: [string, string]): [KalshiSide | null, KalshiSide | null] {
+    if (!km) return [null, null]
+    const idxOver = outcomes.findIndex(o => o.trim().toLowerCase() === 'over')
+    const [overSide, underSide] = km.sides
+    if (idxOver === 0) return [overSide, underSide]
+    if (idxOver === 1) return [underSide, overSide]
+    return [overSide, underSide]
+  }
   for (const sm of submarkets) {
     if (sm.market_type === 'match_winner') {
       sm.kalshi_sides = alignSides(kalshiBundle.series_winner, sm.outcomes)
     } else if (sm.market_type.startsWith('game_') && sm.market_type.endsWith('_winner')) {
       const n = parseInt(sm.market_type.replace('game_', '').replace('_winner', ''), 10)
       if (Number.isFinite(n)) sm.kalshi_sides = alignSides(kalshiBundle.by_game[n] ?? null, sm.outcomes)
+    } else if (sm.market_type.startsWith('games_total_')) {
+      const line = sm.market_type.replace('games_total_', '')
+      sm.kalshi_sides = alignOverUnder(kalshiBundle.total_maps[line] ?? null, sm.outcomes)
     }
     // game_handicap intentionally has no Kalshi mapping (no analog on Kalshi)
   }
