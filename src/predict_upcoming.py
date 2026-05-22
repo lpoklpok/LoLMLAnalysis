@@ -341,20 +341,26 @@ def _tournament_to_league(tournament: str | None) -> str | None:
 
 
 def _infer_match_date(event: dict) -> 'pd.Timestamp | None':
-    """Best-effort match start time.
+    """Actual game start time. Polymarket exposes it on the event under several
+    aliases; we try them in priority order, falling back to slug-date midnight
+    UTC if none are present.
 
-    Prefer event.endDate (Polymarket sets this near actual match start time so
-    we get hour precision) and fall back to slug YYYY-MM-DD midnight UTC.
+    NOTE: `endDate` is the market-CLOSE time (typically ~hours after the game
+    ends), not the game start — don't use it as a stand-in for match time.
     """
-    end_date = event.get('endDate')
-    if end_date:
+    for key in ("startTime", "eventStartTime", "gameStartTime"):
+        v = event.get(key)
+        if not v: continue
         try:
-            ts = pd.Timestamp(end_date)
+            # gameStartTime can be 'YYYY-MM-DD HH:MM:SS+00' (space, no T)
+            s = str(v).replace(" ", "T", 1) if "T" not in str(v) else str(v)
+            ts = pd.Timestamp(s)
             if ts.tzinfo is None:
                 ts = ts.tz_localize('UTC')
             return ts
         except Exception:
-            pass
+            continue
+    # Last resort: midnight UTC on the slug date.
     slug = event.get('slug') or ''
     m = _DATE_RE.search(slug)
     if m:
