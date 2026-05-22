@@ -474,23 +474,14 @@ interface KalshiBook { bids: Map<number, number>; asks: Map<number, number>; upd
 async function fetchKalshiBook(ticker: string): Promise<KalshiBook | null> {
   if (!ticker) return null
   try {
-    const r = await fetch(`https://api.elections.kalshi.com/trade-api/v2/markets/${encodeURIComponent(ticker)}/orderbook`)
+    // Hits /api/kalshi-book on Vercel which proxies to Kalshi (CORS workaround).
+    const r = await fetch(`/api/kalshi-book?ticker=${encodeURIComponent(ticker)}`, { cache: 'no-store' })
     if (!r.ok) return null
-    const d = await r.json() as { orderbook?: { yes?: [number, number][], no?: [number, number][] } }
-    const ob = d.orderbook ?? {}
-    // Kalshi book schema: yes = [[cents, size], ...] ascending. We're showing "YES" side for this team.
-    // Convert cents to dollar probabilities and split: yes bids on left, yes asks (which are NO bids inverted) on right.
+    const d = await r.json() as { bids?: [number, number][], asks?: [number, number][] }
     const bids = new Map<number, number>()
     const asks = new Map<number, number>()
-    for (const [cents, sz] of (ob.yes ?? [])) {
-      const px = roundPx(cents / 100)
-      bids.set(px, (bids.get(px) ?? 0) + sz)
-    }
-    // Kalshi "no" entries become "yes asks" via 1-price
-    for (const [cents, sz] of (ob.no ?? [])) {
-      const px = roundPx(1 - cents / 100)
-      asks.set(px, (asks.get(px) ?? 0) + sz)
-    }
+    for (const [p, s] of (d.bids ?? [])) bids.set(roundPx(p), (bids.get(roundPx(p)) ?? 0) + s)
+    for (const [p, s] of (d.asks ?? [])) asks.set(roundPx(p), (asks.get(roundPx(p)) ?? 0) + s)
     return { bids, asks, updated: Date.now() }
   } catch { return null }
 }
@@ -718,7 +709,11 @@ function LadderModal({
             <div className="text-xs uppercase text-gray-500 tracking-wide mb-2">Polymarket — click to fire</div>
             <div className="grid grid-cols-3 gap-px text-xs bg-gray-800 rounded overflow-hidden">
               <div className="bg-gray-900 px-3 py-1.5 text-gray-500 text-right">BID SIZE</div>
-              <div className="bg-gray-900 px-3 py-1.5 text-gray-500 text-center">PRICE</div>
+              <div className="bg-gray-900 px-3 py-1.5 text-center">
+                <span className="text-green-400">BID</span>
+                <span className="text-gray-700 mx-1.5">/</span>
+                <span className="text-red-400">OFFER</span>
+              </div>
               <div className="bg-gray-900 px-3 py-1.5 text-gray-500">ASK SIZE</div>
               {sortedPrices.map(px => {
                 const bidSz = bidsByCent.get(px) ?? 0
@@ -726,6 +721,21 @@ function LadderModal({
                 const isBestBid = px === bestBidC
                 const isBestAsk = px === bestAskC
                 const isInsideSpread = bestBidC != null && bestAskC != null && px > bestBidC && px < bestAskC
+                const isBidZone = bestBidC != null && px <= bestBidC
+                const isAskZone = bestAskC != null && px >= bestAskC
+                // Center column: emphasize what side this price is on.
+                // - At best bid: bright green ("you would SELL here, getting filled vs bids")
+                // - Bid zone (below best bid): dim green (sell side, deeper)
+                // - At best ask: bright red ("you would BUY here, lifting the offer")
+                // - Ask zone (above best ask): dim red (buy side, deeper)
+                // - Inside spread (between bid and ask): blue, where you might rest a passive order
+                let priceBg = 'bg-gray-900 text-gray-500'
+                let priceLabel: string | null = null
+                if (isBestBid) { priceBg = 'bg-green-700/70 text-white font-bold'; priceLabel = 'BID' }
+                else if (isBestAsk) { priceBg = 'bg-red-700/70 text-white font-bold'; priceLabel = 'OFFER' }
+                else if (isInsideSpread) priceBg = 'bg-blue-900/30 text-blue-200'
+                else if (isBidZone) priceBg = 'bg-green-900/30 text-green-300'
+                else if (isAskZone) priceBg = 'bg-red-900/30 text-red-300'
                 return (
                   <Fragment key={px}>
                     <button
@@ -735,8 +745,9 @@ function LadderModal({
                       title={`Click → synthetic SELL ${thisRow.outcome_label} at ${px.toFixed(2)} (= BUY ${oppositeRow.outcome_label} at ${(1-px).toFixed(2)})`}>
                       {bidSz > 0 ? Math.round(bidSz).toLocaleString() : ''}
                     </button>
-                    <div className={`px-3 py-1.5 text-center font-mono font-bold ${isBestBid ? 'bg-green-900/30 text-green-300' : isBestAsk ? 'bg-red-900/30 text-red-300' : isInsideSpread ? 'bg-blue-900/20 text-blue-300' : 'bg-gray-900 text-gray-300'}`}>
-                      {px.toFixed(2)}
+                    <div className={`px-3 py-1.5 text-center font-mono ${priceBg}`}>
+                      <span>{px.toFixed(2)}</span>
+                      {priceLabel && <span className="ml-2 text-[10px] uppercase tracking-wider opacity-80">{priceLabel}</span>}
                     </div>
                     <button
                       onClick={() => onClickAsk(px)}
@@ -751,37 +762,65 @@ function LadderModal({
             </div>
           </div>
 
-          {/* Kalshi (display-only for now) */}
-          {kalshiSide && (
-            <div>
-              <div className="text-xs uppercase text-gray-500 tracking-wide mb-2">
-                Kalshi · {kalshiSide.team}
-                <span className="ml-2 text-gray-700 normal-case">(display only)</span>
-              </div>
-              <div className="grid grid-cols-3 gap-px text-xs bg-gray-800 rounded overflow-hidden">
-                <div className="bg-gray-900 px-2 py-1.5 text-gray-500 text-right">BID</div>
-                <div className="bg-gray-900 px-2 py-1.5 text-gray-500 text-center">PRICE</div>
-                <div className="bg-gray-900 px-2 py-1.5 text-gray-500">ASK</div>
-                {(() => {
-                  const k = kalshiThis ?? { bids: new Map(), asks: new Map(), updated: 0 }
-                  const allPx = new Set<number>([...k.bids.keys(), ...k.asks.keys()])
-                  const px = Array.from(allPx).sort((a, b) => b - a).slice(0, 16)
-                  if (px.length === 0) return <div className="col-span-3 px-3 py-3 text-gray-600 text-center">loading…</div>
-                  return px.map(p => {
+          {/* Kalshi (display-only for now) — aligned to same price band as Polymarket */}
+          {kalshiSide && (() => {
+            const k = kalshiThis ?? { bids: new Map(), asks: new Map(), updated: 0 }
+            // Kalshi's own best bid/ask within its book
+            const kBest = (() => {
+              let bb = -Infinity, ba = Infinity
+              for (const p of k.bids.keys()) if (p > bb) bb = p
+              for (const p of k.asks.keys()) if (p < ba) ba = p
+              return { bb: bb === -Infinity ? null : bb, ba: ba === Infinity ? null : ba }
+            })()
+            const hasData = k.bids.size > 0 || k.asks.size > 0
+            return (
+              <div>
+                <div className="text-xs uppercase text-gray-500 tracking-wide mb-2 flex items-baseline gap-2">
+                  <span>Kalshi · {kalshiSide.team}</span>
+                  <span className="text-gray-700 normal-case">(display only)</span>
+                  {hasData && kBest.bb != null && kBest.ba != null && (
+                    <span className="ml-auto text-[10px] font-mono normal-case">
+                      <span className="text-green-400">{kBest.bb.toFixed(2)}</span>
+                      <span className="text-gray-600"> / </span>
+                      <span className="text-red-400">{kBest.ba.toFixed(2)}</span>
+                    </span>
+                  )}
+                </div>
+                <div className="grid grid-cols-3 gap-px text-xs bg-gray-800 rounded overflow-hidden">
+                  <div className="bg-gray-900 px-2 py-1.5 text-gray-500 text-right">BID</div>
+                  <div className="bg-gray-900 px-2 py-1.5 text-center">
+                    <span className="text-green-400">BID</span>
+                    <span className="text-gray-700 mx-1">/</span>
+                    <span className="text-red-400">OFFER</span>
+                  </div>
+                  <div className="bg-gray-900 px-2 py-1.5 text-gray-500">ASK</div>
+                  {!hasData && (
+                    <div className="col-span-3 px-3 py-3 text-gray-600 text-center">loading Kalshi book…</div>
+                  )}
+                  {hasData && sortedPrices.map(p => {
                     const bs = k.bids.get(p) ?? 0
                     const as_ = k.asks.get(p) ?? 0
+                    const isBB = p === kBest.bb
+                    const isBA = p === kBest.ba
+                    const inside = kBest.bb != null && kBest.ba != null && p > kBest.bb && p < kBest.ba
+                    let centerBg = 'bg-gray-900 text-gray-600'
+                    if (isBB) centerBg = 'bg-green-700/70 text-white font-bold'
+                    else if (isBA) centerBg = 'bg-red-700/70 text-white font-bold'
+                    else if (inside) centerBg = 'bg-blue-900/30 text-blue-200'
+                    else if (kBest.bb != null && p < kBest.bb) centerBg = 'bg-green-900/20 text-green-400'
+                    else if (kBest.ba != null && p > kBest.ba) centerBg = 'bg-red-900/20 text-red-400'
                     return (
                       <Fragment key={p}>
-                        <div className={`px-2 py-1 text-right font-mono ${bs > 0 ? 'bg-green-900/20 text-green-300' : 'bg-gray-900 text-gray-700'}`}>{bs > 0 ? Math.round(bs).toLocaleString() : ''}</div>
-                        <div className="px-2 py-1 text-center font-mono bg-gray-900 text-gray-200">{p.toFixed(2)}</div>
-                        <div className={`px-2 py-1 font-mono ${as_ > 0 ? 'bg-red-900/20 text-red-300' : 'bg-gray-900 text-gray-700'}`}>{as_ > 0 ? Math.round(as_).toLocaleString() : ''}</div>
+                        <div className={`px-2 py-1 text-right font-mono ${bs > 0 ? (isBB ? 'bg-green-900/60 text-green-200' : 'bg-green-900/20 text-green-300') : 'bg-gray-900 text-gray-700'}`}>{bs > 0 ? Math.round(bs).toLocaleString() : ''}</div>
+                        <div className={`px-2 py-1 text-center font-mono ${centerBg}`}>{p.toFixed(2)}</div>
+                        <div className={`px-2 py-1 font-mono ${as_ > 0 ? (isBA ? 'bg-red-900/60 text-red-200' : 'bg-red-900/20 text-red-300') : 'bg-gray-900 text-gray-700'}`}>{as_ > 0 ? Math.round(as_).toLocaleString() : ''}</div>
                       </Fragment>
                     )
-                  })
-                })()}
+                  })}
+                </div>
               </div>
-            </div>
-          )}
+            )
+          })()}
         </div>
 
         {/* Activity log */}
