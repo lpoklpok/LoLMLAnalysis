@@ -47,6 +47,8 @@ interface Submarket {
   question: string
   outcomes: [string, string]
   outcome_mids: [number, number]
+  outcome_bids: [number | null, number | null]
+  outcome_asks: [number | null, number | null]
   token_ids: [string | null, string | null]   // CLOB token ids — needed to place orders
   mid_source: 'clob_mid' | 'gamma_last'
   volume: number
@@ -149,6 +151,30 @@ async function fetchMid(tokenId: string | null | undefined): Promise<number | nu
   } catch { return null }
 }
 
+interface BookSnap { best_bid: number | null; best_ask: number | null }
+
+async function fetchTopOfBook(tokenId: string | null | undefined): Promise<BookSnap> {
+  if (!tokenId) return { best_bid: null, best_ask: null }
+  try {
+    const url = new URL('https://clob.polymarket.com/book')
+    url.searchParams.set('token_id', tokenId)
+    const r = await fetch(url.toString(), { cache: 'no-store' })
+    if (!r.ok) return { best_bid: null, best_ask: null }
+    const d = await r.json() as { bids?: Array<{ price: string; size: string }>; asks?: Array<{ price: string; size: string }> }
+    let bb: number | null = null
+    let ba: number | null = null
+    for (const lvl of d.bids ?? []) {
+      const p = parseFloat(lvl.price); const s = parseFloat(lvl.size)
+      if (Number.isFinite(p) && Number.isFinite(s) && s > 0 && (bb == null || p > bb)) bb = p
+    }
+    for (const lvl of d.asks ?? []) {
+      const p = parseFloat(lvl.price); const s = parseFloat(lvl.size)
+      if (Number.isFinite(p) && Number.isFinite(s) && s > 0 && (ba == null || p < ba)) ba = p
+    }
+    return { best_bid: bb, best_ask: ba }
+  } catch { return { best_bid: null, best_ask: null } }
+}
+
 function classifyMarket(q: string, gt: string, eventTitle: string): string | null {
   if (gt === 'Match Winner' || q === eventTitle) return 'match_winner'
   const gw = gt.match(/^Game\s+(\d+)\s+Winner$/i)
@@ -239,14 +265,18 @@ export async function GET(req: Request) {
       volume: parseFloat(String(m['volume'] ?? '0')) || 0,
     })
   }
-  // Parallel CLOB midpoint lookups
-  const mids = await Promise.all(pending.flatMap(p => [
+  // Parallel CLOB lookups: midpoint + top-of-book for each token
+  const midsAndBooks = await Promise.all(pending.flatMap(p => [
     fetchMid(p.token_ids[0]),
     fetchMid(p.token_ids[1]),
+    fetchTopOfBook(p.token_ids[0]),
+    fetchTopOfBook(p.token_ids[1]),
   ]))
   pending.forEach((p, i) => {
-    const m1 = mids[i * 2]
-    const m2 = mids[i * 2 + 1]
+    const m1 = midsAndBooks[i * 4]     as number | null
+    const m2 = midsAndBooks[i * 4 + 1] as number | null
+    const b1 = midsAndBooks[i * 4 + 2] as BookSnap
+    const b2 = midsAndBooks[i * 4 + 3] as BookSnap
     const mid1 = m1 ?? p.gamma_prices[0]
     const mid2 = m2 ?? (1 - mid1)
     submarkets.push({
@@ -254,6 +284,8 @@ export async function GET(req: Request) {
       question:     p.question,
       outcomes:     p.outcomes,
       outcome_mids: [mid1, mid2],
+      outcome_bids: [b1.best_bid, b2.best_bid],
+      outcome_asks: [b1.best_ask, b2.best_ask],
       token_ids:    p.token_ids,
       mid_source:   m1 !== null && m2 !== null ? 'clob_mid' : 'gamma_last',
       volume:       p.volume,

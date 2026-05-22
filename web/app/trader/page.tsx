@@ -26,6 +26,8 @@ interface Submarket {
   question: string
   outcomes: [string, string]
   outcome_mids: [number, number]
+  outcome_bids: [number | null, number | null]
+  outcome_asks: [number | null, number | null]
   token_ids: [string | null, string | null]
   mid_source: 'clob_mid' | 'gamma_last'
   volume: number
@@ -161,6 +163,8 @@ interface Row {
   outcome_label: string
   token_id: string | null      // Polymarket CLOB token id for this outcome (needed for orders)
   fv: number | null
+  bid: number | null
+  ask: number | null
   mid: number | null
   edge: number | null
   mid_source: 'clob_mid' | 'gamma_last'
@@ -219,6 +223,8 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
       outcome_label:  o1,
       token_id:       sm.token_ids?.[0] ?? null,
       fv:             fv1,
+      bid:            sm.outcome_bids?.[0] ?? null,
+      ask:            sm.outcome_asks?.[0] ?? null,
       mid:            mid1,
       edge:           fv1 != null && mid1 != null ? fv1 - mid1 : null,
       mid_source:     sm.mid_source,
@@ -234,6 +240,8 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
       outcome_label:  o2,
       token_id:       sm.token_ids?.[1] ?? null,
       fv:             fv2,
+      bid:            sm.outcome_bids?.[1] ?? null,
+      ask:            sm.outcome_asks?.[1] ?? null,
       mid:            mid2,
       edge:           fv2 != null && mid2 != null ? fv2 - mid2 : null,
       mid_source:     sm.mid_source,
@@ -248,7 +256,7 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
 }
 
 function MainPanel({
-  pred, detail, loading, lastRefreshed, onRefresh, onPlanTrade,
+  pred, detail, loading, lastRefreshed, onRefresh, onPlanTrade, positions,
 }: {
   pred: Prediction
   detail: EventDetail | null
@@ -256,8 +264,37 @@ function MainPanel({
   lastRefreshed: Date | null
   onRefresh: () => void
   onPlanTrade: (thisRow: Row, oppositeRow: Row) => void
+  positions: PolyPosition[]
 }) {
   const rows = useMemo(() => buildRows(pred, detail), [pred, detail])
+
+  // Build a fast lookup: token_id → position
+  const positionByToken = useMemo(() => {
+    const m = new Map<string, PolyPosition>()
+    for (const p of positions) {
+      const id = p.asset ?? p.tokenId ?? p.token_id
+      if (id) m.set(String(id), p)
+    }
+    return m
+  }, [positions])
+
+  // For the banner: collect all positions belonging to this event's submarkets
+  const eventTokens = useMemo(() => {
+    const out: { token_id: string; outcome: string; market: string; mid: number | null }[] = []
+    for (const sm of detail?.submarkets ?? []) {
+      const [t1, t2] = sm.token_ids ?? [null, null]
+      const market = sm.market_type === 'match_winner' ? 'Match Winner' :
+        sm.market_type.startsWith('game_') ? sm.market_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) :
+        sm.market_type
+      if (t1) out.push({ token_id: t1, outcome: sm.outcomes[0], market, mid: sm.outcome_mids[0] })
+      if (t2) out.push({ token_id: t2, outcome: sm.outcomes[1], market, mid: sm.outcome_mids[1] })
+    }
+    return out
+  }, [detail])
+
+  const eventPositions = eventTokens
+    .map(t => ({ ...t, pos: positionByToken.get(t.token_id) }))
+    .filter(t => t.pos && Math.abs(num(t.pos.size)) > 0.0001)
 
   return (
     <div className="p-6 space-y-6">
@@ -289,6 +326,45 @@ function MainPanel({
           {loading ? 'refreshing…' : 'refresh'}
         </button>
       </div>
+
+      {/* Positions banner — only renders if there are open positions in this event */}
+      {eventPositions.length > 0 && (
+        <div className="bg-gradient-to-r from-blue-950/60 to-purple-950/60 border border-blue-900/60 rounded-xl p-4">
+          <div className="text-xs uppercase tracking-wide text-blue-300 mb-2 flex items-baseline gap-3">
+            <span>Open positions in this event</span>
+            <span className="text-[10px] text-gray-500 normal-case">live · refreshes every 5s</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+            {eventPositions.map(t => {
+              const size = num(t.pos!.size)
+              const avg  = num(t.pos!.avgPrice)
+              const mid  = t.mid ?? 0
+              const mtm  = size * (mid - avg)
+              const pnl  = num(t.pos!.cashPnl) + num(t.pos!.realizedPnl)
+              return (
+                <div key={t.token_id} className="bg-gray-900/60 border border-gray-800 rounded-md px-3 py-2">
+                  <div className="flex items-baseline justify-between">
+                    <div className="font-medium text-gray-100">{t.outcome}</div>
+                    <div className="text-[10px] text-gray-500">{t.market}</div>
+                  </div>
+                  <div className="flex items-baseline gap-3 mt-1 text-xs font-mono">
+                    <span className="text-gray-400">{size > 0 ? '+' : ''}{size.toFixed(2)} @ {avg.toFixed(3)}</span>
+                    <span className="text-gray-500">mid {mid.toFixed(3)}</span>
+                    <span className={`ml-auto ${mtm >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      mtm {mtm >= 0 ? '+' : ''}${mtm.toFixed(2)}
+                    </span>
+                    {pnl !== 0 && (
+                      <span className={`${pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                        pnl {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Feature snapshot */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-wrap gap-x-8 gap-y-2 text-sm">
@@ -336,9 +412,9 @@ function MainPanel({
                 <th></th>
                 <th></th>
                 <th></th>
-                <th className="text-right px-4 pb-2 font-normal">Mid</th>
+                <th className="text-right px-4 pb-2 font-normal"><span className="text-green-500">BID</span> · <span className="text-red-400">OFFER</span></th>
                 <th className="text-right px-4 pb-2 font-normal">Edge</th>
-                <th className="text-right px-4 pb-2 font-normal border-l border-gray-800">Bid/Ask · Mid</th>
+                <th className="text-right px-4 pb-2 font-normal border-l border-gray-800"><span className="text-green-500">BID</span> · <span className="text-red-400">OFFER</span></th>
                 <th className="text-right px-4 pb-2 font-normal">Edge</th>
                 <th></th>
               </tr>
@@ -354,8 +430,16 @@ function MainPanel({
                     </td>
                     <td className="px-4 py-2 text-gray-200">{r.outcome_label}</td>
                     <td className="px-4 py-2 text-right tabular-nums text-gray-300 font-mono">{fmtPct(r.fv)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums text-gray-300 font-mono">
-                      {fmtPct(r.mid)}
+                    <td className="px-4 py-2 text-right tabular-nums font-mono text-xs">
+                      {r.bid != null || r.ask != null ? (
+                        <span>
+                          <span className="text-green-400">{r.bid != null ? (r.bid * 100).toFixed(1) : '–'}</span>
+                          <span className="text-gray-700 mx-1">·</span>
+                          <span className="text-red-400">{r.ask != null ? (r.ask * 100).toFixed(1) : '–'}</span>
+                        </span>
+                      ) : (
+                        <span className="text-gray-300">{fmtPct(r.mid)}</span>
+                      )}
                       {r.mid_source === 'gamma_last' && (
                         <span title="No CLOB book, showing last trade" className="ml-1 text-amber-500 text-[10px]">⚠</span>
                       )}
@@ -430,6 +514,34 @@ async function placeOrder(secret: string, req: RelayOrderRequest): Promise<Relay
   try { body = await r.json() } catch { body = { detail: 'invalid JSON response' } }
   if (!r.ok) return { ok: false, detail: (body as { detail?: string }).detail ?? `HTTP ${r.status}` }
   return body as RelayOrderResponse
+}
+
+interface PolyPosition {
+  asset?: string; tokenId?: string; token_id?: string
+  size?: string | number
+  avgPrice?: string | number
+  initialValue?: string | number
+  currentValue?: string | number
+  cashPnl?: string | number
+  realizedPnl?: string | number
+  outcome?: string
+  title?: string
+}
+
+async function fetchPositions(secret: string): Promise<PolyPosition[]> {
+  try {
+    const r = await fetch(`${RELAY_URL}/positions`, { headers: { 'X-Relay-Auth': secret }, cache: 'no-store' })
+    if (!r.ok) return []
+    const d = await r.json()
+    if (Array.isArray(d)) return d as PolyPosition[]
+    return []
+  } catch { return [] }
+}
+
+function num(x: string | number | undefined): number {
+  if (x == null) return 0
+  const n = typeof x === 'number' ? x : parseFloat(x)
+  return Number.isFinite(n) ? n : 0
 }
 
 // ── Ladder modal (live book + click-to-trade) ─────────────────────────────
@@ -905,6 +1017,7 @@ export default function TraderPage() {
   const [error, setError] = useState<string | null>(null)
   const [relaySecret, setRelaySecret] = useState<string | null>(null)
   const [ladderPlan, setLadderPlan] = useState<LadderPlan | null>(null)
+  const [positions, setPositions] = useState<PolyPosition[]>([])
   const detailReqId = useRef(0)
 
   // Load saved relay secret from localStorage
@@ -968,6 +1081,19 @@ export default function TraderPage() {
     return () => clearInterval(interval)
   }, [selectedSlug, refreshDetail])
 
+  // Poll positions when relay is connected
+  useEffect(() => {
+    if (!relaySecret) { setPositions([]); return }
+    let cancelled = false
+    async function poll() {
+      const ps = await fetchPositions(relaySecret!)
+      if (!cancelled) setPositions(ps)
+    }
+    poll()
+    const interval = setInterval(poll, 5_000)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [relaySecret])
+
   // j/k + ↑/↓ keyboard navigation
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -1021,6 +1147,7 @@ export default function TraderPage() {
               loading={loadingDetail}
               lastRefreshed={lastRefreshed}
               onRefresh={refreshDetail}
+              positions={positions}
               onPlanTrade={(thisRow, oppositeRow) => {
                 // Find kalshi sides if this is the match_winner row
                 const kalshi = detail?.kalshi
