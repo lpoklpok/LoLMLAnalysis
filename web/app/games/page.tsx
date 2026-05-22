@@ -20,10 +20,15 @@ interface Game {
   rwr_diff: number | null
   gd15_diff: number | null
   outperf_diff: number | null
-  q_blue_win: number | null
+  q_blue_win: number | null            // oddsportal-derived market prob
+  poly_blue_win_prob: number | null    // Polymarket-derived market prob (newer source)
+  poly_source: string | null
   model_pred: number | null
   game_in_series: number | null
   series_type: string | null
+  // Derived: q_blue_win when present, else poly_blue_win_prob
+  effective_market: number | null
+  market_source: 'oddsportal' | 'polymarket' | null
   mkt_model_abs: number | null
   ll_diff: number | null
 }
@@ -51,8 +56,8 @@ const COLS: { key: SortKey; label: string; fmt?: (v: number) => string; width?: 
   { key: 'blue_win',       label: 'Result',      width: 'w-16' },
   { key: 'series_type',    label: 'Series',      width: 'w-12' },
   { key: 'game_in_series', label: 'Game',        width: 'w-10' },
-  { key: 'model_pred',     label: 'Model',       fmt: v => `${(v*100).toFixed(0)}%` },
-  { key: 'q_blue_win',     label: 'Market',      fmt: v => `${(v*100).toFixed(0)}%` },
+  { key: 'model_pred',      label: 'Model',       fmt: v => `${(v*100).toFixed(0)}%` },
+  { key: 'effective_market',label: 'Market',      fmt: v => `${(v*100).toFixed(0)}%` },
   { key: 'elo_diff',       label: 'ELO Δ',       fmt: v => (v>=0?'+':'')+v.toFixed(0) },
   { key: 'h2h_wr',         label: 'H2H',         fmt: v => `${(v*100).toFixed(0)}%` },
   { key: 'rwr_diff',       label: 'WR Δ',        fmt: v => (v>=0?'+':'')+`${(v*100).toFixed(0)}%` },
@@ -66,7 +71,7 @@ const PIVOT_COLS: { key: PivotSortKey; label: string; fmt: (v: number) => string
   { key: 'team',             label: 'Team',         fmt: v => String(v),                          tip: 'Team name' },
   { key: 'games',            label: 'Games',        fmt: v => v.toFixed(0),                       tip: 'Total games in filtered set' },
   { key: 'win_rate',         label: 'Win %',        fmt: v => `${(v*100).toFixed(1)}%`,           tip: 'Win rate' },
-  { key: 'odds_games',       label: 'W/ Odds',      fmt: v => v.toFixed(0),                       tip: 'Games with Polymarket odds' },
+  { key: 'odds_games',       label: 'W/ Odds',      fmt: v => v.toFixed(0),                       tip: 'Games with any market odds (oddsportal or Polymarket)' },
   { key: 'avg_ll_diff',      label: 'Avg MktLL−MdlLL', fmt: v => (v>=0?'+':'')+v.toFixed(3),    tip: 'Avg per-game (market LL − model LL). Positive = model outperformed market.' },
   { key: 'avg_mkt_model_abs', label: 'Avg |Mkt−Model|', fmt: v => `${(v*100).toFixed(1)}pp`,   tip: 'Average absolute market vs model disagreement' },
 ]
@@ -84,7 +89,7 @@ function cellColor(col: typeof COLS[0], val: unknown): string {
   const v = val as number
   if (col.key === 'blue_win') return v === 1 ? 'text-blue-400 font-semibold' : 'text-red-400 font-semibold'
   if (col.key === 'model_pred') return v >= 0.6 ? 'text-blue-400' : v <= 0.4 ? 'text-red-400' : 'text-gray-300'
-  if (col.key === 'q_blue_win') return v >= 0.6 ? 'text-blue-400' : v <= 0.4 ? 'text-red-400' : 'text-gray-300'
+  if (col.key === 'effective_market') return v >= 0.6 ? 'text-blue-400' : v <= 0.4 ? 'text-red-400' : 'text-gray-300'
   if (col.key === 'elo_diff' || col.key === 'rwr_diff' || col.key === 'gd15_diff' || col.key === 'outperf_diff') {
     return v > 0 ? 'text-blue-400' : v < 0 ? 'text-red-400' : 'text-gray-400'
   }
@@ -128,19 +133,24 @@ export default function GamesPage() {
         .order('date', { ascending: false })
       setGames((data ?? []).map(g => {
         const outcome = g.blue_win
-        const mkt = g.q_blue_win
         const mdl = g.model_pred
-        const mkt_model_abs = (mkt != null && mdl != null)
-          ? Math.round(Math.abs(mkt - mdl) * 100) / 100
+        // Coalesce: oddsportal first (historical coverage), fall back to Polymarket
+        const effective_market: number | null = g.q_blue_win ?? g.poly_blue_win_prob ?? null
+        const market_source: 'oddsportal' | 'polymarket' | null =
+          g.q_blue_win != null ? 'oddsportal'
+          : g.poly_blue_win_prob != null ? 'polymarket'
+          : null
+        const mkt_model_abs = (effective_market != null && mdl != null)
+          ? Math.round(Math.abs(effective_market - mdl) * 100) / 100
           : null
         let ll_diff: number | null = null
-        if (mkt != null && mdl != null) {
+        if (effective_market != null && mdl != null) {
           const clamp = (p: number) => Math.max(1e-6, Math.min(1 - 1e-6, p))
-          const mkt_ll = outcome === 1 ? -Math.log(clamp(mkt)) : -Math.log(clamp(1 - mkt))
+          const mkt_ll = outcome === 1 ? -Math.log(clamp(effective_market)) : -Math.log(clamp(1 - effective_market))
           const mdl_ll = outcome === 1 ? -Math.log(clamp(mdl)) : -Math.log(clamp(1 - mdl))
           ll_diff = Math.round((mkt_ll - mdl_ll) * 1000) / 1000
         }
-        return { ...g, mkt_model_abs, ll_diff }
+        return { ...g, effective_market, market_source, mkt_model_abs, ll_diff }
       }))
       setLoading(false)
     }
