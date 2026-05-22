@@ -26,6 +26,7 @@ interface Submarket {
   question: string
   outcomes: [string, string]
   outcome_mids: [number, number]
+  token_ids: [string | null, string | null]
   mid_source: 'clob_mid' | 'gamma_last'
   volume: number
 }
@@ -157,6 +158,7 @@ interface Row {
   market_type: string
   market_label: string
   outcome_label: string
+  token_id: string | null      // Polymarket CLOB token id for this outcome (needed for orders)
   fv: number | null
   mid: number | null
   edge: number | null
@@ -214,6 +216,7 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
       market_type:    sm.market_type,
       market_label,
       outcome_label:  o1,
+      token_id:       sm.token_ids?.[0] ?? null,
       fv:             fv1,
       mid:            mid1,
       edge:           fv1 != null && mid1 != null ? fv1 - mid1 : null,
@@ -228,6 +231,7 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
       market_type:    sm.market_type,
       market_label,
       outcome_label:  o2,
+      token_id:       sm.token_ids?.[1] ?? null,
       fv:             fv2,
       mid:            mid2,
       edge:           fv2 != null && mid2 != null ? fv2 - mid2 : null,
@@ -243,13 +247,15 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
 }
 
 function MainPanel({
-  pred, detail, loading, lastRefreshed, onRefresh,
+  pred, detail, loading, lastRefreshed, onRefresh, onPlanTrade, relayReady,
 }: {
   pred: Prediction
   detail: EventDetail | null
   loading: boolean
   lastRefreshed: Date | null
   onRefresh: () => void
+  onPlanTrade: (row: Row) => void
+  relayReady: boolean
 }) {
   const rows = useMemo(() => buildRows(pred, detail), [pred, detail])
 
@@ -371,18 +377,12 @@ function MainPanel({
                       {r.kalshi_edge_vs_fv != null ? fmtPct(r.kalshi_edge_vs_fv, true) : ''}
                     </td>
                     <td className="px-4 py-2 text-right">
-                      <div className="inline-flex gap-1">
-                        <button
-                          disabled
-                          title="Trade execution coming in v2"
-                          className="px-2 py-1 text-[10px] rounded bg-green-900/40 text-green-500 cursor-not-allowed opacity-50"
-                        >Buy</button>
-                        <button
-                          disabled
-                          title="Trade execution coming in v2"
-                          className="px-2 py-1 text-[10px] rounded bg-red-900/40 text-red-500 cursor-not-allowed opacity-50"
-                        >Sell</button>
-                      </div>
+                      <button
+                        onClick={() => onPlanTrade(r)}
+                        disabled={!relayReady || !r.token_id}
+                        title={!relayReady ? 'Connect trader relay first' : !r.token_id ? 'Missing token id' : `Buy ${r.outcome_label} via Toronto relay`}
+                        className="px-3 py-1 text-xs rounded bg-green-600 hover:bg-green-500 text-white disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed transition-colors"
+                      >Buy</button>
                     </td>
                   </tr>
                 )
@@ -392,6 +392,230 @@ function MainPanel({
         )}
       </div>
     </div>
+  )
+}
+
+// ── Relay client (browser → Fly Toronto → Polymarket) ─────────────────────
+
+const RELAY_URL = 'https://kw-polymarket-trader-relay.fly.dev'
+const SIZE_PRESETS = [100, 500, 1000, 5000]
+
+interface RelayOrderRequest {
+  token_id:    string
+  side:        'BUY' | 'SELL'
+  price:       number
+  size:        number
+  order_type:  'FAK' | 'GTD'
+  gtd_seconds?: number
+}
+
+interface RelayOrderResponse {
+  ok: boolean
+  elapsed_ms?: number
+  response?: unknown
+  detail?: string
+}
+
+async function placeOrder(secret: string, req: RelayOrderRequest): Promise<RelayOrderResponse> {
+  const r = await fetch(`${RELAY_URL}/order`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Relay-Auth': secret },
+    body: JSON.stringify(req),
+  })
+  let body: RelayOrderResponse | { detail: string }
+  try { body = await r.json() } catch { body = { detail: 'invalid JSON response' } }
+  if (!r.ok) return { ok: false, detail: (body as { detail?: string }).detail ?? `HTTP ${r.status}` }
+  return body as RelayOrderResponse
+}
+
+// ── Trade modal ────────────────────────────────────────────────────────────
+
+interface TradePlan {
+  row: Row
+  side: 'BUY'           // sells are not supported yet — clicking SELL on outcome = BUY on opposite outcome (manual for now)
+  pair_outcome: string  // label shown in title
+}
+
+function TradeModal({
+  plan, secret, onClose,
+}: {
+  plan: TradePlan
+  secret: string | null
+  onClose: () => void
+}) {
+  const [size, setSize] = useState<number>(100)
+  const [orderType, setOrderType] = useState<'FAK' | 'GTD'>('FAK')
+  // Default price = current mid for FAK (will execute against the book) or mid for GTD
+  const [price, setPrice] = useState<number>(() => Math.round((plan.row.mid ?? 0.5) * 1000) / 1000)
+  const [submitting, setSubmitting] = useState(false)
+  const [result, setResult] = useState<RelayOrderResponse | null>(null)
+
+  const tokenId = plan.row.token_id
+  const canSubmit = !!tokenId && !!secret && size > 0 && price > 0 && price < 1 && !submitting
+
+  async function submit() {
+    if (!tokenId || !secret) return
+    setSubmitting(true)
+    setResult(null)
+    const t0 = Date.now()
+    const resp = await placeOrder(secret, {
+      token_id:   tokenId,
+      side:       plan.side,
+      price,
+      size,
+      order_type: orderType,
+      gtd_seconds: orderType === 'GTD' ? 300 : undefined,
+    })
+    setSubmitting(false)
+    setResult({ ...resp, elapsed_ms: resp.elapsed_ms ?? Date.now() - t0 })
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-xl w-[480px] p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-baseline justify-between mb-4">
+          <div>
+            <div className="text-xs text-gray-500 uppercase tracking-wide">{plan.row.market_label}</div>
+            <div className="text-lg font-bold text-gray-100 mt-0.5">
+              BUY <span className="text-green-400">{plan.row.outcome_label}</span>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-xl leading-none">×</button>
+        </div>
+
+        {plan.row.fv != null && (
+          <div className="bg-gray-800/60 rounded-md p-3 mb-4 text-sm space-y-1">
+            <div className="flex justify-between"><span className="text-gray-500">Model fair value</span><span className="font-mono text-gray-100">{fmtPct(plan.row.fv)}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">Market mid</span><span className="font-mono text-gray-100">{fmtPct(plan.row.mid)}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">Edge</span><span className={`font-mono ${edgeColor(plan.row.edge)}`}>{plan.row.edge != null ? fmtPct(plan.row.edge, true) : '—'}</span></div>
+          </div>
+        )}
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Size (shares)</label>
+            <div className="flex gap-1.5">
+              {SIZE_PRESETS.map(s => (
+                <button key={s} onClick={() => setSize(s)}
+                  className={`flex-1 py-1.5 rounded text-sm font-mono ${size === s ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>
+                  {s.toLocaleString()}
+                </button>
+              ))}
+              <input
+                type="number"
+                value={size}
+                onChange={e => setSize(parseFloat(e.target.value) || 0)}
+                className="w-24 px-2 py-1.5 text-sm font-mono bg-gray-800 text-gray-100 rounded border border-gray-700 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+          </div>
+
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className="block text-xs text-gray-500 mb-1">Price</label>
+              <input
+                type="number" step="0.001" min="0.001" max="0.999"
+                value={price}
+                onChange={e => setPrice(parseFloat(e.target.value) || 0)}
+                className="w-full px-3 py-1.5 text-sm font-mono bg-gray-800 text-gray-100 rounded border border-gray-700 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+            <div className="flex-1">
+              <label className="block text-xs text-gray-500 mb-1">Type</label>
+              <div className="flex gap-1.5">
+                {(['FAK', 'GTD'] as const).map(t => (
+                  <button key={t} onClick={() => setOrderType(t)}
+                    className={`flex-1 py-1.5 rounded text-sm ${orderType === t ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>
+                    {t === 'FAK' ? 'IOC' : 'GTD 5m'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-gray-800/40 rounded-md p-2 text-xs text-gray-400 font-mono">
+            Notional: <span className="text-gray-100">${(size * price).toFixed(2)}</span>
+            {(size * price < 1) && <span className="text-red-400 ml-2">⚠ below Polymarket $1 min</span>}
+          </div>
+
+          <button
+            onClick={submit}
+            disabled={!canSubmit}
+            className="w-full py-3 rounded-md font-bold text-white bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed transition-colors"
+          >
+            {submitting
+              ? 'Sending…'
+              : !secret
+                ? 'Set RELAY_SECRET in Settings first'
+                : !tokenId
+                  ? 'No token ID for this submarket'
+                  : `BUY ${size.toLocaleString()} @ ${price.toFixed(3)}`}
+          </button>
+
+          {result && (
+            <div className={`mt-2 p-3 rounded-md text-xs font-mono ${result.ok ? 'bg-green-900/40 text-green-300 border border-green-800' : 'bg-red-900/40 text-red-300 border border-red-800'}`}>
+              <div className="font-bold mb-1">
+                {result.ok ? '✓ submitted' : '✗ failed'} {result.elapsed_ms != null && <span className="text-gray-500 ml-2">{result.elapsed_ms}ms</span>}
+              </div>
+              <pre className="whitespace-pre-wrap break-all text-[11px]">
+                {JSON.stringify(result.response ?? result.detail, null, 2)}
+              </pre>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Settings widget (relay secret) ─────────────────────────────────────────
+
+function RelaySettings({ secret, onSave }: { secret: string | null; onSave: (s: string | null) => void }) {
+  const [open, setOpen] = useState(false)
+  const [value, setValue] = useState(secret ?? '')
+  return (
+    <>
+      <button
+        onClick={() => { setValue(secret ?? ''); setOpen(true) }}
+        className={`text-xs px-2 py-1 rounded transition-colors ${secret ? 'bg-green-900/40 text-green-400 hover:bg-green-900/60' : 'bg-amber-900/40 text-amber-400 hover:bg-amber-900/60'}`}
+        title={secret ? 'Trader relay configured. Click to reconfigure.' : 'Set X-Relay-Auth to enable trading.'}
+      >
+        {secret ? '✓ Trader connected' : 'Connect trader…'}
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={() => setOpen(false)}>
+          <div className="bg-gray-900 border border-gray-700 rounded-xl w-[520px] p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="text-lg font-bold text-gray-100 mb-2">Connect trader relay</div>
+            <p className="text-xs text-gray-500 mb-4">
+              Paste your <span className="font-mono text-gray-300">RELAY_SECRET</span> from <code className="font-mono text-gray-300">/tmp/relay_secret.txt</code> or
+              wherever you saved it. Stored in browser localStorage only — never sent to Vercel.
+              Relay endpoint: <span className="font-mono text-gray-400">{RELAY_URL}</span>
+            </p>
+            <input
+              type="password"
+              autoFocus
+              placeholder="64-char hex string"
+              value={value}
+              onChange={e => setValue(e.target.value)}
+              className="w-full px-3 py-2 text-sm font-mono bg-gray-800 text-gray-100 rounded border border-gray-700 focus:outline-none focus:border-blue-500"
+            />
+            <div className="flex justify-between mt-4">
+              <button
+                onClick={() => { onSave(null); setOpen(false) }}
+                className="text-xs text-red-400 hover:text-red-300"
+              >Clear stored secret</button>
+              <div className="flex gap-2">
+                <button onClick={() => setOpen(false)} className="px-3 py-1.5 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
+                <button
+                  onClick={() => { onSave(value.trim() || null); setOpen(false) }}
+                  className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded"
+                >Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   )
 }
 
@@ -405,7 +629,22 @@ export default function TraderPage() {
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [relaySecret, setRelaySecret] = useState<string | null>(null)
+  const [tradePlan, setTradePlan] = useState<TradePlan | null>(null)
   const detailReqId = useRef(0)
+
+  // Load saved relay secret from localStorage
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const s = window.localStorage.getItem('relay_secret')
+    if (s) setRelaySecret(s)
+  }, [])
+  const saveRelaySecret = useCallback((s: string | null) => {
+    setRelaySecret(s)
+    if (typeof window === 'undefined') return
+    if (s) window.localStorage.setItem('relay_secret', s)
+    else window.localStorage.removeItem('relay_secret')
+  }, [])
 
   // Load predictions on mount
   useEffect(() => {
@@ -482,6 +721,7 @@ export default function TraderPage() {
       <header className="border-b border-gray-800 px-6 py-3 flex items-baseline gap-6">
         <Link href="/" className="text-sm text-gray-400 hover:text-gray-200">← Home</Link>
         <span className="text-lg font-bold text-blue-400">Trader Cockpit</span>
+        <RelaySettings secret={relaySecret} onSave={saveRelaySecret} />
         <Link href="/predictions" className="text-sm text-gray-400 hover:text-gray-200 ml-auto">Predictions</Link>
         <Link href="/findings" className="text-sm text-gray-400 hover:text-gray-200">Findings</Link>
       </header>
@@ -507,12 +747,21 @@ export default function TraderPage() {
               loading={loadingDetail}
               lastRefreshed={lastRefreshed}
               onRefresh={refreshDetail}
+              onPlanTrade={r => setTradePlan({ row: r, side: 'BUY', pair_outcome: r.outcome_label })}
+              relayReady={!!relaySecret}
             />
           ) : (
             <div className="p-6 text-gray-500 text-sm">Select an event.</div>
           )}
         </main>
       </div>
+      {tradePlan && (
+        <TradeModal
+          plan={tradePlan}
+          secret={relaySecret}
+          onClose={() => setTradePlan(null)}
+        />
+      )}
     </div>
   )
 }

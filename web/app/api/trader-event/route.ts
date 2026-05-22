@@ -47,6 +47,7 @@ interface Submarket {
   question: string
   outcomes: [string, string]
   outcome_mids: [number, number]
+  token_ids: [string | null, string | null]   // CLOB token ids — needed to place orders
   mid_source: 'clob_mid' | 'gamma_last'
   volume: number
 }
@@ -251,6 +252,7 @@ export async function GET(req: Request) {
       question:     p.question,
       outcomes:     p.outcomes,
       outcome_mids: [mid1, mid2],
+      token_ids:    p.token_ids,
       mid_source:   m1 !== null && m2 !== null ? 'clob_mid' : 'gamma_last',
       volume:       p.volume,
     })
