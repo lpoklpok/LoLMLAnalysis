@@ -3,10 +3,18 @@ import os
 import requests
 
 FOLDER_ID = "1gLSw0RLjBbtaNy0dgnGQDAZOHIgCe-HH"
-# Default = Tim Sevenhuysen's original CSV. Override via the OE_DRIVE_FILE_ID
-# env var (e.g., when his file is quota-blocked, point this at a copy you
-# made in your own Drive and shared as "anyone with link can view").
+# Default = Tim Sevenhuysen's original CSV. Two override modes:
+#   1. OE_DRIVE_FILE_ID:   direct file ID (you copied the file once, paste the
+#                          new ID). Use this for a single-shot manual fix.
+#   2. OE_DRIVE_FOLDER_ID: ID of a folder in your own Drive (shared "anyone
+#                          with link"). PullOEData uses the Drive API to list
+#                          the folder, picks the file whose name contains the
+#                          CURRENT_YEAR, and downloads that. You manage by
+#                          deleting/adding files inside the folder — no need
+#                          to re-edit the GitHub secret per refresh.
+# Folder mode takes precedence when both are set.
 CURRENT_YEAR_FILE_ID = os.environ.get("OE_DRIVE_FILE_ID") or "1hnpbrUpBMS1TZI7IovfpKeZfWJH1Aptm"
+OVERRIDE_FOLDER_ID   = os.environ.get("OE_DRIVE_FOLDER_ID")
 
 RAW_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'raw')
 CURRENT_YEAR = 2026
@@ -14,8 +22,62 @@ HISTORICAL_YEARS = list(range(2014, CURRENT_YEAR))
 
 os.makedirs(RAW_DIR, exist_ok=True)
 
+
+def resolve_file_id_from_folder(folder_id: str) -> str | None:
+    """Use Drive v3 files.list to find a CSV in the folder whose name contains
+    str(CURRENT_YEAR). Returns the file ID, or None if not found. Requires
+    GOOGLE_API_KEY to be set (uses the API key to list public folder contents).
+    """
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        print("  OE_DRIVE_FOLDER_ID set but GOOGLE_API_KEY missing — can't list folder")
+        return None
+    q = f"'{folder_id}' in parents and trashed = false"
+    url = (
+        "https://www.googleapis.com/drive/v3/files"
+        f"?q={requests.utils.quote(q)}"
+        "&fields=files(id,name,modifiedTime,mimeType)"
+        f"&key={api_key}"
+    )
+    try:
+        r = requests.get(url, timeout=30)
+        if r.status_code != 200:
+            print(f"  folder list HTTP {r.status_code}: {r.text[:300]}")
+            return None
+        files = (r.json() or {}).get("files", [])
+    except Exception as e:
+        print(f"  folder list error: {e}")
+        return None
+    if not files:
+        print(f"  folder {folder_id} appears empty")
+        return None
+    print(f"  folder contains {len(files)} file(s):")
+    for f in files:
+        print(f"    - {f.get('name')}  (id={f.get('id')}, modified={f.get('modifiedTime')})")
+    # Prefer file whose name contains the current year
+    year_str = str(CURRENT_YEAR)
+    cands = [f for f in files if year_str in (f.get("name") or "")]
+    pick = cands[0] if cands else None
+    if pick is None and len(files) == 1:
+        pick = files[0]
+        print(f"  no name match for {year_str}; only one file in folder — using it")
+    if pick is None:
+        print(f"  no file in folder matches {year_str} and folder has multiple files")
+        return None
+    print(f"  → picking '{pick.get('name')}' ({pick.get('id')})")
+    return pick.get("id")
+
+
+if OVERRIDE_FOLDER_ID:
+    print(f"OE_DRIVE_FOLDER_ID set — looking up current-year file in folder {OVERRIDE_FOLDER_ID}")
+    new_id = resolve_file_id_from_folder(OVERRIDE_FOLDER_ID)
+    if new_id:
+        CURRENT_YEAR_FILE_ID = new_id
+    else:
+        print("  folder lookup failed; falling back to OE_DRIVE_FILE_ID / default")
+
 print(f"Using current-year FILE_ID = {CURRENT_YEAR_FILE_ID}"
-      f" {'(override via OE_DRIVE_FILE_ID)' if os.environ.get('OE_DRIVE_FILE_ID') else '(default — Tim Sevenhuysen original)'}")
+      f" {'(folder override)' if OVERRIDE_FOLDER_ID else ('(file override)' if os.environ.get('OE_DRIVE_FILE_ID') else '(default — Tim Sevenhuysen original)')}")
 
 # Download entire folder if any historical year is missing
 missing_years = [
