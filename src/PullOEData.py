@@ -27,13 +27,26 @@ output_path = os.path.join(RAW_DIR, f"{CURRENT_YEAR}_LoL_esports_match_data_from
 print(f"Refreshing {CURRENT_YEAR} data...")
 
 def _validate_csv(path):
-    """Raise if `path` doesn't look like a CSV (Google Drive returns HTML on quota hits)."""
+    """Raise if `path` doesn't look like a CSV. Catches:
+      - HTML (Google Drive quota page)
+      - JSON (Drive API error response, e.g., 403 / 404 / quota)
+      - Truncated / suspiciously small payloads
+      - Files missing the expected header columns
+    """
     with open(path, "rb") as f:
-        head = f.read(256).lstrip()
+        head = f.read(2048).lstrip()
     if head.startswith(b"<!DOCTYPE") or head.startswith(b"<html"):
-        raise RuntimeError("Downloaded payload is HTML, not CSV (likely Google Drive quota page).")
-    if len(head) < 32:
+        raise RuntimeError("Downloaded payload is HTML, not CSV (Google Drive quota page).")
+    if head.startswith(b"{") or head.startswith(b"["):
+        # Drive API returns JSON-shaped errors when the call fails
+        snippet = head[:300].decode("utf-8", errors="replace")
+        raise RuntimeError(f"Downloaded payload is JSON, not CSV (API error). Body: {snippet}")
+    if len(head) < 256:
         raise RuntimeError(f"Downloaded payload is suspiciously small ({len(head)} bytes).")
+    # The OE CSV header starts with 'gameid' — sanity-check we actually got it
+    first_line = head.split(b"\n", 1)[0]
+    if b"gameid" not in first_line:
+        raise RuntimeError(f"Downloaded payload doesn't look like OE CSV (first line: {first_line[:120]!r})")
 
 
 _BROWSER_UA = (
@@ -48,11 +61,16 @@ def _download_url_to_tmp(url: str, path: str, headers: dict | None = None) -> No
     if headers:
         session.headers.update(headers)
     r = session.get(url, stream=True, allow_redirects=True)
+    if r.status_code >= 400:
+        body = r.text[:500] if r.text else ""
+        raise RuntimeError(f"HTTP {r.status_code} from {url.split('?')[0]}: {body}")
     # Old-style cookie-based confirm token (still hit for some files)
     confirm = next((v for k, v in r.cookies.items() if k.startswith("download_warning")), None)
     if confirm:
         sep = "&" if "?" in url else "?"
         r = session.get(f"{url}{sep}confirm={confirm}", stream=True, allow_redirects=True)
+        if r.status_code >= 400:
+            raise RuntimeError(f"HTTP {r.status_code} after confirm: {r.text[:500]}")
     tmp = path + ".requests.tmp"
     try:
         with open(tmp, "wb") as f:
