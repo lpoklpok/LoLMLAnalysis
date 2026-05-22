@@ -31,6 +31,7 @@ interface Submarket {
   token_ids: [string | null, string | null]
   mid_source: 'clob_mid' | 'gamma_last'
   volume: number
+  kalshi_sides: [KalshiSide | null, KalshiSide | null]
 }
 
 interface KalshiSide {
@@ -213,9 +214,10 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
       fv2 = null
     }
 
-    // Kalshi values only attached on match_winner rows
-    const kalshi1 = sm.market_type === 'match_winner' ? detail.kalshi?.sides[0] : null
-    const kalshi2 = sm.market_type === 'match_winner' ? detail.kalshi?.sides[1] : null
+    // Per-submarket Kalshi sides — populated by the API for match_winner and
+    // game_N_winner (no analog for game_handicap).
+    const kalshi1 = sm.kalshi_sides?.[0] ?? null
+    const kalshi2 = sm.kalshi_sides?.[1] ?? null
 
     rows.push({
       market_type:    sm.market_type,
@@ -568,6 +570,27 @@ interface LadderPlan {
   oppositeRow: Row     // the other outcome of the same submarket
   kalshiSide:     KalshiSide | null   // kalshi market for "this" outcome, if available
   kalshiOpposite: KalshiSide | null
+}
+
+// Find the submarket for thisRow (by token_id) and pull its kalshi sides,
+// aligned so kalshiSide corresponds to thisRow.outcome_label.
+function buildLadderPlan(thisRow: Row, oppositeRow: Row, detail: EventDetail | null): LadderPlan {
+  let kalshiSide: KalshiSide | null = null
+  let kalshiOpposite: KalshiSide | null = null
+  if (detail) {
+    const sm = detail.submarkets.find(s => s.token_ids?.includes(thisRow.token_id))
+    if (sm) {
+      const idxThis = sm.outcomes.findIndex(o => o === thisRow.outcome_label)
+      if (idxThis === 0) {
+        kalshiSide = sm.kalshi_sides?.[0] ?? null
+        kalshiOpposite = sm.kalshi_sides?.[1] ?? null
+      } else if (idxThis === 1) {
+        kalshiSide = sm.kalshi_sides?.[1] ?? null
+        kalshiOpposite = sm.kalshi_sides?.[0] ?? null
+      }
+    }
+  }
+  return { thisRow, oppositeRow, kalshiSide, kalshiOpposite }
 }
 
 interface BookState {
@@ -1199,40 +1222,10 @@ export default function TraderPage() {
               onRefresh={refreshDetail}
               positions={positions}
               onClosePosition={(thisRow, oppositeRow) => {
-                // Open ladder modal focused on this position — user can then click bid or use the Sell button
-                const kalshi = detail?.kalshi
-                let kalshiSide: KalshiSide | null = null
-                let kalshiOpp:  KalshiSide | null = null
-                if (kalshi && thisRow.market_type === 'match_winner') {
-                  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, '')
-                  const k0 = kalshi.sides[0]; const k1 = kalshi.sides[1]
-                  if (k0 && norm(k0.team).includes(norm(thisRow.outcome_label).slice(0, 4))) {
-                    kalshiSide = k0; kalshiOpp = k1
-                  } else if (k1 && norm(k1.team).includes(norm(thisRow.outcome_label).slice(0, 4))) {
-                    kalshiSide = k1; kalshiOpp = k0
-                  }
-                }
-                setLadderPlan({ thisRow, oppositeRow, kalshiSide, kalshiOpposite: kalshiOpp })
+                setLadderPlan(buildLadderPlan(thisRow, oppositeRow, detail))
               }}
               onPlanTrade={(thisRow, oppositeRow) => {
-                // Find kalshi sides if this is the match_winner row
-                const kalshi = detail?.kalshi
-                let kalshiSide: KalshiSide | null = null
-                let kalshiOpp:  KalshiSide | null = null
-                if (kalshi && thisRow.market_type === 'match_winner') {
-                  // outcomes align: kalshi.sides[0] matches the polymarket outcome[0]
-                  const idxThis = thisRow.outcome_label === detail?.title?.split(' vs ')[0]?.split(': ')[1] ? 0 : null
-                  // Simpler: match by team name fuzzy
-                  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, '')
-                  const k0 = kalshi.sides[0]; const k1 = kalshi.sides[1]
-                  if (k0 && norm(k0.team).includes(norm(thisRow.outcome_label).slice(0, 4))) {
-                    kalshiSide = k0; kalshiOpp = k1
-                  } else if (k1 && norm(k1.team).includes(norm(thisRow.outcome_label).slice(0, 4))) {
-                    kalshiSide = k1; kalshiOpp = k0
-                  }
-                  void idxThis
-                }
-                setLadderPlan({ thisRow, oppositeRow, kalshiSide, kalshiOpposite: kalshiOpp })
+                setLadderPlan(buildLadderPlan(thisRow, oppositeRow, detail))
               }}
             />
           ) : (

@@ -42,6 +42,8 @@ function canonTeam(name: string): string {
   return CANON[name.trim().toLowerCase()] ?? name.trim().toLowerCase()
 }
 
+interface KalshiSidePair { sides: [KalshiSide | null, KalshiSide | null] }
+
 interface Submarket {
   market_type: string         // 'match_winner' | 'game_N_winner' | 'game_handicap'
   question: string
@@ -52,6 +54,7 @@ interface Submarket {
   token_ids: [string | null, string | null]   // CLOB token ids — needed to place orders
   mid_source: 'clob_mid' | 'gamma_last'
   volume: number
+  kalshi_sides: [KalshiSide | null, KalshiSide | null]   // Kalshi market for this submarket (if exists)
 }
 
 interface KalshiSide {
@@ -69,6 +72,11 @@ interface KalshiMatch {
   sides: [KalshiSide | null, KalshiSide | null]
 }
 
+interface KalshiBundle {
+  series_winner: KalshiMatch | null    // KXLOLGAME (Match Winner)
+  by_game: Record<number, KalshiMatch> // KXLOLMAP keyed by game number (1, 2, 3, ...)
+}
+
 interface EventDetail {
   slug: string
   title: string
@@ -77,65 +85,101 @@ interface EventDetail {
   best_of: number
   match_date: string | null
   submarkets: Submarket[]
+  // Kept for backwards-compat with the dashboard table — same data as
+  // submarkets[i:match_winner].kalshi_sides
   kalshi: KalshiMatch | null
   refreshed_at: string
 }
 
-async function fetchKalshiSeriesWinner(team1: string, team2: string): Promise<KalshiMatch | null> {
-  try {
-    const url = new URL(KALSHI_MARKETS)
-    url.searchParams.set('series_ticker', 'KXLOLGAME')
-    url.searchParams.set('status', 'open')
-    url.searchParams.set('limit', '200')
-    const r = await fetch(url.toString(), { cache: 'no-store' })
-    if (!r.ok) return null
-    const data = await r.json()
-    const markets = (data.markets ?? []) as Record<string, unknown>[]
-
-    // Group binary markets by their event_ticker (each event has 2 markets — one per team).
-    const byEvent: Record<string, Record<string, unknown>[]> = {}
-    for (const m of markets) {
-      const et = String(m['event_ticker'] ?? '')
-      if (!et) continue
-      ;(byEvent[et] ??= []).push(m)
+// Build one KalshiMatch (a pair of sides aligned to [team1, team2]) from a set of
+// Kalshi markets sharing an event_ticker. Returns null if the team set doesn't match.
+function buildMatchFromGroup(
+  ms: Record<string, unknown>[],
+  t1c: string, t2c: string,
+): KalshiMatch | null {
+  if (ms.length < 2) return null
+  const teams = ms.map(m => String(m['yes_sub_title'] ?? ''))
+  const teamsCanon = teams.map(canonTeam)
+  const sset = new Set(teamsCanon)
+  if (sset.size !== 2 || !sset.has(t1c) || !sset.has(t2c)) return null
+  const sideFor = (canonical: string): KalshiSide | null => {
+    const idx = teamsCanon.findIndex(c => c === canonical)
+    if (idx < 0) return null
+    const m = ms[idx]
+    const yb = parseFloat(String(m['yes_bid_dollars'] ?? ''))
+    const ya = parseFloat(String(m['yes_ask_dollars'] ?? ''))
+    const v24 = parseFloat(String(m['volume_24h_fp'] ?? ''))
+    const yes_bid = Number.isFinite(yb) ? yb : null
+    const yes_ask = Number.isFinite(ya) ? ya : null
+    const yes_mid = yes_bid != null && yes_ask != null ? (yes_bid + yes_ask) / 2 : null
+    return {
+      team:    teams[idx],
+      ticker:  String(m['ticker'] ?? ''),
+      yes_bid, yes_ask, yes_mid,
+      volume_24h: Number.isFinite(v24) ? v24 : null,
     }
+  }
+  return {
+    event_ticker: String(ms[0]['event_ticker'] ?? ''),
+    sides: [sideFor(t1c), sideFor(t2c)],
+  }
+}
+
+async function fetchKalshiSeries(seriesTicker: string): Promise<Record<string, unknown>[]> {
+  const url = new URL(KALSHI_MARKETS)
+  url.searchParams.set('series_ticker', seriesTicker)
+  url.searchParams.set('status', 'open')
+  url.searchParams.set('limit', '500')
+  const r = await fetch(url.toString(), { cache: 'no-store' })
+  if (!r.ok) return []
+  const data = await r.json()
+  return (data.markets ?? []) as Record<string, unknown>[]
+}
+
+async function fetchKalshiBundle(team1: string, team2: string): Promise<KalshiBundle> {
+  const out: KalshiBundle = { series_winner: null, by_game: {} }
+  try {
+    const [seriesMarkets, mapMarkets] = await Promise.all([
+      fetchKalshiSeries('KXLOLGAME'),   // Match Winner (series-level)
+      fetchKalshiSeries('KXLOLMAP'),    // Per-map (per-game) markets
+    ])
 
     const t1c = canonTeam(team1)
     const t2c = canonTeam(team2)
-    for (const [et, ms] of Object.entries(byEvent)) {
-      if (ms.length < 2) continue
-      const teams = ms.map(m => String(m['yes_sub_title'] ?? ''))
-      const teamsCanon = teams.map(canonTeam)
-      const sset = new Set(teamsCanon)
-      if (sset.size === 2 && sset.has(t1c) && sset.has(t2c)) {
-        // Build sides aligned to [team1, team2]
-        const sideFor = (canonical: string): KalshiSide | null => {
-          const idx = teamsCanon.findIndex(c => c === canonical)
-          if (idx < 0) return null
-          const m = ms[idx]
-          const yb = parseFloat(String(m['yes_bid_dollars'] ?? ''))
-          const ya = parseFloat(String(m['yes_ask_dollars'] ?? ''))
-          const v24 = parseFloat(String(m['volume_24h_fp'] ?? ''))
-          const yes_bid = Number.isFinite(yb) ? yb : null
-          const yes_ask = Number.isFinite(ya) ? ya : null
-          const yes_mid = yes_bid != null && yes_ask != null ? (yes_bid + yes_ask) / 2 : null
-          return {
-            team:    teams[idx],
-            ticker:  String(m['ticker'] ?? ''),
-            yes_bid, yes_ask, yes_mid,
-            volume_24h: Number.isFinite(v24) ? v24 : null,
-          }
-        }
-        return {
-          event_ticker: et,
-          sides: [sideFor(t1c), sideFor(t2c)],
-        }
-      }
+
+    // 1. Series winner (KXLOLGAME): group by event_ticker.
+    const seriesByEvent: Record<string, Record<string, unknown>[]> = {}
+    for (const m of seriesMarkets) {
+      const et = String(m['event_ticker'] ?? '')
+      if (et) (seriesByEvent[et] ??= []).push(m)
+    }
+    for (const ms of Object.values(seriesByEvent)) {
+      const match = buildMatchFromGroup(ms, t1c, t2c)
+      if (match) { out.series_winner = match; break }
+    }
+
+    // 2. Per-game (KXLOLMAP): tickers look like 'KXLOLMAP-{DATE}{TIME}{TEAMS}-{N}-{TEAM}'.
+    // Group by (event_ticker, game_num). Polymarket maps game_1_winner → game_num=1, etc.
+    const mapByGroup: Record<string, { game_num: number; markets: Record<string, unknown>[] }> = {}
+    for (const m of mapMarkets) {
+      const ticker = String(m['ticker'] ?? '')
+      // segments: ['KXLOLMAP', '<match_id>', '<game_num>', '<team_suffix>']
+      const segs = ticker.split('-')
+      if (segs.length < 4) continue
+      const gameNum = parseInt(segs[segs.length - 2], 10)
+      if (!Number.isFinite(gameNum)) continue
+      const matchId = segs.slice(1, segs.length - 2).join('-')
+      const groupKey = `${matchId}|${gameNum}`
+      ;(mapByGroup[groupKey] ??= { game_num: gameNum, markets: [] }).markets.push(m)
+    }
+    for (const { game_num, markets } of Object.values(mapByGroup)) {
+      const match = buildMatchFromGroup(markets, t1c, t2c)
+      if (match) out.by_game[game_num] = match
     }
   } catch {
     /* swallow — kalshi is best-effort */
   }
-  return null
+  return out
 }
 
 async function fetchMid(tokenId: string | null | undefined): Promise<number | null> {
@@ -289,6 +333,7 @@ export async function GET(req: Request) {
       token_ids:    p.token_ids,
       mid_source:   m1 !== null && m2 !== null ? 'clob_mid' : 'gamma_last',
       volume:       p.volume,
+      kalshi_sides: [null, null],   // filled in below once we have Kalshi bundle
     })
   })
 
@@ -302,8 +347,30 @@ export async function GET(req: Request) {
   }
   submarkets.sort((a, b) => order(a.market_type) - order(b.market_type))
 
-  // Run Kalshi lookup in parallel-ish (we already finished CLOB calls; fire one more)
-  const kalshi = team1 && team2 ? await fetchKalshiSeriesWinner(team1, team2) : null
+  // Pull Kalshi for both series-level (Match Winner) and per-game markets
+  const kalshiBundle = team1 && team2 ? await fetchKalshiBundle(team1, team2) : { series_winner: null, by_game: {} }
+
+  // Attach kalshi_sides per submarket using the bundle.
+  // Polymarket outcomes order may differ from Kalshi's; we align by canonical team.
+  function alignSides(km: KalshiMatch | null, outcomes: [string, string]): [KalshiSide | null, KalshiSide | null] {
+    if (!km) return [null, null]
+    // The KalshiMatch was built using (team1, team2) — find which Kalshi side
+    // matches outcome[0] vs outcome[1].
+    const t1c = canonTeam(team1 ?? '')
+    const s0 = km.sides[0]
+    const s1 = km.sides[1]
+    const o0c = canonTeam(outcomes[0])
+    return o0c === t1c ? [s0, s1] : [s1, s0]
+  }
+  for (const sm of submarkets) {
+    if (sm.market_type === 'match_winner') {
+      sm.kalshi_sides = alignSides(kalshiBundle.series_winner, sm.outcomes)
+    } else if (sm.market_type.startsWith('game_') && sm.market_type.endsWith('_winner')) {
+      const n = parseInt(sm.market_type.replace('game_', '').replace('_winner', ''), 10)
+      if (Number.isFinite(n)) sm.kalshi_sides = alignSides(kalshiBundle.by_game[n] ?? null, sm.outcomes)
+    }
+    // game_handicap intentionally has no Kalshi mapping (no analog on Kalshi)
+  }
 
   const detail: EventDetail = {
     slug,
@@ -313,7 +380,7 @@ export async function GET(req: Request) {
     best_of,
     match_date: (event['endDate'] as string | null) ?? null,
     submarkets,
-    kalshi,
+    kalshi: kalshiBundle.series_winner,
     refreshed_at: new Date().toISOString(),
   }
   return NextResponse.json(detail)
