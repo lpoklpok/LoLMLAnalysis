@@ -1,0 +1,27 @@
+{
+  "fit_date": "2026-05-22",
+  "season": 2026,
+  "feature_form": "logit(P) = intercept + \u03a3 coef[i]*feat[i] where feat = [pre_logit, gold_k, minutes, gold_x_minutes, pre_x_minutes, gold_x_underdog, gold_x_underdog_x_t, gold_sq]",
+  "features": [
+    "pre_logit",
+    "gold_k",
+    "minutes",
+    "gold_x_minutes",
+    "pre_x_minutes",
+    "gold_x_underdog",
+    "gold_x_underdog_x_t",
+    "gold_sq"
+  ],
+  "intercept": -0.13752171652910944,
+  "coef": {
+    "pre_logit": 1.2762214774155385,
+    "gold_k": 0.7491652357429053,
+    "minutes": 0.0013173249814860768,
+    "gold_x_minutes": -0.016030330670994634,
+    "pre_x_minutes": -0.02974788460748119,
+    "gold_x_underdog": 0.3235355944724696,
+    "gold_x_underdog_x_t": -0.01698700666424445,
+    "gold_sq": 0.0031555252747335924
+  },
+  "usage": "Build feature vector [pre_logit, gold/1k, minutes, gold/1k*minutes, pre_logit*minutes, gold/1k*(1-pre_prob), gold/1k*(1-pre_prob)*minutes, (gold/1k)^2] and apply sigmoid(intercept + dot(coef, features)). Valid for any minutes >= 10 (extrapolates poorly below)."
+}
