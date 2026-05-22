@@ -21,6 +21,7 @@ before the worker is deployed.
 
 Output: in-place rewrite of data/processed/games_with_odds.csv with two new columns.
 """
+import re
 import sys
 from itertools import combinations
 from pathlib import Path
@@ -72,9 +73,18 @@ def bo5_g5_prob(p_series: float, p1: float, p2: float, p3: float, p4: float,
 
 # ── Snapshot lookup ─────────────────────────────────────────────────────────
 
+def _norm_team(s) -> str:
+    """Normalize a team name for join keys — drop case + all non-alphanumerics.
+    Handles OE 'BNK FEARX' vs Polymarket 'BNK FearX' (case), and
+    'Nongshim RedForce' vs 'Nongshim Red Force' (whitespace). """
+    return re.sub(r'[^a-z0-9]', '', str(s).lower())
+
+
 def _series_key(blue: str, red: str, date_day: str) -> tuple:
-    """Stable team-pair key for joining OE games to Polymarket snapshots."""
-    return (date_day, tuple(sorted([str(blue).strip(), str(red).strip()])))
+    """Stable team-pair key for joining OE games to Polymarket snapshots.
+    Team names are normalized (lowercased, non-alphanumerics stripped) so
+    OE and Polymarket variants match."""
+    return (date_day, tuple(sorted([_norm_team(blue), _norm_team(red)])))
 
 
 def _pick_snapshots(snaps: pd.DataFrame, first_game_ts: pd.Timestamp) -> dict[str, dict]:
@@ -97,8 +107,10 @@ def _pick_snapshots(snaps: pd.DataFrame, first_game_ts: pd.Timestamp) -> dict[st
 
 
 def _blue_prob_from_team1(prob_team1: float, snap_team1: str, blue: str) -> float:
-    """outcome1_mid is from team1's perspective; flip if team1 ≠ blue."""
-    if str(snap_team1).strip().lower() == str(blue).strip().lower():
+    """outcome1_mid is from team1's perspective; flip if team1 ≠ blue.
+    Uses the same _norm_team normalization as _series_key so case/whitespace
+    differences (OE 'BNK FEARX' vs Polymarket 'BNK FearX') don't flip wrong."""
+    if _norm_team(snap_team1) == _norm_team(blue):
         return prob_team1
     return 1 - prob_team1
 
