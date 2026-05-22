@@ -159,6 +159,8 @@ def run():
             'outperf_diff': _safe(row.get('outperf_diff')),
             'q_blue_win':   _safe(row.get('q_blue_win')),
             'model_pred':   round(float(preds[i]), 4),
+            'poly_blue_win_prob': _safe(row.get('poly_blue_win_prob')),
+            'poly_source':        (None if (row.get('poly_source') is None or (isinstance(row.get('poly_source'), float) and np.isnan(row.get('poly_source')))) else str(row.get('poly_source'))),
         })
 
     supabase_url = os.environ.get('SUPABASE_URL')

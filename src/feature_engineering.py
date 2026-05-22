@@ -272,6 +272,8 @@ _ODDS_COLS = [
     'odd1_decimal', 'odd2_decimal',
     'implied_prob1_vigfree', 'implied_prob2_vigfree',
     'format', 'score_match', 'q_blue_win',
+    # Polymarket merge output (from merge_polymarket_data.py)
+    'poly_blue_win_prob', 'poly_source',
 ]
 
 
