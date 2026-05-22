@@ -39,6 +39,8 @@ jobs:
             processed-v2-
 
       - name: Pull latest Oracle's Elixir data
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: python src/PullOEData.py
         continue-on-error: true
 

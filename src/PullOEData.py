@@ -67,6 +67,32 @@ def _download_url_to_tmp(url: str, path: str, headers: dict | None = None) -> No
         raise
 
 
+def _gdown_then_validate(file_id: str, path: str) -> None:
+    """Thin wrapper around gdown that validates the result and atomically
+    moves the tmp file into place."""
+    tmp = path + ".gdown.tmp"
+    try:
+        gdown.download(id=file_id, output=tmp, quiet=False)
+        _validate_csv(tmp)
+        os.replace(tmp, path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
+def download_via_drive_api(file_id: str, path: str) -> None:
+    """Download a public Drive file via the official Drive v3 API using an
+    API key from the GOOGLE_API_KEY env var. Per-project quotas here are
+    much larger than the anonymous-download pool that the /uc endpoints
+    drain into, so this is the most reliable path."""
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        raise RuntimeError("GOOGLE_API_KEY env var not set")
+    url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media&key={api_key}"
+    _download_url_to_tmp(url, path, headers={"User-Agent": _BROWSER_UA})
+
+
 def download_via_requests(file_id: str, path: str) -> None:
     """
     Try several Drive download endpoints in order. The legacy /uc endpoint and
@@ -95,21 +121,25 @@ def download_via_requests(file_id: str, path: str) -> None:
     raise RuntimeError(f"All Drive endpoints failed; last error: {last_err}")
 
 
-tmp_path = output_path + ".gdown.tmp"
-try:
-    gdown.download(id=CURRENT_YEAR_FILE_ID, output=tmp_path, quiet=False)
-    _validate_csv(tmp_path)
-    os.replace(tmp_path, output_path)
-    print("gdown succeeded.")
-except Exception as e:
-    if os.path.exists(tmp_path):
-        os.remove(tmp_path)
-    print(f"gdown failed ({e}), trying direct requests download...")
+# Download order: Drive API (best, needs GOOGLE_API_KEY) → gdown → direct requests.
+last_err: Exception | None = None
+downloaded = False
+for label, fn in [
+    ("drive_api", lambda: download_via_drive_api(CURRENT_YEAR_FILE_ID, output_path)),
+    ("gdown",     lambda: _gdown_then_validate(CURRENT_YEAR_FILE_ID, output_path)),
+    ("requests",  lambda: download_via_requests(CURRENT_YEAR_FILE_ID, output_path)),
+]:
     try:
-        download_via_requests(CURRENT_YEAR_FILE_ID, output_path)
-        print("requests download succeeded.")
-    except Exception as e2:
-        if os.path.exists(output_path):
-            print(f"Both download methods failed ({e2}). Using cached file from previous run.")
-        else:
-            raise RuntimeError(f"Could not download {CURRENT_YEAR} data and no cache exists.") from e2
+        fn()
+        print(f"{label} succeeded.")
+        downloaded = True
+        break
+    except Exception as e:
+        last_err = e
+        print(f"{label} failed: {e}")
+
+if not downloaded:
+    if os.path.exists(output_path):
+        print(f"All download methods failed ({last_err}). Using cached file from previous run.")
+    else:
+        raise RuntimeError(f"Could not download {CURRENT_YEAR} data and no cache exists.") from last_err
