@@ -139,6 +139,9 @@ export default function Dashboard() {
         <Link href="/findings" className="text-sm text-pink-400 hover:text-pink-300 transition-colors">
           General Findings →
         </Link>
+        <Link href="/gold-lead" className="text-sm text-amber-400 hover:text-amber-300 transition-colors">
+          Gold Lead →
+        </Link>
         <span className="text-xs text-gray-500">
           {loading ? 'Loading…' : `${(stats?.total_games ?? 0).toLocaleString()} games`}
         </span>
