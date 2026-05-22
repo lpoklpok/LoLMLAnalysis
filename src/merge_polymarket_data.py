@@ -147,11 +147,31 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
     poly_probs: list[float | None] = []
     poly_sources: list[str | None] = []
 
+    # Debug counters
+    snap_keys = set(snaps['_series_key'].unique())
+    earliest_snap = snaps['snapshot_time_ts'].min()
+    print(f'  diag: {len(snap_keys):,} unique series keys in snapshots; earliest snapshot at {earliest_snap}')
+    n_series = 0; n_series_with_any_snap = 0; n_series_with_pregame_snap = 0; n_series_merged = 0
+    sample_miss_no_snap: list = []
+    sample_miss_snap_post: list = []
+
     # Process series at a time
     for series_key, series_games in games.groupby('_series_key'):
+        n_series += 1
         first_game_ts = series_games['_date_ts'].min()
         series_snaps  = snaps[snaps['_series_key'] == series_key]
+        if not series_snaps.empty: n_series_with_any_snap += 1
         picked        = _pick_snapshots(series_snaps, first_game_ts) if not series_snaps.empty else {}
+        if picked: n_series_with_pregame_snap += 1
+        # Sample recent missed matchups for diagnostics
+        if not picked and first_game_ts is not None and first_game_ts >= pd.Timestamp('2026-05-21', tz='UTC'):
+            if not series_snaps.empty:
+                # We have snapshots but all are post-game-start
+                if len(sample_miss_snap_post) < 6:
+                    sample_miss_snap_post.append((series_key, str(first_game_ts), len(series_snaps)))
+            else:
+                if len(sample_miss_no_snap) < 6:
+                    sample_miss_no_snap.append((series_key, str(first_game_ts)))
         # Convert each picked market to blue-team probability for this series
         # (blue side can swap mid-series so we look up per-game)
         for _, g in series_games.iterrows():
@@ -197,7 +217,17 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
 
             poly_probs.append(None if p is None else round(float(p), 4))
             poly_sources.append(source)
+            if p is not None: n_series_merged += 1  # actually counts games, not series
 
+    print(f'  diag: {n_series:,} OE series total')
+    print(f'  diag:   {n_series_with_any_snap:,} have at least 1 snapshot (any time)')
+    print(f'  diag:   {n_series_with_pregame_snap:,} have a snapshot BEFORE first-game time')
+    if sample_miss_no_snap:
+        print(f'  diag: recent series with NO snapshot match (likely team-name or date mismatch):')
+        for k, t in sample_miss_no_snap: print(f'    {k}  first_game={t}')
+    if sample_miss_snap_post:
+        print(f'  diag: recent series with snapshots that all post-date first game:')
+        for k, t, n in sample_miss_snap_post: print(f'    {k}  first_game={t}  n_snaps={n}')
     games['poly_blue_win_prob'] = poly_probs
     games['poly_source']        = poly_sources
 
