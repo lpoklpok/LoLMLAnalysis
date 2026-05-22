@@ -3,13 +3,19 @@ import os
 import requests
 
 FOLDER_ID = "1gLSw0RLjBbtaNy0dgnGQDAZOHIgCe-HH"
-CURRENT_YEAR_FILE_ID = "1hnpbrUpBMS1TZI7IovfpKeZfWJH1Aptm"
+# Default = Tim Sevenhuysen's original CSV. Override via the OE_DRIVE_FILE_ID
+# env var (e.g., when his file is quota-blocked, point this at a copy you
+# made in your own Drive and shared as "anyone with link can view").
+CURRENT_YEAR_FILE_ID = os.environ.get("OE_DRIVE_FILE_ID") or "1hnpbrUpBMS1TZI7IovfpKeZfWJH1Aptm"
 
 RAW_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'raw')
 CURRENT_YEAR = 2026
 HISTORICAL_YEARS = list(range(2014, CURRENT_YEAR))
 
 os.makedirs(RAW_DIR, exist_ok=True)
+
+print(f"Using current-year FILE_ID = {CURRENT_YEAR_FILE_ID}"
+      f" {'(override via OE_DRIVE_FILE_ID)' if os.environ.get('OE_DRIVE_FILE_ID') else '(default — Tim Sevenhuysen original)'}")
 
 # Download entire folder if any historical year is missing
 missing_years = [

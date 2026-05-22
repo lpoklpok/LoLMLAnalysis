@@ -41,6 +41,7 @@ jobs:
       - name: Pull latest Oracle's Elixir data
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          OE_DRIVE_FILE_ID: ${{ secrets.OE_DRIVE_FILE_ID }}
         run: python src/PullOEData.py
         continue-on-error: true
 
