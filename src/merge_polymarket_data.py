@@ -87,10 +87,16 @@ def _series_key(blue: str, red: str, date_day: str) -> tuple:
     return (date_day, tuple(sorted([_norm_team(blue), _norm_team(red)])))
 
 
+PREGAME_BUFFER = pd.Timedelta(minutes=10)
+
+
 def _pick_snapshots(snaps: pd.DataFrame, first_game_ts: pd.Timestamp) -> dict[str, dict]:
-    """From a per-matchup slice of snapshots, take the latest snapshot of each market_type
-    that occurred BEFORE first_game_ts. Returns {market_type: {prob_for_team1, team1, team2}}."""
-    before = snaps[snaps['snapshot_time_ts'] < first_game_ts]
+    """From a per-matchup slice of snapshots, take the latest snapshot of each
+    market_type that occurred BEFORE (first_game_ts − 10 min) — excluding the
+    draft phase, where champion picks have already started leaking information.
+    Returns {market_type: {prob_for_team1, team1, team2}}."""
+    cutoff = first_game_ts - PREGAME_BUFFER
+    before = snaps[snaps['snapshot_time_ts'] < cutoff]
     if before.empty:
         return {}
     # For each market_type, pick max snapshot_time row
@@ -223,10 +229,6 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
             source_by_gameid[gid] = source
             if p is not None:
                 n_series_merged += 1
-                if n_series_merged <= 20:
-                    dt = str(g.get('date', ''))[:10]
-                    print('  merged: gameid=%s  date=%s  series_key=%s  src=%s  p=%.3f'
-                          % (gid, dt, series_key, source, p))
 
     print(f'  diag: {n_series:,} OE series total')
     print(f'  diag:   {n_series_with_any_snap:,} have at least 1 snapshot (any time)')
