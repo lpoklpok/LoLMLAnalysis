@@ -1,0 +1,28 @@
+{
+  "fit_date": "2026-05-22",
+  "season": 2026,
+  "feature_form": "logit(P) = intercept + pre_logit*logit(pre_prob) + gold_per_1k*(gold/1000) + gold_x_underdog*(gold/1000)*(1 - pre_prob)",
+  "checkpoints": {
+    "10": {
+      "intercept": -0.12283404827093597,
+      "pre_logit": 0.9843094471851571,
+      "gold_per_1k": 0.6158332583286561,
+      "gold_x_underdog": 0.19723874890437976,
+      "n_train": 4619
+    },
+    "15": {
+      "intercept": -0.10067048697331847,
+      "pre_logit": 0.8252002668511449,
+      "gold_per_1k": 0.4863114404109485,
+      "gold_x_underdog": 0.037145890913972496,
+      "n_train": 4619
+    },
+    "20": {
+      "intercept": -0.08497113590534092,
+      "pre_logit": 0.6741329454235025,
+      "gold_per_1k": 0.44523493234316114,
+      "gold_x_underdog": -0.030855875025185442,
+      "n_train": 4610
+    }
+  }
+}
