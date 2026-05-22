@@ -642,17 +642,39 @@ function LadderModal({
   }
 
   // ── Render the book ──────────────────────────────────────────────────
+  // Centered around mid: N levels above + mid + N levels below at 1¢ granularity.
+  // Polymarket binary markets tick at 0.01, so showing each cent is natural.
+  // We aggregate any sub-cent depth (e.g. 0.745) into its nearest cent bucket
+  // for display, while still being able to fire orders at sub-cent prices via
+  // the actual price chosen at click time.
   const thisBook = thisTokenId ? books[thisTokenId] ?? emptyBook() : emptyBook()
-  const bidPrices = Array.from(thisBook.bids.keys()).sort((a, b) => b - a).slice(0, LADDER_LEVELS_EACH_SIDE)
-  const askPrices = Array.from(thisBook.asks.keys()).sort((a, b) => a - b).slice(0, LADDER_LEVELS_EACH_SIDE)
-  const priceSet = new Set([...bidPrices, ...askPrices])
-  // Fill in 1-cent steps around the mid so the ladder doesn't have holes
-  if (thisBook.best_bid != null && thisBook.best_ask != null) {
-    const lo = Math.max(0.001, thisBook.best_bid - LADDER_LEVELS_EACH_SIDE * 0.001)
-    const hi = Math.min(0.999, thisBook.best_ask + LADDER_LEVELS_EACH_SIDE * 0.001)
-    for (let p = lo; p <= hi + 0.0001; p += 0.001) priceSet.add(roundPx(p))
+
+  function bucketByCent(m: Map<number, number>): Map<number, number> {
+    const out = new Map<number, number>()
+    for (const [px, sz] of m) {
+      const cents = Math.round(px * 100) / 100
+      out.set(cents, (out.get(cents) ?? 0) + sz)
+    }
+    return out
   }
-  const sortedPrices = Array.from(priceSet).sort((a, b) => b - a).slice(0, LADDER_LEVELS_EACH_SIDE * 2 + 2)
+  const bidsByCent = bucketByCent(thisBook.bids)
+  const asksByCent = bucketByCent(thisBook.asks)
+  const bestBidC = thisBook.best_bid != null ? Math.round(thisBook.best_bid * 100) / 100 : null
+  const bestAskC = thisBook.best_ask != null ? Math.round(thisBook.best_ask * 100) / 100 : null
+
+  // Anchor: use mid if both sides known; else best ask; else best bid; else 0.5
+  const midApprox =
+    bestBidC != null && bestAskC != null ? (bestBidC + bestAskC) / 2 :
+    bestAskC != null ? bestAskC :
+    bestBidC != null ? bestBidC : 0.5
+  const midC = Math.max(1, Math.min(99, Math.round(midApprox * 100)))
+
+  // Build N ticks above + N below + center (rendered top-down: asks high → bids low)
+  const sortedPrices: number[] = []
+  for (let offset = LADDER_LEVELS_EACH_SIDE; offset >= -LADDER_LEVELS_EACH_SIDE; offset--) {
+    const c = midC + offset
+    if (c >= 1 && c <= 99) sortedPrices.push(c / 100)
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={onClose}>
@@ -699,27 +721,28 @@ function LadderModal({
               <div className="bg-gray-900 px-3 py-1.5 text-gray-500 text-center">PRICE</div>
               <div className="bg-gray-900 px-3 py-1.5 text-gray-500">ASK SIZE</div>
               {sortedPrices.map(px => {
-                const bidSz = thisBook.bids.get(px) ?? 0
-                const askSz = thisBook.asks.get(px) ?? 0
-                const isBestBid = px === thisBook.best_bid
-                const isBestAsk = px === thisBook.best_ask
+                const bidSz = bidsByCent.get(px) ?? 0
+                const askSz = asksByCent.get(px) ?? 0
+                const isBestBid = px === bestBidC
+                const isBestAsk = px === bestAskC
+                const isInsideSpread = bestBidC != null && bestAskC != null && px > bestBidC && px < bestAskC
                 return (
                   <Fragment key={px}>
                     <button
                       onClick={() => onClickBid(px)}
                       disabled={!secret || !oppTokenId}
                       className={`px-3 py-1.5 text-right font-mono tabular-nums hover:bg-green-900/40 cursor-pointer disabled:cursor-not-allowed disabled:hover:bg-transparent ${bidSz > 0 ? (isBestBid ? 'bg-green-900/60 text-green-200' : 'bg-green-900/20 text-green-300') : 'bg-gray-900 text-gray-700'}`}
-                      title={bidSz > 0 ? `Click → synthetic SELL ${thisRow.outcome_label} at ${px.toFixed(3)} (= BUY ${oppositeRow.outcome_label} at ${(1-px).toFixed(3)})` : ''}>
+                      title={`Click → synthetic SELL ${thisRow.outcome_label} at ${px.toFixed(2)} (= BUY ${oppositeRow.outcome_label} at ${(1-px).toFixed(2)})`}>
                       {bidSz > 0 ? Math.round(bidSz).toLocaleString() : ''}
                     </button>
-                    <div className={`px-3 py-1.5 text-center font-mono font-bold ${isBestBid ? 'bg-green-900/30 text-green-300' : isBestAsk ? 'bg-red-900/30 text-red-300' : 'bg-gray-900 text-gray-200'}`}>
-                      {px.toFixed(3)}
+                    <div className={`px-3 py-1.5 text-center font-mono font-bold ${isBestBid ? 'bg-green-900/30 text-green-300' : isBestAsk ? 'bg-red-900/30 text-red-300' : isInsideSpread ? 'bg-blue-900/20 text-blue-300' : 'bg-gray-900 text-gray-300'}`}>
+                      {px.toFixed(2)}
                     </div>
                     <button
                       onClick={() => onClickAsk(px)}
                       disabled={!secret || !thisTokenId}
                       className={`px-3 py-1.5 text-left font-mono tabular-nums hover:bg-red-900/40 cursor-pointer disabled:cursor-not-allowed disabled:hover:bg-transparent ${askSz > 0 ? (isBestAsk ? 'bg-red-900/60 text-red-200' : 'bg-red-900/20 text-red-300') : 'bg-gray-900 text-gray-700'}`}
-                      title={askSz > 0 ? `Click → BUY ${thisRow.outcome_label} at ${px.toFixed(3)}` : ''}>
+                      title={`Click → BUY ${thisRow.outcome_label} at ${px.toFixed(2)}`}>
                       {askSz > 0 ? Math.round(askSz).toLocaleString() : ''}
                     </button>
                   </Fragment>
