@@ -341,7 +341,20 @@ def _tournament_to_league(tournament: str | None) -> str | None:
 
 
 def _infer_match_date(event: dict) -> 'pd.Timestamp | None':
-    """Best-effort match date: slug YYYY-MM-DD trumps event endDate."""
+    """Best-effort match start time.
+
+    Prefer event.endDate (Polymarket sets this near actual match start time so
+    we get hour precision) and fall back to slug YYYY-MM-DD midnight UTC.
+    """
+    end_date = event.get('endDate')
+    if end_date:
+        try:
+            ts = pd.Timestamp(end_date)
+            if ts.tzinfo is None:
+                ts = ts.tz_localize('UTC')
+            return ts
+        except Exception:
+            pass
     slug = event.get('slug') or ''
     m = _DATE_RE.search(slug)
     if m:
@@ -349,12 +362,6 @@ def _infer_match_date(event: dict) -> 'pd.Timestamp | None':
             return pd.Timestamp(f'{m.group(1)}-{m.group(2)}-{m.group(3)}T00:00:00+00:00')
         except Exception:
             pass
-    end_date = event.get('endDate')
-    if end_date:
-        try:
-            return pd.Timestamp(end_date)
-        except Exception:
-            return None
     return None
 
 
