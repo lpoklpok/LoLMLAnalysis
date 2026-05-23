@@ -178,6 +178,23 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
         print(f'    {k}')
     games_recent = games[games['_date_day'] >= '2026-05-21']
     print(f'  diag: OE games on/after 2026-05-21: {len(games_recent):,}')
+    # Show the latest OE date and any G2-vs-KC entries for explicit visibility
+    if not games_recent.empty:
+        max_dt = games_recent['_date_ts'].max()
+        print(f'  diag: max OE date in pulled file: {max_dt}')
+    if 'league' in games.columns:
+        league_counts = games_recent['league'].value_counts().head(10)
+        print('  diag: top leagues in recent OE games:')
+        for lg, ct in league_counts.items():
+            print(f'    {lg}: {ct}')
+    bk = games['blue_team_teamname'].astype(str)
+    rk = games['red_team_teamname'].astype(str)
+    g2kc = games[((bk.str.contains('G2', case=False, na=False) & rk.str.contains('Karmine', case=False, na=False)) |
+                   (rk.str.contains('G2', case=False, na=False) & bk.str.contains('Karmine', case=False, na=False))) &
+                  (games['_date_day'] >= '2026-05-20')]
+    print(f"  diag: G2-vs-KC OE games >=May 20 in pulled file: {len(g2kc)}")
+    for _, r in g2kc.iterrows():
+        print(f"    {r['gameid']} {r['_date_ts']} {r['blue_team_teamname']} vs {r['red_team_teamname']}")
     print('  diag: sample OE series keys (recent, 5):')
     seen = set()
     for k in games_recent['_series_key']:
