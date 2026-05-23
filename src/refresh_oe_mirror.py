@@ -65,11 +65,19 @@ def main():
         sys.exit(1)
     print(f"copied → '{copy['name']}'  id={copy['id']}  size={copy.get('size','?')}")
 
-    # 4. Trash older files in the folder (anything but the new one)
+    # 4. Trash older files — ONLY those that match our own mirror naming pattern
+    # `{YEAR}_LoL_OE_*.csv`. Manually-uploaded user files (with different names
+    # like `2026_LoL_esports_match_data_from_OraclesElixir.csv`) are preserved
+    # so the user's known-good copy isn't clobbered if Tim's source rolls back.
+    import re
+    mirror_pat = re.compile(rf"^{CURRENT_YEAR}_LoL_OE_\d+T\d+Z\.csv$")
     for f in existing:
+        if not mirror_pat.match(f["name"] or ""):
+            print(f"  kept (user-uploaded): {f['name']}")
+            continue
         try:
             drive.files().delete(fileId=f["id"]).execute()
-            print(f"  deleted stale: {f['name']}")
+            print(f"  deleted prior mirror: {f['name']}")
         except HttpError as e:
             print(f"  could not delete {f['name']}: {e}")
 

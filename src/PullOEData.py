@@ -53,18 +53,31 @@ def resolve_file_id_from_folder(folder_id: str) -> str | None:
         return None
     print(f"  folder contains {len(files)} file(s):")
     for f in files:
-        print(f"    - {f.get('name')}  (id={f.get('id')}, modified={f.get('modifiedTime')})")
-    # Prefer file whose name contains the current year
+        print(f"    - {f.get('name')}  (id={f.get('id')}, modified={f.get('modifiedTime')}, size={f.get('size','?')})")
+    # Prefer files whose name contains the current year, then pick the LARGEST
+    # by size. Larger size ≈ more games. If we just picked the most-recently-
+    # modified file, a rolled-back upstream file would shadow a known-good
+    # earlier file with more data.
+    url2 = (
+        "https://www.googleapis.com/drive/v3/files"
+        f"?q={requests.utils.quote(q)}"
+        "&fields=files(id,name,modifiedTime,mimeType,size)"
+        f"&key={api_key}"
+    )
+    try:
+        files = requests.get(url2, timeout=30).json().get("files", []) or files
+    except Exception:
+        pass
     year_str = str(CURRENT_YEAR)
     cands = [f for f in files if year_str in (f.get("name") or "")]
-    pick = cands[0] if cands else None
-    if pick is None and len(files) == 1:
-        pick = files[0]
+    if not cands and len(files) == 1:
+        cands = files
         print(f"  no name match for {year_str}; only one file in folder — using it")
-    if pick is None:
+    if not cands:
         print(f"  no file in folder matches {year_str} and folder has multiple files")
         return None
-    print(f"  → picking '{pick.get('name')}' ({pick.get('id')})")
+    pick = max(cands, key=lambda f: int(f.get("size") or 0))
+    print(f"  → picking LARGEST '{pick.get('name')}' (size={pick.get('size','?')}, id={pick.get('id')})")
     return pick.get("id")
 
 
