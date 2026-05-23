@@ -80,19 +80,20 @@ def _norm_team(s) -> str:
     return re.sub(r'[^a-z0-9]', '', str(s).lower())
 
 
-def _series_key(blue: str, red: str) -> tuple:
-    """Stable team-pair key for joining OE games to Polymarket snapshots.
-    Team names are normalized (lowercased, non-alphanumerics stripped) so
-    OE and Polymarket variants match.
-
-    NOTE: we deliberately do NOT include the calendar day. Polymarket's
-    `match_date` is the market RESOLUTION timestamp, which for late-EU
-    matches is midnight-of-the-next-UTC-day, while OE's `date` is the
-    actual game start time. Including date_day in the key would prevent
-    the join for any LEC/LCS late evening match. We rely instead on the
-    pregame temporal cutoff inside `_pick_snapshots` (and the staleness
-    cap below) to associate snapshots to the right series."""
+def _team_pair_key(blue: str, red: str) -> tuple:
+    """Team-pair-only key for JOINING OE games to Polymarket snapshots.
+    Polymarket's match_date is the market RESOLUTION timestamp (often
+    midnight of the next UTC day for late-EU matches), so we cannot
+    match on calendar day. We rely on the pregame temporal cutoff inside
+    `_pick_snapshots` to associate the right snapshots."""
     return tuple(sorted([_norm_team(blue), _norm_team(red)]))
+
+
+def _oe_series_key(blue: str, red: str, date_day: str) -> tuple:
+    """Team-pair + date_day key for GROUPING OE rows into a physical
+    series (so a bo5 played in one day stays together as one series,
+    and that team-pair's match from 6 months ago is a separate series)."""
+    return (date_day, tuple(sorted([_norm_team(blue), _norm_team(red)])))
 
 
 PREGAME_BUFFER = pd.Timedelta(minutes=10)
@@ -148,16 +149,20 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
 
     games['_date_ts']  = pd.to_datetime(games['date'], errors='coerce', utc=True)
     games['_date_day'] = games['_date_ts'].dt.strftime('%Y-%m-%d')
-    games['_series_key'] = games.apply(
-        lambda r: _series_key(r['blue_team_teamname'], r['red_team_teamname']),
+    games['_oe_series_key'] = games.apply(
+        lambda r: _oe_series_key(r['blue_team_teamname'], r['red_team_teamname'], r['_date_day']),
+        axis=1
+    )
+    games['_pair_key'] = games.apply(
+        lambda r: _team_pair_key(r['blue_team_teamname'], r['red_team_teamname']),
         axis=1
     )
 
-    # Preprocess snapshots
+    # Preprocess snapshots — only need the team-pair key (we join on this)
     snaps = snaps.copy()
     snaps['snapshot_time_ts'] = pd.to_datetime(snaps['snapshot_time'], errors='coerce', utc=True)
-    snaps['_series_key']      = snaps.apply(
-        lambda r: _series_key(r['team1'], r['team2']),
+    snaps['_pair_key']        = snaps.apply(
+        lambda r: _team_pair_key(r['team1'], r['team2']),
         axis=1
     )
 
@@ -168,12 +173,12 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
     source_by_gameid: dict[str, str | None] = {}
 
     # Debug counters
-    snap_keys = set(snaps['_series_key'].unique())
+    snap_keys = set(snaps['_pair_key'].unique())
     earliest_snap = snaps['snapshot_time_ts'].min()
-    print(f'  diag: {len(snap_keys):,} unique series keys in snapshots; earliest snapshot at {earliest_snap}')
+    print(f'  diag: {len(snap_keys):,} unique team-pair keys in snapshots; earliest snapshot at {earliest_snap}')
 
     # Diagnostic: print 5 sample snapshot keys + 5 OE series keys from May 22 to compare
-    print('  diag: sample SNAPSHOT keys (5):')
+    print('  diag: sample SNAPSHOT pair-keys (5):')
     for k in list(snap_keys)[:5]:
         print(f'    {k}')
     games_recent = games[games['_date_day'] >= '2026-05-21']
@@ -195,23 +200,26 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
     print(f"  diag: G2-vs-KC OE games >=May 20 in pulled file: {len(g2kc)}")
     for _, r in g2kc.iterrows():
         print(f"    {r['gameid']} {r['_date_ts']} {r['blue_team_teamname']} vs {r['red_team_teamname']}")
-    print('  diag: sample OE series keys (recent, 5):')
+    print('  diag: sample OE pair-keys (recent, 5):')
     seen = set()
-    for k in games_recent['_series_key']:
+    for k in games_recent['_pair_key']:
         if k in seen: continue
         seen.add(k)
         print(f'    {k}')
         if len(seen) >= 5: break
-    print(f'  diag: intersection of snapshot/OE-recent keys: {len(snap_keys & seen)}')
+    print(f'  diag: intersection of snapshot/OE-recent pair-keys (5 sampled): {len(snap_keys & seen)}')
     n_series = 0; n_series_with_any_snap = 0; n_series_with_pregame_snap = 0; n_series_merged = 0
     sample_miss_no_snap: list = []
     sample_miss_snap_post: list = []
 
-    # Process series at a time
-    for series_key, series_games in games.groupby('_series_key'):
+    # Iterate each OE physical series (team-pair + same calendar day).
+    # For each, look up snapshots by team-pair only (Polymarket match_date
+    # may be on a different UTC day than OE date).
+    for series_key, series_games in games.groupby('_oe_series_key'):
         n_series += 1
         first_game_ts = series_games['_date_ts'].min()
-        series_snaps  = snaps[snaps['_series_key'] == series_key]
+        pair_key      = series_games['_pair_key'].iloc[0]
+        series_snaps  = snaps[snaps['_pair_key'] == pair_key]
         if not series_snaps.empty: n_series_with_any_snap += 1
         picked        = _pick_snapshots(series_snaps, first_game_ts) if not series_snaps.empty else {}
         if picked: n_series_with_pregame_snap += 1
@@ -297,7 +305,7 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
     games['poly_source']        = games['gameid'].map(source_by_gameid)
 
     # Drop the helper columns
-    games = games.drop(columns=['_date_ts', '_date_day', '_series_key'])
+    games = games.drop(columns=['_date_ts', '_date_day', '_oe_series_key', '_pair_key'])
     return games
 
 
