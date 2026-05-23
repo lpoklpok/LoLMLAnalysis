@@ -40,11 +40,16 @@ jobs:
 
       - name: Refresh OE mirror (copy Tim's CSV to your Drive folder)
         env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
           OE_DRIVE_FOLDER_ID: ${{ secrets.OE_DRIVE_FOLDER_ID }}
         run: |
-          if [ -z "$GOOGLE_SA_JSON" ] || [ -z "$OE_DRIVE_FOLDER_ID" ]; then
-            echo "GOOGLE_SA_JSON or OE_DRIVE_FOLDER_ID not set — skipping mirror refresh (will use folder's existing file)"
+          if [ -z "$OE_DRIVE_FOLDER_ID" ]; then
+            echo "OE_DRIVE_FOLDER_ID not set — skipping mirror refresh"
+          elif [ -z "$GOOGLE_OAUTH_REFRESH_TOKEN" ] && [ -z "$GOOGLE_SA_JSON" ]; then
+            echo "No auth configured (need GOOGLE_OAUTH_* or GOOGLE_SA_JSON) — skipping mirror refresh"
           else
             python src/refresh_oe_mirror.py
           fi
