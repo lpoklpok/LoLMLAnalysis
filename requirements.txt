@@ -6,13 +6,9 @@ gdown==6.0.0
 google-api-python-client>=2.130
 google-auth>=2.34
 google-auth-oauthlib>=1.2
-greenlet==3.5.0
 idna==3.13
 numpy==2.4.4
 pandas==3.0.2
-playwright==1.59.0
-pyee==13.0.1
-PySocks==1.7.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 requests==2.33.1

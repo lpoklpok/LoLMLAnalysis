@@ -19,10 +19,15 @@ jobs:
       - uses: actions/setup-python@v5.6.0
         with:
           python-version: '3.11'
-          cache: 'pip'
+
+      - name: Install uv (fast pip replacement)
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: requirements.txt
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: uv pip install --system -r requirements.txt
 
       - name: Cache historical OE data (2014–2025)
         uses: actions/cache@v4
@@ -43,16 +48,8 @@ jobs:
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
-          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
           OE_DRIVE_FOLDER_ID: ${{ secrets.OE_DRIVE_FOLDER_ID }}
-        run: |
-          if [ -z "$OE_DRIVE_FOLDER_ID" ]; then
-            echo "OE_DRIVE_FOLDER_ID not set — skipping mirror refresh"
-          elif [ -z "$GOOGLE_OAUTH_REFRESH_TOKEN" ] && [ -z "$GOOGLE_SA_JSON" ]; then
-            echo "No auth configured (need GOOGLE_OAUTH_* or GOOGLE_SA_JSON) — skipping mirror refresh"
-          else
-            python src/refresh_oe_mirror.py
-          fi
+        run: python src/refresh_oe_mirror.py
         continue-on-error: true
 
       - name: Pull latest Oracle's Elixir data

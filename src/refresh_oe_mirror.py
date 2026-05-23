@@ -5,30 +5,20 @@ own, deleting any stale copies first. Run via the daily workflow before
 PullOEData; PullOEData then picks up the freshly-copied file via
 OE_DRIVE_FOLDER_ID.
 
-Auth modes (one or the other):
-
-  OAuth user delegation (preferred — works on personal Gmail):
-    GOOGLE_OAUTH_CLIENT_ID
-    GOOGLE_OAUTH_CLIENT_SECRET
-    GOOGLE_OAUTH_REFRESH_TOKEN
-    Get these via: python src/oauth_setup.py <client_secret.json>
-
-  Service account (only works for Shared Drives — Workspace only):
-    GOOGLE_SA_JSON
-
-Always required:
-  OE_DRIVE_FOLDER_ID   — destination folder in your Drive
+Required env:
+  GOOGLE_OAUTH_CLIENT_ID
+  GOOGLE_OAUTH_CLIENT_SECRET
+  GOOGLE_OAUTH_REFRESH_TOKEN  (get all 3 via: python src/oauth_setup.py <client_secret.json>)
+  OE_DRIVE_FOLDER_ID          (destination folder in your Drive)
 
 Optional:
-  OE_SOURCE_FILE_ID    — override source file (default = Tim's 2026 CSV)
+  OE_SOURCE_FILE_ID           (override source file; default = Tim's 2026 CSV)
 """
-import json
 import os
 import re
 import sys
 from datetime import datetime, timezone
 
-from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials as OAuthCredentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -40,32 +30,19 @@ CURRENT_YEAR      = 2026
 
 
 def _build_drive_client():
-    oauth_rt = os.environ.get("GOOGLE_OAUTH_REFRESH_TOKEN")
-    oauth_cid = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
-    oauth_cs = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET")
-    if oauth_rt and oauth_cid and oauth_cs:
-        print("auth: using OAuth user delegation")
+    try:
         creds = OAuthCredentials(
             token=None,
-            refresh_token=oauth_rt,
+            refresh_token=os.environ["GOOGLE_OAUTH_REFRESH_TOKEN"],
             token_uri="https://oauth2.googleapis.com/token",
-            client_id=oauth_cid,
-            client_secret=oauth_cs,
+            client_id=os.environ["GOOGLE_OAUTH_CLIENT_ID"],
+            client_secret=os.environ["GOOGLE_OAUTH_CLIENT_SECRET"],
             scopes=["https://www.googleapis.com/auth/drive"],
         )
-        return build("drive", "v3", credentials=creds, cache_discovery=False)
-
-    sa_json = os.environ.get("GOOGLE_SA_JSON")
-    if sa_json:
-        print("auth: using service account (only works for Shared Drives)")
-        info = json.loads(sa_json)
-        creds = service_account.Credentials.from_service_account_info(
-            info, scopes=["https://www.googleapis.com/auth/drive"],
-        )
-        return build("drive", "v3", credentials=creds, cache_discovery=False)
-
-    print("ERROR: no auth configured — set GOOGLE_OAUTH_* (preferred) or GOOGLE_SA_JSON")
-    sys.exit(1)
+    except KeyError as e:
+        print(f"ERROR: missing env var {e}")
+        sys.exit(1)
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
 def main():
