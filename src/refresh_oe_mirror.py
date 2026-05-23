@@ -97,6 +97,19 @@ def main():
         sys.exit(1)
     print(f"copied → '{copy['name']}'  id={copy['id']}  size={copy.get('size','?')}")
 
+    # Share the copy "anyone with link → reader" so the API-key downloader
+    # in PullOEData can fetch it. Without this, the copy is private and
+    # GOOGLE_API_KEY gets 403.
+    try:
+        drive.permissions().create(
+            fileId=copy["id"],
+            body={"role": "reader", "type": "anyone"},
+            fields="id",
+        ).execute()
+        print(f"  set sharing: anyone-with-link reader")
+    except HttpError as e:
+        print(f"  WARNING: could not set sharing on copy: {e}")
+
     # Trash older files — ONLY those that match our own mirror naming pattern
     # `{YEAR}_LoL_OE_*.csv`. Manually-uploaded user files with different names
     # are preserved so a known-good copy isn't clobbered if upstream rolls back.
