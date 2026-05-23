@@ -38,6 +38,18 @@ jobs:
           restore-keys: |
             processed-v2-
 
+      - name: Refresh OE mirror (copy Tim's CSV to your Drive folder)
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          OE_DRIVE_FOLDER_ID: ${{ secrets.OE_DRIVE_FOLDER_ID }}
+        run: |
+          if [ -z "$GOOGLE_SA_JSON" ] || [ -z "$OE_DRIVE_FOLDER_ID" ]; then
+            echo "GOOGLE_SA_JSON or OE_DRIVE_FOLDER_ID not set — skipping mirror refresh (will use folder's existing file)"
+          else
+            python src/refresh_oe_mirror.py
+          fi
+        continue-on-error: true
+
       - name: Pull latest Oracle's Elixir data
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
