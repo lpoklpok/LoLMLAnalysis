@@ -160,6 +160,21 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
     snap_keys = set(snaps['_series_key'].unique())
     earliest_snap = snaps['snapshot_time_ts'].min()
     print(f'  diag: {len(snap_keys):,} unique series keys in snapshots; earliest snapshot at {earliest_snap}')
+
+    # Diagnostic: print 5 sample snapshot keys + 5 OE series keys from May 22 to compare
+    print('  diag: sample SNAPSHOT keys (5):')
+    for k in list(snap_keys)[:5]:
+        print(f'    {k}')
+    games_recent = games[games['_date_day'] >= '2026-05-21']
+    print(f'  diag: OE games on/after 2026-05-21: {len(games_recent):,}')
+    print('  diag: sample OE series keys (recent, 5):')
+    seen = set()
+    for k in games_recent['_series_key']:
+        if k in seen: continue
+        seen.add(k)
+        print(f'    {k}')
+        if len(seen) >= 5: break
+    print(f'  diag: intersection of snapshot/OE-recent keys: {len(snap_keys & seen)}')
     n_series = 0; n_series_with_any_snap = 0; n_series_with_pregame_snap = 0; n_series_merged = 0
     sample_miss_no_snap: list = []
     sample_miss_snap_post: list = []
