@@ -232,11 +232,18 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
             else:
                 if len(sample_miss_no_snap) < 6:
                     sample_miss_no_snap.append((series_key, str(first_game_ts)))
+        # Derive best_of from the series's max game number, NOT from each
+        # row's `best_of` column — OE sometimes has inconsistent per-row
+        # `best_of` for the same physical series (e.g. one row says bo1,
+        # another says bo3, others say bo5), which would cause us to take
+        # different bo branches for sibling games of one match.
+        max_game = int(series_games['game'].max())
+        bo = 1 if max_game <= 1 else (3 if max_game <= 3 else 5)
+
         # Convert each picked market to blue-team probability for this series
         # (blue side can swap mid-series so we look up per-game)
         for _, g in series_games.iterrows():
             blue = g['blue_team_teamname']
-            bo   = int(g['best_of'])
             gnum = int(g['game'])
 
             def blue_prob_of(mt: str) -> float | None:
