@@ -80,23 +80,35 @@ def _norm_team(s) -> str:
     return re.sub(r'[^a-z0-9]', '', str(s).lower())
 
 
-def _series_key(blue: str, red: str, date_day: str) -> tuple:
+def _series_key(blue: str, red: str) -> tuple:
     """Stable team-pair key for joining OE games to Polymarket snapshots.
     Team names are normalized (lowercased, non-alphanumerics stripped) so
-    OE and Polymarket variants match."""
-    return (date_day, tuple(sorted([_norm_team(blue), _norm_team(red)])))
+    OE and Polymarket variants match.
+
+    NOTE: we deliberately do NOT include the calendar day. Polymarket's
+    `match_date` is the market RESOLUTION timestamp, which for late-EU
+    matches is midnight-of-the-next-UTC-day, while OE's `date` is the
+    actual game start time. Including date_day in the key would prevent
+    the join for any LEC/LCS late evening match. We rely instead on the
+    pregame temporal cutoff inside `_pick_snapshots` (and the staleness
+    cap below) to associate snapshots to the right series."""
+    return tuple(sorted([_norm_team(blue), _norm_team(red)]))
 
 
 PREGAME_BUFFER = pd.Timedelta(minutes=10)
+SNAPSHOT_STALENESS_CAP = pd.Timedelta(days=14)
 
 
 def _pick_snapshots(snaps: pd.DataFrame, first_game_ts: pd.Timestamp) -> dict[str, dict]:
     """From a per-matchup slice of snapshots, take the latest snapshot of each
     market_type that occurred BEFORE (first_game_ts − 10 min) — excluding the
     draft phase, where champion picks have already started leaking information.
+    Snapshots older than 14 days before game time are ignored (would belong to
+    a prior series between the same teams).
     Returns {market_type: {prob_for_team1, team1, team2}}."""
     cutoff = first_game_ts - PREGAME_BUFFER
-    before = snaps[snaps['snapshot_time_ts'] < cutoff]
+    lower  = first_game_ts - SNAPSHOT_STALENESS_CAP
+    before = snaps[(snaps['snapshot_time_ts'] < cutoff) & (snaps['snapshot_time_ts'] >= lower)]
     if before.empty:
         return {}
     # For each market_type, pick max snapshot_time row
@@ -137,16 +149,15 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
     games['_date_ts']  = pd.to_datetime(games['date'], errors='coerce', utc=True)
     games['_date_day'] = games['_date_ts'].dt.strftime('%Y-%m-%d')
     games['_series_key'] = games.apply(
-        lambda r: _series_key(r['blue_team_teamname'], r['red_team_teamname'], r['_date_day']),
+        lambda r: _series_key(r['blue_team_teamname'], r['red_team_teamname']),
         axis=1
     )
 
     # Preprocess snapshots
     snaps = snaps.copy()
     snaps['snapshot_time_ts'] = pd.to_datetime(snaps['snapshot_time'], errors='coerce', utc=True)
-    snaps['_date_day']        = pd.to_datetime(snaps['match_date'], errors='coerce', utc=True).dt.strftime('%Y-%m-%d')
     snaps['_series_key']      = snaps.apply(
-        lambda r: _series_key(r['team1'], r['team2'], r['_date_day']),
+        lambda r: _series_key(r['team1'], r['team2']),
         axis=1
     )
 
@@ -214,9 +225,11 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
                 source = 'match_winner' if p is not None else None
             elif bo == 3:
                 if gnum == 1:
-                    p = blue_prob_of('game_1_winner');  source = 'game_1_winner'
+                    p = blue_prob_of('game_1_winner')
+                    source = 'game_1_winner' if p is not None else None
                 elif gnum == 2:
-                    p = blue_prob_of('game_2_winner');  source = 'game_2_winner'
+                    p = blue_prob_of('game_2_winner')
+                    source = 'game_2_winner' if p is not None else None
                 elif gnum == 3:
                     p_s  = blue_prob_of('match_winner')
                     p_g1 = blue_prob_of('game_1_winner')
@@ -225,10 +238,18 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
                         p = bo3_g3_prob(p_s, p_g1, p_g2)
                         source = 'derived_g3'
             elif bo == 5:
-                if   gnum == 1: p = blue_prob_of('game_1_winner'); source = 'game_1_winner'
-                elif gnum == 2: p = blue_prob_of('game_2_winner'); source = 'game_2_winner'
-                elif gnum == 3: p = blue_prob_of('game_3_winner'); source = 'game_3_winner'
-                elif gnum == 4: p = blue_prob_of('game_4_winner'); source = 'game_4_winner'
+                if gnum == 1:
+                    p = blue_prob_of('game_1_winner')
+                    source = 'game_1_winner' if p is not None else None
+                elif gnum == 2:
+                    p = blue_prob_of('game_2_winner')
+                    source = 'game_2_winner' if p is not None else None
+                elif gnum == 3:
+                    p = blue_prob_of('game_3_winner')
+                    source = 'game_3_winner' if p is not None else None
+                elif gnum == 4:
+                    p = blue_prob_of('game_4_winner')
+                    source = 'game_4_winner' if p is not None else None
                 elif gnum == 5:
                     p_s  = blue_prob_of('match_winner')
                     p_g1 = blue_prob_of('game_1_winner')
