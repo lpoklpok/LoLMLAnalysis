@@ -36,8 +36,10 @@ interface Summary {
   markets: MarketRow[]
 }
 
-const SUMMARY_URL = 'https://raw.githubusercontent.com/lpoklpok/LoLMLAnalysis/main/data/processed/poly_market_balance.json'
-const RECENT_URL  = 'https://raw.githubusercontent.com/lpoklpok/LoLMLAnalysis/main/data/processed/poly_recent_trades.json'
+// Use Vercel API routes which proxy the GitHub Contents API (60s cache) instead
+// of raw.githubusercontent.com (5-min CDN cache). Adds ~1 min freshness.
+const SUMMARY_URL = '/api/poly-flow'
+const RECENT_URL  = '/api/poly-trades'
 
 interface Trade {
   ts: number

@@ -42,7 +42,9 @@ def main():
     flow = InstalledAppFlow.from_client_secrets_file(str(secret_path), SCOPES)
     # run_local_server spins up a temporary http server, opens browser, captures
     # the redirect with the auth code, and exchanges for tokens.
-    creds = flow.run_local_server(port=0, prompt="consent", access_type="offline")
+    # Fixed port so stale browser tabs from previous attempts can still hit
+    # the right local server. 8765 is rarely used by other apps.
+    creds = flow.run_local_server(port=8765, prompt="consent", access_type="offline", open_browser=False)
 
     with secret_path.open() as f:
         client = json.load(f)
