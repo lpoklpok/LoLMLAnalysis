@@ -151,11 +151,19 @@ def main():
     with open(PROCESSED / 'fe_checkpoint.json') as f:
         ckpt = json.load(f)
 
-    features = pd.read_csv(PROCESSED / 'features.csv', low_memory=False)
+    # Train the logistic-regression model on the MAJOR-leagues feature file
+    # only (LCK/LEC/LPL) — same as before. Don't expand training data here.
+    features_train = pd.read_csv(PROCESSED / 'features.csv', low_memory=False)
+    features_train['date'] = pd.to_datetime(features_train['date'], utc=True)
+
+    # But for the team enumeration / per-team stats (ELO, roster, gd15, etc.)
+    # we want EVERY 2026 team — including LCS — so the /calculator page can
+    # let the user pick any team. Load features_all.csv for that lookup.
+    features = pd.read_csv(PROCESSED / 'features_all.csv', low_memory=False)
     features['date'] = pd.to_datetime(features['date'], utc=True)
 
     print("Training model…")
-    model = train_model(features)
+    model = train_model(features_train)
     scaler = model.named_steps['s']
     lr     = model.named_steps['lr']
 
