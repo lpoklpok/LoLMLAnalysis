@@ -31,6 +31,13 @@ interface Game {
   market_source: 'oddsportal' | 'polymarket' | null
   mkt_model_abs: number | null
   ll_diff: number | null
+  // Kelly columns — only for poly-era games (date >= 2026-05-21)
+  // Assume 1% slippage to buy the market (e.g. pay 95¢ for a 94¢ mid). Bet sizing
+  // rounded to whole-percent of bankroll. Side = whichever side has positive
+  // edge after slippage; null if neither side does.
+  kelly_side: 'BLU' | 'RED' | null
+  kelly_bet_pct: number | null
+  kelly_pl_pct: number | null
 }
 
 interface PivotRow {
@@ -65,6 +72,8 @@ const COLS: { key: SortKey; label: string; fmt?: (v: number) => string; width?: 
   { key: 'outperf_diff',   label: 'Outperf Δ',   fmt: v => (v>=0?'+':'')+`${(v*100).toFixed(1)}%` },
   { key: 'mkt_model_abs',  label: '|Mkt−Model|', fmt: v => `${(v*100).toFixed(0)}pp` },
   { key: 'll_diff',        label: 'MktLL−MdlLL', fmt: v => (v>=0?'+':'')+v.toFixed(3) },
+  { key: 'kelly_bet_pct',  label: 'Kelly Bet',   fmt: v => `${v.toFixed(0)}%` },
+  { key: 'kelly_pl_pct',   label: 'P&L',         fmt: v => (v>=0?'+':'')+`${v.toFixed(1)}%` },
 ]
 
 const PIVOT_COLS: { key: PivotSortKey; label: string; fmt: (v: number) => string; tip: string }[] = [
@@ -76,8 +85,12 @@ const PIVOT_COLS: { key: PivotSortKey; label: string; fmt: (v: number) => string
   { key: 'avg_mkt_model_abs', label: 'Avg |Mkt−Model|', fmt: v => `${(v*100).toFixed(1)}pp`,   tip: 'Average absolute market vs model disagreement' },
 ]
 
-function fmt(col: typeof COLS[0], val: unknown): string {
+function fmt(col: typeof COLS[0], val: unknown, row?: Game): string {
   if (val === null || val === undefined) return '—'
+  if (col.key === 'kelly_bet_pct') {
+    const side = row?.kelly_side
+    return side ? `${side} ${(val as number).toFixed(0)}%` : '—'
+  }
   if (col.fmt) return col.fmt(val as number)
   if (col.key === 'date') return new Date(val as string).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit', timeZone: 'UTC' })
   if (col.key === 'blue_win') return (val as number) === 1 ? 'Blue' : 'Red'
@@ -95,6 +108,8 @@ function cellColor(col: typeof COLS[0], val: unknown): string {
   }
   if (col.key === 'h2h_wr') return v > 0.5 ? 'text-blue-400' : v < 0.5 ? 'text-red-400' : 'text-gray-400'
   if (col.key === 'll_diff') return v > 0 ? 'text-green-400' : v < 0 ? 'text-red-400' : 'text-gray-400'
+  if (col.key === 'kelly_pl_pct') return v > 0 ? 'text-green-400' : v < 0 ? 'text-red-400' : 'text-gray-400'
+  if (col.key === 'kelly_bet_pct') return 'text-yellow-300'
   return 'text-gray-300'
 }
 
@@ -150,7 +165,39 @@ export default function GamesPage() {
           const mdl_ll = outcome === 1 ? -Math.log(clamp(mdl)) : -Math.log(clamp(1 - mdl))
           ll_diff = Math.round((mkt_ll - mdl_ll) * 1000) / 1000
         }
-        return { ...g, effective_market, market_source, mkt_model_abs, ll_diff }
+        // Kelly bet: only for polymarket-era games (date >= 2026-05-21) with both odds + model
+        let kelly_side: 'BLU' | 'RED' | null = null
+        let kelly_bet_pct: number | null = null
+        let kelly_pl_pct:  number | null = null
+        const polyMid = g.poly_blue_win_prob
+        if (polyMid != null && mdl != null && g.date >= '2026-05-21') {
+          const SLIP = 0.01
+          // Two candidate sides; pick whichever has positive edge (if any)
+          const buyYes = polyMid + SLIP          // pay (mid+1%) to bet BLUE wins
+          const buyNo  = (1 - polyMid) + SLIP    // pay (1-mid+1%) to bet RED wins
+          const edgeYes = mdl - buyYes
+          const edgeNo  = (1 - mdl) - buyNo
+          if (edgeYes > 0 || edgeNo > 0) {
+            const side  = edgeYes >= edgeNo ? 'BLU' : 'RED'
+            const p     = side === 'BLU' ? mdl : (1 - mdl)
+            const price = side === 'BLU' ? buyYes : buyNo
+            // Full Kelly: f* = (p - price) / (1 - price). Round to whole-percent.
+            const f = (p - price) / (1 - price)
+            const bet_pct = Math.max(0, Math.min(100, Math.round(f * 100)))
+            if (bet_pct > 0) {
+              kelly_side = side
+              kelly_bet_pct = bet_pct
+              const won = (side === 'BLU' && outcome === 1) || (side === 'RED' && outcome === 0)
+              // Win: stake / price = shares; each pays $1 → profit = stake * (1-price)/price
+              // Lose: forfeit the stake
+              kelly_pl_pct = won
+                ? Math.round(bet_pct * (1 - price) / price * 10) / 10
+                : -bet_pct
+            }
+          }
+        }
+        return { ...g, effective_market, market_source, mkt_model_abs, ll_diff,
+                 kelly_side, kelly_bet_pct, kelly_pl_pct }
       }))
       setLoading(false)
     }
@@ -215,6 +262,15 @@ export default function GamesPage() {
 
   const paged = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
   const totalPages = Math.ceil(sorted.length / PAGE_SIZE)
+
+  // Kelly summary across all currently-filtered games (NOT just the page)
+  const kellySummary = useMemo(() => {
+    const bets = filtered.filter(g => g.kelly_bet_pct != null && g.kelly_pl_pct != null)
+    if (!bets.length) return null
+    const total_pl = bets.reduce((s, g) => s + (g.kelly_pl_pct as number), 0)
+    const wins    = bets.filter(g => (g.kelly_pl_pct as number) > 0).length
+    return { n: bets.length, total_pl, wins }
+  }, [filtered])
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -302,6 +358,18 @@ export default function GamesPage() {
           <p className="text-gray-500 text-sm mt-8">Loading…</p>
         ) : mode === 'games' ? (
           <>
+            {kellySummary && (
+              <p className="text-xs text-gray-400 mb-3">
+                Kelly across filtered set: <span className="text-yellow-300 font-mono">{kellySummary.n} bets</span>
+                {', '}
+                <span className="font-mono">{kellySummary.wins}-{kellySummary.n - kellySummary.wins}</span>
+                {', total P&L '}
+                <span className={`font-mono ${kellySummary.total_pl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {kellySummary.total_pl >= 0 ? '+' : ''}{kellySummary.total_pl.toFixed(1)}% of bankroll
+                </span>
+                <span className="text-gray-500 ml-2">(1% slippage, full-percent Kelly, polymarket-era only)</span>
+              </p>
+            )}
             <table className="w-full text-xs whitespace-nowrap">
               <thead>
                 <tr className="border-b border-gray-800">
@@ -329,7 +397,7 @@ export default function GamesPage() {
                   >
                     {COLS.map(col => (
                       <td key={col.key} className={`py-1.5 pr-4 font-mono ${cellColor(col, row[col.key])}`}>
-                        {fmt(col, row[col.key])}
+                        {fmt(col, row[col.key], row)}
                       </td>
                     ))}
                   </tr>
