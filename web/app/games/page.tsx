@@ -55,6 +55,8 @@ type SortDir = 'asc' | 'desc'
 type PivotSortKey = keyof PivotRow
 type Mode = 'games' | 'pivot'
 
+const MAJOR_LEAGUES = ['LCS', 'LEC', 'LCK', 'LPL', 'LCP', 'MSI', 'Worlds', 'WLDs', 'EWC']
+
 const COLS: { key: SortKey; label: string; fmt?: (v: number) => string; width?: string }[] = [
   { key: 'date',           label: 'Date',        width: 'w-24' },
   { key: 'league',         label: 'League',      width: 'w-14' },
@@ -289,7 +291,6 @@ export default function GamesPage() {
 
   function handleFilter() { setPage(0) }
 
-  const MAJOR_LEAGUES = ['LCS', 'LEC', 'LCK', 'LPL', 'LCP', 'MSI', 'Worlds', 'WLDs', 'EWC']
   const leagues = useMemo(
     () => ['All', 'Major Leagues', ...Array.from(new Set(games.map(g => g.league))).sort()],
     [games]
