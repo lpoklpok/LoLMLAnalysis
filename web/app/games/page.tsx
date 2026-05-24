@@ -181,8 +181,8 @@ export default function GamesPage() {
             const side  = edgeYes >= edgeNo ? 'BLU' : 'RED'
             const p     = side === 'BLU' ? mdl : (1 - mdl)
             const price = side === 'BLU' ? buyYes : buyNo
-            // Full Kelly: f* = (p - price) / (1 - price). Round to whole-percent.
-            const f = (p - price) / (1 - price)
+            // Half-Kelly: f* = 0.5 * (p - price) / (1 - price). Round to whole-percent.
+            const f = 0.5 * (p - price) / (1 - price)
             const bet_pct = Math.max(0, Math.min(100, Math.round(f * 100)))
             if (bet_pct > 0) {
               kelly_side = side
@@ -367,7 +367,7 @@ export default function GamesPage() {
                 <span className={`font-mono ${kellySummary.total_pl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                   {kellySummary.total_pl >= 0 ? '+' : ''}{kellySummary.total_pl.toFixed(1)}% of bankroll
                 </span>
-                <span className="text-gray-500 ml-2">(1% slippage, full-percent Kelly, polymarket-era only)</span>
+                <span className="text-gray-500 ml-2">(1% slippage, half-Kelly rounded to whole %, polymarket-era only)</span>
               </p>
             )}
             <table className="w-full text-xs whitespace-nowrap">
