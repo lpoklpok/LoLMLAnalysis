@@ -13,14 +13,13 @@ interface MarketRow {
   best_of: number
   market_type: string
   market_question: string
-  yes_outcome: string
-  no_outcome: string
   n_trades: number
   total_volume_usd: number
-  net_yes_shares: number
-  net_yes_usd: number
-  buy_volume_usd: number
-  sell_volume_usd: number
+  team1_flow_usd: number
+  team2_flow_usd: number
+  team1_flow_shares: number
+  team2_flow_shares: number
+  team1_share_pct: number   // 0..100 — team1's share of directional flow $
   last_trade_ts: number
   last_trade_price: number
 }
@@ -29,29 +28,17 @@ interface Summary {
   generated_at_utc: string
   window_hours: number
   min_trade_usd: number
+  price_floor: number
+  price_ceil: number
   n_markets: number
   n_trades_window: number
+  n_excluded_tail: number
   markets: MarketRow[]
 }
 
-// Public raw URL (no auth needed)
 const SUMMARY_URL = 'https://raw.githubusercontent.com/lpoklpok/LoLMLAnalysis/main/data/processed/poly_market_balance.json'
 
-type SortKey = keyof MarketRow
-type SortDir = 'asc' | 'desc'
-
-const COLS: { key: SortKey; label: string; fmt?: (v: any, row?: MarketRow) => string; width?: string; tip?: string }[] = [
-  { key: 'event_title',     label: 'Event',        width: 'min-w-[260px]' },
-  { key: 'market_type',     label: 'Market',       width: 'w-32' },
-  { key: 'total_volume_usd',label: 'Volume 24h',   fmt: v => '$' + (v as number).toLocaleString('en-US', { maximumFractionDigits: 0 }), tip: 'Total notional traded in last 24h' },
-  { key: 'n_trades',        label: 'Trades',       fmt: v => String(v), tip: 'Number of trades in last 24h' },
-  { key: 'net_yes_usd',     label: 'Net Yes $',    fmt: v => (v >= 0 ? '+' : '') + '$' + Math.abs(v as number).toLocaleString('en-US', { maximumFractionDigits: 0 }), tip: 'Net taker $ on the Yes side (positive = bullish Yes)' },
-  { key: 'net_yes_shares',  label: 'Net Yes Sh.',  fmt: v => (v >= 0 ? '+' : '') + Math.round(v as number).toLocaleString(), tip: 'Net taker shares on Yes side' },
-  { key: 'buy_volume_usd',  label: 'Yes Buy $',    fmt: v => '$' + (v as number).toLocaleString('en-US', { maximumFractionDigits: 0 }) },
-  { key: 'sell_volume_usd', label: 'Yes Sell $',   fmt: v => '$' + (v as number).toLocaleString('en-US', { maximumFractionDigits: 0 }) },
-  { key: 'last_trade_price',label: 'Last Px',      fmt: (v, row) => `${(v as number).toFixed(3)}` },
-  { key: 'last_trade_ts',   label: 'Last Trade',   fmt: v => relTime(v as number) },
-]
+type SortKey = 'total_volume_usd' | 'team1_flow_usd' | 'team2_flow_usd' | 'team1_share_pct' | 'last_trade_ts' | 'n_trades'
 
 function relTime(unixSec: number): string {
   if (!unixSec) return '—'
@@ -62,11 +49,33 @@ function relTime(unixSec: number): string {
   return `${Math.round(diff / 86400)}d ago`
 }
 
-function cellColor(col: SortKey, val: number, row?: MarketRow): string {
-  if (col === 'net_yes_usd' || col === 'net_yes_shares') {
-    return val > 0 ? 'text-green-400' : val < 0 ? 'text-red-400' : 'text-gray-400'
-  }
-  return 'text-gray-300'
+function ImbalanceBar({ row }: { row: MarketRow }) {
+  const pct = row.team1_share_pct ?? 50
+  // Light-tinted bar that visually represents the split
+  return (
+    <div className="w-full">
+      <div className="flex items-center gap-2 text-[11px] font-mono mb-0.5">
+        <span className="text-blue-300 truncate flex-1" title={row.team1}>{row.team1}</span>
+        <span className="text-gray-500 text-[10px]">{pct.toFixed(0)}% / {(100-pct).toFixed(0)}%</span>
+        <span className="text-red-300 truncate flex-1 text-right" title={row.team2}>{row.team2}</span>
+      </div>
+      <div className="flex h-2 rounded-sm overflow-hidden bg-gray-800 border border-gray-700">
+        <div
+          className="bg-blue-500/70 h-full transition-all"
+          style={{ width: `${pct}%` }}
+        />
+        <div
+          className="bg-red-500/70 h-full transition-all"
+          style={{ width: `${100 - pct}%` }}
+        />
+      </div>
+    </div>
+  )
+}
+
+function fmtUsd(v: number): string {
+  if (v >= 1000) return '$' + (v / 1000).toFixed(1) + 'k'
+  return '$' + Math.round(v).toLocaleString()
 }
 
 export default function FlowPage() {
@@ -74,7 +83,7 @@ export default function FlowPage() {
   const [loading, setLoading] = useState(true)
   const [err, setErr]         = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('total_volume_usd')
-  const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [search, setSearch]   = useState('')
   const [marketTypeFilter, setMarketTypeFilter] = useState('All')
 
@@ -94,7 +103,7 @@ export default function FlowPage() {
 
   useEffect(() => {
     load()
-    const id = setInterval(load, 30_000)  // refresh every 30s
+    const id = setInterval(load, 30_000)
     return () => clearInterval(id)
   }, [])
 
@@ -110,8 +119,9 @@ export default function FlowPage() {
 
   const sorted = useMemo(() => {
     return [...filtered].sort((a, b) => {
-      const av = a[sortKey], bv = b[sortKey]
-      const cmp = (av as number) < (bv as number) ? -1 : (av as number) > (bv as number) ? 1 : 0
+      const av = a[sortKey] as number
+      const bv = b[sortKey] as number
+      const cmp = av < bv ? -1 : av > bv ? 1 : 0
       return sortDir === 'asc' ? cmp : -cmp
     })
   }, [filtered, sortKey, sortDir])
@@ -130,7 +140,7 @@ export default function FlowPage() {
     <div className="min-h-screen bg-gray-950 text-gray-100">
       <header className="border-b border-gray-800 px-6 py-4">
         <h1 className="text-2xl font-bold text-blue-400">LoL Esports Analytics</h1>
-        <p className="text-sm text-gray-400 mt-1">Polymarket order flow · last 24h</p>
+        <p className="text-sm text-gray-400 mt-1">Polymarket order flow · last 24h · excl. trades at &le;{data?.price_floor ?? 0.02} or &ge;{data?.price_ceil ?? 0.98}</p>
       </header>
 
       <div className="px-6 py-4 border-b border-gray-800 flex gap-6 flex-wrap items-center">
@@ -163,7 +173,9 @@ export default function FlowPage() {
           </select>
         </div>
         <span className="text-xs text-gray-500 ml-auto">
-          {data ? `${sorted.length} of ${data.n_markets} markets · ${data.n_trades_window} trades in window · updated ${relTime(Date.parse(data.generated_at_utc)/1000)}` : (loading ? 'Loading…' : err ?? 'No data')}
+          {data
+            ? `${sorted.length} of ${data.n_markets} markets · ${data.n_trades_window} trades in window (${data.n_excluded_tail} excluded as tail) · updated ${relTime(Date.parse(data.generated_at_utc) / 1000)}`
+            : (loading ? 'Loading…' : err ?? 'No data')}
         </span>
       </div>
 
@@ -171,48 +183,75 @@ export default function FlowPage() {
         {loading && !data ? (
           <p className="text-gray-500 text-sm mt-8">Loading order flow data…</p>
         ) : err && !data ? (
-          <p className="text-red-400 text-sm mt-8">Error: {err} — first poll may not have written the file yet; refresh in a minute.</p>
+          <p className="text-red-400 text-sm mt-8">Error: {err}</p>
         ) : (
           <table className="w-full text-xs whitespace-nowrap">
             <thead>
               <tr className="border-b border-gray-800">
-                {COLS.map(col => (
-                  <th
-                    key={col.key}
-                    onClick={() => toggleSort(col.key)}
-                    title={col.tip}
-                    className={`text-left py-2 pr-4 font-medium text-gray-500 cursor-pointer hover:text-gray-300 select-none ${col.width ?? ''}`}
-                  >
-                    {col.label}
-                    {sortKey === col.key && <span className="ml-1 text-gray-400">{sortDir === 'asc' ? '↑' : '↓'}</span>}
-                  </th>
-                ))}
+                <th className="text-left py-2 pr-4 font-medium text-gray-500 min-w-[260px]">Event</th>
+                <th className="text-left py-2 pr-4 font-medium text-gray-500 w-32">Market</th>
+                <th className="text-right py-2 pr-4 font-medium text-gray-500 cursor-pointer hover:text-gray-300 select-none w-24"
+                    onClick={() => toggleSort('total_volume_usd')}
+                    title="Total notional traded in window">
+                  Volume {sortKey === 'total_volume_usd' && (sortDir === 'asc' ? '↑' : '↓')}
+                </th>
+                <th className="text-right py-2 pr-4 font-medium text-gray-500 cursor-pointer hover:text-gray-300 select-none w-16"
+                    onClick={() => toggleSort('n_trades')}>
+                  Trades {sortKey === 'n_trades' && (sortDir === 'asc' ? '↑' : '↓')}
+                </th>
+                <th className="text-right py-2 pr-4 font-medium text-gray-500 cursor-pointer hover:text-gray-300 select-none w-24"
+                    onClick={() => toggleSort('team1_flow_usd')}
+                    title="$ flow bullish on team 1 (= BUY team1 + SELL team2)">
+                  Team 1 $ {sortKey === 'team1_flow_usd' && (sortDir === 'asc' ? '↑' : '↓')}
+                </th>
+                <th className="py-2 pr-4 font-medium text-gray-500 cursor-pointer hover:text-gray-300 select-none min-w-[220px]"
+                    onClick={() => toggleSort('team1_share_pct')}
+                    title="Team1 share of bullish flow $ (50% = balanced)">
+                  Imbalance {sortKey === 'team1_share_pct' && (sortDir === 'asc' ? '↑' : '↓')}
+                </th>
+                <th className="text-right py-2 pr-4 font-medium text-gray-500 cursor-pointer hover:text-gray-300 select-none w-24"
+                    onClick={() => toggleSort('team2_flow_usd')}
+                    title="$ flow bullish on team 2 (= BUY team2 + SELL team1)">
+                  Team 2 $ {sortKey === 'team2_flow_usd' && (sortDir === 'asc' ? '↑' : '↓')}
+                </th>
+                <th className="text-right py-2 pr-4 font-medium text-gray-500 w-16">Last Px</th>
+                <th className="text-right py-2 pr-4 font-medium text-gray-500 cursor-pointer hover:text-gray-300 select-none w-20"
+                    onClick={() => toggleSort('last_trade_ts')}>
+                  Last {sortKey === 'last_trade_ts' && (sortDir === 'asc' ? '↑' : '↓')}
+                </th>
               </tr>
             </thead>
             <tbody>
-              {sorted.map(row => (
-                <tr key={row.condition_id} className="border-b border-gray-800/30 hover:bg-gray-900/50">
-                  {COLS.map(col => {
-                    const v = row[col.key]
-                    let cell: React.ReactNode = col.fmt ? col.fmt(v, row) : String(v ?? '—')
-                    if (col.key === 'event_title') {
-                      const url = row.event_slug ? `https://polymarket.com/event/${row.event_slug}` : null
-                      cell = (
+              {sorted.map(row => {
+                const url = row.event_slug ? `https://polymarket.com/event/${row.event_slug}` : null
+                return (
+                  <tr key={row.condition_id} className="border-b border-gray-800/30 hover:bg-gray-900/50">
+                    <td className="py-2 pr-4">
+                      {url ? (
+                        <a href={url} target="_blank" rel="noreferrer" className="hover:text-blue-300">
+                          <div className="flex flex-col gap-0.5">
+                            <span className="font-medium text-gray-200">{row.team1} vs {row.team2}</span>
+                            <span className="text-[10px] text-gray-500">{row.tournament || row.event_title}</span>
+                          </div>
+                        </a>
+                      ) : (
                         <div className="flex flex-col gap-0.5">
                           <span className="font-medium text-gray-200">{row.team1} vs {row.team2}</span>
                           <span className="text-[10px] text-gray-500">{row.tournament || row.event_title}</span>
                         </div>
-                      )
-                      if (url) cell = <a href={url} target="_blank" rel="noreferrer" className="hover:text-blue-300">{cell}</a>
-                    }
-                    return (
-                      <td key={col.key as string} className={`py-1.5 pr-4 font-mono ${cellColor(col.key, v as number, row)}`}>
-                        {cell}
-                      </td>
-                    )
-                  })}
-                </tr>
-              ))}
+                      )}
+                    </td>
+                    <td className="py-2 pr-4 font-mono text-gray-300">{row.market_type}</td>
+                    <td className="py-2 pr-4 font-mono text-gray-300 text-right">{fmtUsd(row.total_volume_usd)}</td>
+                    <td className="py-2 pr-4 font-mono text-gray-400 text-right">{row.n_trades}</td>
+                    <td className="py-2 pr-4 font-mono text-blue-300 text-right">{fmtUsd(row.team1_flow_usd)}</td>
+                    <td className="py-2 pr-4"><ImbalanceBar row={row} /></td>
+                    <td className="py-2 pr-4 font-mono text-red-300 text-right">{fmtUsd(row.team2_flow_usd)}</td>
+                    <td className="py-2 pr-4 font-mono text-gray-300 text-right">{row.last_trade_price.toFixed(3)}</td>
+                    <td className="py-2 pr-4 font-mono text-gray-500 text-right">{relTime(row.last_trade_ts)}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         )}
