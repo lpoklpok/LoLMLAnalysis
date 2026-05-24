@@ -207,7 +207,11 @@ export default function GamesPage() {
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
     return games.filter(g => {
-      if (league !== 'All' && g.league !== league) return false
+      if (league === 'Major Leagues') {
+        if (!MAJOR_LEAGUES.includes(g.league)) return false
+      } else if (league !== 'All' && g.league !== league) {
+        return false
+      }
       if (year !== 'All' && g.year !== parseInt(year)) return false
       if (playoffs === 'Playoffs' && !g.playoffs) return false
       if (playoffs === 'Regular' && g.playoffs) return false
@@ -285,7 +289,11 @@ export default function GamesPage() {
 
   function handleFilter() { setPage(0) }
 
-  const leagues = useMemo(() => ['All', ...Array.from(new Set(games.map(g => g.league))).sort()], [games])
+  const MAJOR_LEAGUES = ['LCS', 'LEC', 'LCK', 'LPL', 'LCP', 'MSI', 'Worlds', 'WLDs', 'EWC']
+  const leagues = useMemo(
+    () => ['All', 'Major Leagues', ...Array.from(new Set(games.map(g => g.league))).sort()],
+    [games]
+  )
   const years   = useMemo(() => ['All', ...Array.from(new Set(games.map(g => String(g.year)))).sort().reverse()], [games])
 
   return (
