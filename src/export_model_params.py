@@ -183,10 +183,15 @@ def main():
     team_outperf_staleness = ckpt.get('team_outperf_staleness', {})
 
     # Collect all teams that appear in 2026 data
+    print(f"  diag: features_all rows: {len(features):,}; columns: {list(features.columns)[:8]}…")
+    print(f"  diag: features year distribution: {features['year'].value_counts().to_dict()}")
+    if 'league' in features.columns:
+        print(f"  diag: features 2026 leagues: {features[features['year']==2026]['league'].value_counts().to_dict()}")
     recent = features[features['year'] == 2026]
     teams_2026 = sorted(set(recent['blue_team'].dropna()) | set(recent['red_team'].dropna()))
 
     print(f"Computing per-team stats for {len(teams_2026)} teams…")
+    print(f"  diag: teams_2026 sample: {teams_2026[:10]}")
     team_stats = {}
     for team in teams_2026:
         league = _team_league(team, features)
