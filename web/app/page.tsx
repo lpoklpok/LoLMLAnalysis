@@ -130,6 +130,9 @@ export default function Dashboard() {
         <Link href="/chart" className="text-sm text-purple-400 hover:text-purple-300 transition-colors">
           Model vs Market →
         </Link>
+        <Link href="/flow" className="text-sm text-rose-400 hover:text-rose-300 transition-colors">
+          Order Flow →
+        </Link>
         <Link href="/backtest" className="text-sm text-emerald-400 hover:text-emerald-300 transition-colors">
           Kelly Backtest →
         </Link>
