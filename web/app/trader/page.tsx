@@ -177,6 +177,12 @@ interface Row {
   kalshi_edge_vs_fv: number | null
 }
 
+// Normalise team names for matching against Polymarket outcomes. Polymarket
+// uses different spacing/punctuation than OE/our DB (e.g. "Nongshim Red Force"
+// vs our "Nongshim RedForce"), so we strip all non-alphanumeric chars before
+// comparing. Mirrors the python `_norm_team` in src/merge_polymarket_data.py.
+const _normTeam = (s: string): string => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+
 function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
   if (!detail) return []
   const rows: Row[] = []
@@ -196,7 +202,7 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
     if (sm.market_type === 'match_winner') {
       market_label = 'Match Winner'
       // P(team1 wins series). team1 == blue → use pBlue, else use 1-pBlue
-      const team1IsBlue = o1.trim().toLowerCase() === pred.blue_team.trim().toLowerCase()
+      const team1IsBlue = _normTeam(o1) === _normTeam(pred.blue_team)
       const pTeam1Game = team1IsBlue ? pBlue : 1 - pBlue
       fv1 = seriesProb(pTeam1Game, bo)
       fv2 = 1 - fv1
@@ -204,7 +210,7 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
       const gnum = parseInt(sm.market_type.replace('game_','').replace('_winner',''), 10)
       market_label = `Game ${gnum} Winner`
       // Per-game side-neutral prob, same value for every game
-      const team1IsBlue = o1.trim().toLowerCase() === pred.blue_team.trim().toLowerCase()
+      const team1IsBlue = _normTeam(o1) === _normTeam(pred.blue_team)
       fv1 = team1IsBlue ? pBlue : 1 - pBlue
       fv2 = 1 - fv1
     } else if (sm.market_type === 'game_handicap') {
