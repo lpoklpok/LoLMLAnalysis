@@ -37,6 +37,27 @@ interface Summary {
 }
 
 const SUMMARY_URL = 'https://raw.githubusercontent.com/lpoklpok/LoLMLAnalysis/main/data/processed/poly_market_balance.json'
+const RECENT_URL  = 'https://raw.githubusercontent.com/lpoklpok/LoLMLAnalysis/main/data/processed/poly_recent_trades.json'
+
+interface Trade {
+  ts: number
+  event_slug: string
+  team1: string
+  team2: string
+  market_type: string
+  side: 'BUY' | 'SELL'
+  bullish_team: string
+  price: number
+  shares: number
+  usd: number
+  taker: string
+  taker_name: string
+}
+interface RecentFeed {
+  generated_at_utc: string
+  n: number
+  trades: Trade[]
+}
 
 type SortKey = 'total_volume_usd' | 'team1_flow_usd' | 'team2_flow_usd' | 'team1_share_pct' | 'last_trade_ts' | 'n_trades'
 
@@ -80,19 +101,24 @@ function fmtUsd(v: number): string {
 
 export default function FlowPage() {
   const [data, setData]       = useState<Summary | null>(null)
+  const [recent, setRecent]   = useState<RecentFeed | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr]         = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('total_volume_usd')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [search, setSearch]   = useState('')
   const [marketTypeFilter, setMarketTypeFilter] = useState('All')
+  const [recentLimit, setRecentLimit] = useState(50)
 
   async function load() {
     try {
-      const r = await fetch(SUMMARY_URL + '?t=' + Date.now(), { cache: 'no-store' })
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      const j: Summary = await r.json()
-      setData(j)
+      const [rs, rr] = await Promise.all([
+        fetch(SUMMARY_URL + '?t=' + Date.now(), { cache: 'no-store' }),
+        fetch(RECENT_URL  + '?t=' + Date.now(), { cache: 'no-store' }),
+      ])
+      if (!rs.ok) throw new Error(`summary HTTP ${rs.status}`)
+      setData(await rs.json())
+      if (rr.ok) setRecent(await rr.json())
       setErr(null)
     } catch (e) {
       setErr(String(e))
@@ -103,7 +129,7 @@ export default function FlowPage() {
 
   useEffect(() => {
     load()
-    const id = setInterval(load, 30_000)
+    const id = setInterval(load, 60_000)   // 1-minute refresh
     return () => clearInterval(id)
   }, [])
 
@@ -254,6 +280,79 @@ export default function FlowPage() {
               })}
             </tbody>
           </table>
+        )}
+
+        {/* Recent Trades feed */}
+        {recent && recent.trades.length > 0 && (
+          <section className="mt-10">
+            <div className="flex items-baseline justify-between border-b border-gray-800 pb-2 mb-3">
+              <h2 className="text-sm font-semibold text-gray-200">Recent Trades</h2>
+              <div className="flex items-center gap-3 text-xs text-gray-500">
+                <span>showing latest {Math.min(recentLimit, recent.trades.length)} of {recent.n}</span>
+                <select
+                  value={recentLimit}
+                  onChange={e => setRecentLimit(parseInt(e.target.value))}
+                  className="bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-xs"
+                >
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={200}>200</option>
+                  <option value={300}>300</option>
+                </select>
+              </div>
+            </div>
+            <table className="w-full text-xs whitespace-nowrap">
+              <thead>
+                <tr className="border-b border-gray-800">
+                  <th className="text-left  py-1.5 pr-4 font-medium text-gray-500 w-20">Time</th>
+                  <th className="text-left  py-1.5 pr-4 font-medium text-gray-500">Event</th>
+                  <th className="text-left  py-1.5 pr-4 font-medium text-gray-500 w-28">Market</th>
+                  <th className="text-left  py-1.5 pr-4 font-medium text-gray-500 w-32">Direction</th>
+                  <th className="text-right py-1.5 pr-4 font-medium text-gray-500 w-20">Price</th>
+                  <th className="text-right py-1.5 pr-4 font-medium text-gray-500 w-24">Shares</th>
+                  <th className="text-right py-1.5 pr-4 font-medium text-gray-500 w-20">USD</th>
+                  <th className="text-left  py-1.5 pr-4 font-medium text-gray-500">Counterparty (taker)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recent.trades.slice(0, recentLimit).map((t, i) => {
+                  const isBullishT1 = t.bullish_team === t.team1
+                  const dirColor = isBullishT1 ? 'text-blue-300' : 'text-red-300'
+                  const arrow = t.side === 'BUY' ? '↑' : '↓'
+                  return (
+                    <tr key={`${t.ts}-${i}-${t.taker.slice(0,6)}`} className="border-b border-gray-800/30 hover:bg-gray-900/50">
+                      <td className="py-1.5 pr-4 font-mono text-gray-500">{relTime(t.ts)}</td>
+                      <td className="py-1.5 pr-4">
+                        <a
+                          href={t.event_slug ? `https://polymarket.com/event/${t.event_slug}` : '#'}
+                          target="_blank" rel="noreferrer"
+                          className="text-gray-200 hover:text-blue-300"
+                        >
+                          {t.team1} vs {t.team2}
+                        </a>
+                      </td>
+                      <td className="py-1.5 pr-4 font-mono text-gray-400">{t.market_type}</td>
+                      <td className={`py-1.5 pr-4 font-mono ${dirColor}`}>{arrow} {t.side} {t.bullish_team}</td>
+                      <td className="py-1.5 pr-4 font-mono text-gray-300 text-right">{t.price.toFixed(3)}</td>
+                      <td className="py-1.5 pr-4 font-mono text-gray-300 text-right">{Math.round(t.shares).toLocaleString()}</td>
+                      <td className={`py-1.5 pr-4 font-mono text-right ${t.usd >= 1000 ? 'text-yellow-300' : 'text-gray-300'}`}>{fmtUsd(t.usd)}</td>
+                      <td className="py-1.5 pr-4 font-mono text-gray-400">
+                        {t.taker_name && <span className="text-gray-300 mr-1">{t.taker_name}</span>}
+                        <a
+                          href={`https://polygonscan.com/address/${t.taker}`}
+                          target="_blank" rel="noreferrer"
+                          className="text-gray-500 hover:text-blue-300"
+                        >
+                          {t.taker.slice(0, 6)}…{t.taker.slice(-4)}
+                        </a>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </section>
         )}
       </main>
     </div>
