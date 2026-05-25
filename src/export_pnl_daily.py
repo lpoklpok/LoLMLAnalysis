@@ -107,14 +107,19 @@ def _fetch_polymarket() -> pd.DataFrame:
             if r.status_code != 200:
                 return cond, None
             j = r.json()
+            is_closed = bool(j.get('closed'))
             out = {}
             for tok in j.get('tokens', []):
                 outcome = str(tok.get('outcome', '')).lower()
                 winner  = tok.get('winner')
-                if winner is True:  out[outcome] = 1.0
-                elif winner is False: out[outcome] = 0.0
+                # Only trust winner flag when the market is fully closed.
+                # Unfinalized markets (UMA "proposed" state) often have
+                # winner=false on BOTH tokens — use price instead.
+                if is_closed and winner is True:
+                    out[outcome] = 1.0
+                elif is_closed and winner is False:
+                    out[outcome] = 0.0
                 else:
-                    # Open market — use last trade price as proxy for current mid
                     pr = tok.get('price')
                     if pr is not None:
                         try: out[outcome] = float(pr)
