@@ -72,6 +72,16 @@ function subOrder(s: string): number {
   return i < 0 ? 999 : i
 }
 
+// Parse the YYYY-MM-DD that Polymarket bakes into event slugs, e.g.
+// "lol-ly-tl2-2026-05-24" → 2026-05-24. Returns Infinity for events without
+// a parseable date (futures like "lol-lck-2026-season-winner" — note the
+// year-only — so we put them at the end of the chronological sort).
+function eventTs(slug: string): number {
+  const m = slug.match(/-(\d{4})-(\d{2})-(\d{2})(?:\b|$|-)/)
+  if (!m) return Number.POSITIVE_INFINITY
+  return Date.UTC(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]))
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────
 
 export default function MmPage() {
@@ -152,10 +162,12 @@ export default function MmPage() {
       if (q && !`${g.event_title} ${g.team1} ${g.team2}`.toLowerCase().includes(q)) return false
       return true
     }).sort((a, b) => {
-      // Active events first
+      // Active events first, then by upcoming event date (ascending), then title
       const aActive = [...a.bySubmarket.values()].some(r => r.outcome0?.bid_enabled || r.outcome0?.offer_enabled || r.outcome1?.bid_enabled || r.outcome1?.offer_enabled)
       const bActive = [...b.bySubmarket.values()].some(r => r.outcome0?.bid_enabled || r.outcome0?.offer_enabled || r.outcome1?.bid_enabled || r.outcome1?.offer_enabled)
       if (aActive !== bActive) return aActive ? -1 : 1
+      const da = eventTs(a.event_slug), db = eventTs(b.event_slug)
+      if (da !== db) return da - db
       return a.event_title.localeCompare(b.event_title)
     })
   }, [groups, search, filter])
@@ -312,7 +324,19 @@ function EventCard({
     <div className={`border rounded-lg ${anyActive ? 'border-green-700/60 bg-green-950/10' : 'border-gray-800 bg-gray-900/30'}`}>
       <div className="px-4 py-3 border-b border-gray-800 flex items-center justify-between gap-4">
         <div className="min-w-0">
-          <div className="font-semibold text-gray-100 truncate">{group.team1} vs {group.team2}</div>
+          <div className="font-semibold text-gray-100 truncate">
+            {group.team1} vs {group.team2}
+            {(() => {
+              const ts = eventTs(group.event_slug)
+              if (!Number.isFinite(ts)) return null
+              const days = Math.round((ts - Date.now()) / 86400000)
+              const label = days < 0 ? `${Math.abs(days)}d ago`
+                          : days === 0 ? 'today'
+                          : days === 1 ? 'tomorrow'
+                          : `in ${days}d`
+              return <span className="ml-2 text-xs font-normal text-gray-500">· {new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })} ({label})</span>
+            })()}
+          </div>
           <div className="text-xs text-gray-500 truncate">{group.event_title}</div>
         </div>
         <div className="flex items-center gap-3">
