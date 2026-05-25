@@ -67,10 +67,12 @@ export default function SystematicPage() {
   const [fills, setFills] = useState<FillRow[]>([])
   const [pnl, setPnl] = useState<PnlRow[]>([])
   const [states, setStates] = useState<StateRow[]>([])
+  const [ordersToday, setOrdersToday] = useState<number>(0)
   const [saving, setSaving] = useState(false)
 
   const refresh = useCallback(async () => {
-    const [r, e, f, p, s] = await Promise.all([
+    const todayStart = new Date(); todayStart.setUTCHours(0, 0, 0, 0)
+    const [r, e, f, p, s, o] = await Promise.all([
       supabase.from('mm_auto_rules').select('*').eq('id', 1).single(),
       supabase.from('mm_config')
         .select('condition_id,event_slug,event_title,market_type,outcome_index,outcome_label,quote_size_shares')
@@ -78,12 +80,14 @@ export default function SystematicPage() {
       supabase.from('mm_quotes_log').select('*').eq('action', 'fill').order('ts', { ascending: false }).limit(30),
       supabase.from('mm_pnl_daily').select('*').order('day', { ascending: false }).limit(14),
       supabase.from('mm_state').select('*'),
+      supabase.from('mm_placed_orders').select('*', { count: 'exact', head: true }).gte('placed_at', todayStart.toISOString()),
     ])
     setRules(r.data as AutoRules | null)
     setEnabled((e.data ?? []) as EnabledRow[])
     setFills((f.data ?? []) as FillRow[])
     setPnl((p.data ?? []) as PnlRow[])
     setStates((s.data ?? []) as StateRow[])
+    setOrdersToday(o.count ?? 0)
   }, [])
 
   useEffect(() => {
@@ -198,6 +202,13 @@ export default function SystematicPage() {
                 <div className="font-mono text-gray-200">
                   {todayRow?.fills_count ?? 0} · ${Number(todayRow?.fills_usd ?? 0).toFixed(0)}
                 </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Orders placed today</div>
+                <div className="font-mono text-gray-200">
+                  {ordersToday.toLocaleString()}
+                </div>
+                <div className="text-[10px] text-gray-600">{states.filter(s => s.active_order_id).length} resting now</div>
               </div>
               <div className="ml-auto text-[10px] text-gray-600">
                 updated {todayRow ? new Date(todayRow.updated_at).toLocaleTimeString() : '—'}
