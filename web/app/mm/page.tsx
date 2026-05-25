@@ -105,6 +105,21 @@ export default function MmPage() {
     try { localStorage.setItem('mm_anchor', JSON.stringify(anchorTeam)) } catch {}
   }, [anchorTeam])
 
+  // Pinned events — stay in the Active tab even when all sides are toggled off.
+  const [pinned, setPinned] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set()
+    try { return new Set(JSON.parse(localStorage.getItem('mm_pinned') || '[]')) } catch { return new Set() }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('mm_pinned', JSON.stringify([...pinned])) } catch {}
+  }, [pinned])
+  const togglePin = (slug: string) =>
+    setPinned(prev => {
+      const next = new Set(prev)
+      if (next.has(slug)) next.delete(slug); else next.add(slug)
+      return next
+    })
+
   const stateKey = (c: { condition_id: string; outcome_index: number; side: string }) =>
     `${c.condition_id}|${c.outcome_index}|${c.side}`
 
@@ -155,18 +170,20 @@ export default function MmPage() {
     const q = search.toLowerCase()
     return groups.filter(g => {
       if (filter === 'active') {
-        const any = [...g.bySubmarket.values()].some(r =>
+        const anyOn = [...g.bySubmarket.values()].some(r =>
           r.outcome0?.bid_enabled || r.outcome0?.offer_enabled
           || r.outcome1?.bid_enabled || r.outcome1?.offer_enabled
         )
-        if (!any) return false
+        if (!anyOn && !pinned.has(g.event_slug)) return false
       }
       if (q && !`${g.event_title} ${g.team1} ${g.team2}`.toLowerCase().includes(q)) return false
       return true
     }).sort((a, b) => {
-      // 1. Active first
-      const aActive = [...a.bySubmarket.values()].some(r => r.outcome0?.bid_enabled || r.outcome0?.offer_enabled || r.outcome1?.bid_enabled || r.outcome1?.offer_enabled)
-      const bActive = [...b.bySubmarket.values()].some(r => r.outcome0?.bid_enabled || r.outcome0?.offer_enabled || r.outcome1?.bid_enabled || r.outcome1?.offer_enabled)
+      // 1. Active or pinned first
+      const aAny = [...a.bySubmarket.values()].some(r => r.outcome0?.bid_enabled || r.outcome0?.offer_enabled || r.outcome1?.bid_enabled || r.outcome1?.offer_enabled)
+      const bAny = [...b.bySubmarket.values()].some(r => r.outcome0?.bid_enabled || r.outcome0?.offer_enabled || r.outcome1?.bid_enabled || r.outcome1?.offer_enabled)
+      const aActive = aAny || pinned.has(a.event_slug)
+      const bActive = bAny || pinned.has(b.event_slug)
       if (aActive !== bActive) return aActive ? -1 : 1
       // 2. Upcoming (today / future) ABOVE past
       const now = Date.now()
@@ -263,9 +280,11 @@ export default function MmPage() {
               group={g}
               states={states}
               anchor={anchorTeam[g.event_slug] ?? 0}
+              pinned={pinned.has(g.event_slug)}
               onAnchorChange={(team) => setAnchorTeam(prev => ({ ...prev, [g.event_slug]: team }))}
               onToggle={(cfg, flag) => toggleFlag(cfg, flag)}
               onTurnOffAll={() => bulkSetEventOff(g)}
+              onTogglePin={() => togglePin(g.event_slug)}
             />
           ))}
         </section>
@@ -312,14 +331,16 @@ export default function MmPage() {
 // ── Event card ────────────────────────────────────────────────────────────
 
 function EventCard({
-  group, states, anchor, onAnchorChange, onToggle, onTurnOffAll,
+  group, states, anchor, pinned, onAnchorChange, onToggle, onTurnOffAll, onTogglePin,
 }: {
   group: EventGroup
   states: Record<string, MmState>
   anchor: 0 | 1
+  pinned: boolean
   onAnchorChange: (team: 0 | 1) => void
   onToggle: (cfg: MmConfig | null, flag: 'bid_enabled' | 'offer_enabled') => void
   onTurnOffAll: () => void
+  onTogglePin: () => void
 }) {
   const anchorTeam = anchor === 0 ? group.team1 : group.team2
 
@@ -333,9 +354,14 @@ function EventCard({
   )
 
   return (
-    <div className={`border rounded-lg ${anyActive ? 'border-green-700/60 bg-green-950/10' : 'border-gray-800 bg-gray-900/30'}`}>
+    <div className={`border rounded-lg ${anyActive ? 'border-green-700/60 bg-green-950/10' : pinned ? 'border-yellow-700/60 bg-yellow-950/10' : 'border-gray-800 bg-gray-900/30'}`}>
       <div className="px-4 py-3 border-b border-gray-800 flex items-center justify-between gap-4">
-        <div className="min-w-0">
+        <button
+          onClick={onTogglePin}
+          title={pinned ? 'Unpin from Active tab' : 'Pin to Active tab (stays visible even when no sides toggled on)'}
+          className={`text-base ${pinned ? 'text-yellow-400' : 'text-gray-600 hover:text-gray-300'}`}
+        >{pinned ? '★' : '☆'}</button>
+        <div className="min-w-0 flex-1">
           <div className="font-semibold text-gray-100 truncate">
             {group.team1} vs {group.team2}
             {(() => {
