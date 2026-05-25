@@ -448,7 +448,8 @@ function EventCard({
             <th className="text-left  py-1.5 px-4 font-medium w-40">Submarket</th>
             <th className="text-center py-1.5 px-2 font-medium w-16">Bid</th>
             <th className="text-center py-1.5 px-2 font-medium w-16">Offer</th>
-            <th className="text-center py-1.5 px-2 font-medium w-24" title="Quote size: shares (preferred) — falls back to USD if blank">Size</th>
+            <th className="text-center py-1.5 px-2 font-medium w-20" title="Quote size in shares">Size (sh)</th>
+            <th className="text-center py-1.5 px-2 font-medium w-20" title="Pricing strategy: Join the best level vs penny one cent behind">Strat</th>
             <th className="text-left  py-1.5 px-4 font-medium text-[10px]">State (book top · active quote · fills · pos)</th>
           </tr>
         </thead>
@@ -470,6 +471,9 @@ function EventCard({
                 <td className="py-2 px-2 text-center">
                   {cfg && <SizeEditor cfg={cfg} />}
                 </td>
+                <td className="py-2 px-2 text-center">
+                  {cfg && <StrategyToggle cfg={cfg} />}
+                </td>
                 <td className="py-2 px-4 font-mono text-[10px] text-gray-500 truncate">
                   <SideState side="bid"   state={stateBid}   />
                   <SideState side="offer" state={stateOffer} />
@@ -483,40 +487,49 @@ function EventCard({
   )
 }
 
-// Per-row size editor. Lets the user set EITHER:
-//   - `quote_size_shares` (preferred, exact share count regardless of price)
-//   - `quote_size_usd`    (legacy, derived shares = USD / target_px)
-// Toggle between modes with the unit button.
+// Per-row size editor. Always shares — exact count, price-agnostic.
 function SizeEditor({ cfg }: { cfg: MmConfig }) {
-  const [unit, setUnit] = useState<'sh' | '$'>(cfg.quote_size_shares != null ? 'sh' : '$')
-  const value = unit === 'sh' ? (cfg.quote_size_shares ?? '') : cfg.quote_size_usd
+  const value = cfg.quote_size_shares ?? ''
   const save = async (raw: string) => {
     const v = parseFloat(raw)
     if (isNaN(v) || v <= 0) return
-    if (unit === 'sh') {
-      await supabase.from('mm_config')
-        .update({ quote_size_shares: v, updated_at: new Date().toISOString() })
-        .eq('id', cfg.id)
-    } else {
-      // Switching to USD mode: clear shares so worker falls back to USD/price
-      await supabase.from('mm_config')
-        .update({ quote_size_shares: null, quote_size_usd: v, updated_at: new Date().toISOString() })
-        .eq('id', cfg.id)
-    }
+    await supabase.from('mm_config')
+      .update({ quote_size_shares: v, updated_at: new Date().toISOString() })
+      .eq('id', cfg.id)
   }
   return (
-    <div className="flex items-center gap-1 justify-center">
-      <input type="number" step={unit === 'sh' ? 10 : 5} min={1}
-        defaultValue={value === '' ? '' : value}
-        onBlur={e => save(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-        className="w-14 bg-gray-800 border border-gray-700 rounded px-1 py-0.5 text-xs font-mono text-right" />
-      <button onClick={() => setUnit(u => u === 'sh' ? '$' : 'sh')}
-        className="text-[10px] text-gray-500 hover:text-gray-200 w-4"
-        title="Toggle unit. shares = exact count; $ = USD that gets divided by price">
-        {unit}
-      </button>
-    </div>
+    <input type="number" step={10} min={1}
+      key={value}
+      defaultValue={value}
+      onBlur={e => save(e.target.value)}
+      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+      className="w-16 bg-gray-800 border border-gray-700 rounded px-1 py-0.5 text-xs font-mono text-right" />
+  )
+}
+
+// Per-row strategy toggle: Join the best level vs penny one cent behind.
+function StrategyToggle({ cfg }: { cfg: MmConfig }) {
+  const isPenny = cfg.strategy === 'penny_back'
+  const flip = async () => {
+    await supabase.from('mm_config')
+      .update({
+        strategy: isPenny ? 'join_best' : 'penny_back',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', cfg.id)
+  }
+  return (
+    <button onClick={flip}
+      title={isPenny
+        ? 'Penny back: bid 1¢ below top / offer 1¢ above. Click to switch to Join.'
+        : 'Join best: match the top level. Click to switch to Penny-back.'}
+      className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
+        isPenny
+          ? 'bg-purple-700/40 border-purple-600 text-purple-200'
+          : 'bg-blue-700/40 border-blue-600 text-blue-200'
+      }`}>
+      {isPenny ? 'Pny' : 'Join'}
+    </button>
   )
 }
 
