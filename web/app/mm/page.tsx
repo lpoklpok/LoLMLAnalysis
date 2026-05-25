@@ -186,8 +186,17 @@ export default function MmPage() {
           setLogs(prev => [row, ...prev].slice(0, 40))
           if (row.action === 'fill') playFillPing()
         })
+      // mm_state changes (live book top, active quote, fills, pause reason)
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'mm_state' },
+        (p) => {
+          const row = (p.new ?? p.old) as MmState
+          if (!row) return
+          const key = `${row.condition_id}|${row.outcome_index}|${row.side}`
+          setStates(prev => ({ ...prev, [key]: row }))
+        })
       .subscribe()
-    // Safety-net poll at 15s for configs/states (realtime covers those too,
+    // Safety-net poll at 15s for configs (realtime covers those too,
     // but a slow heartbeat catches any dropped subscriptions).
     const id = setInterval(refresh, 15_000)
     return () => { clearInterval(id); supabase.removeChannel(ch) }
