@@ -163,12 +163,22 @@ export default function MmPage() {
       if (q && !`${g.event_title} ${g.team1} ${g.team2}`.toLowerCase().includes(q)) return false
       return true
     }).sort((a, b) => {
-      // Active events first, then by upcoming event date (ascending), then title
+      // 1. Active first
       const aActive = [...a.bySubmarket.values()].some(r => r.outcome0?.bid_enabled || r.outcome0?.offer_enabled || r.outcome1?.bid_enabled || r.outcome1?.offer_enabled)
       const bActive = [...b.bySubmarket.values()].some(r => r.outcome0?.bid_enabled || r.outcome0?.offer_enabled || r.outcome1?.bid_enabled || r.outcome1?.offer_enabled)
       if (aActive !== bActive) return aActive ? -1 : 1
+      // 2. Upcoming (today / future) ABOVE past
+      const now = Date.now()
       const da = eventTs(a.event_slug), db = eventTs(b.event_slug)
-      if (da !== db) return da - db
+      const aFuture = da >= now - 86400000
+      const bFuture = db >= now - 86400000
+      if (aFuture !== bFuture) return aFuture ? -1 : 1
+      // 3. Soonest-first if both upcoming; most-recent first if both past
+      if (aFuture) {
+        if (da !== db) return da - db
+      } else {
+        if (da !== db) return db - da
+      }
       return a.event_title.localeCompare(b.event_title)
     })
   }, [groups, search, filter])
