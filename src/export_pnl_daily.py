@@ -50,6 +50,13 @@ KALSHI_URL = 'https://api.elections.kalshi.com/trade-api/v2'
 # ── Polymarket ─────────────────────────────────────────────────────────────
 
 def _fetch_polymarket() -> pd.DataFrame:
+    """Realized-PnL per UTC date.
+
+    For each market: PnL = total_sold + total_redeemed - total_bought
+    Attribute the entire market's PnL to the date of its final closing
+    event (last SELL or REDEEM). Markets still open contribute $0 today
+    (their BUYs sit as cost basis).
+    """
     rows, offset = [], 0
     while True:
         r = requests.get(f'{DATA_API}/activity',
@@ -78,17 +85,43 @@ def _fetch_polymarket() -> pd.DataFrame:
     df  = df[df['title'].str.lower().str.contains(pat, na=False)]
     df['date'] = df['timestamp'].dt.tz_convert('UTC').dt.date
 
-    def cash(row):
-        if row['type'] == 'TRADE':
-            return row['usd_value'] if row['side'] == 'SELL' else -row['usd_value']
-        if row['type'] in ('REDEEM', 'REWARD', 'MAKER_REBATE'):
-            return row['usd_value']
-        return 0.0
-    df['cash'] = df.apply(cash, axis=1)
-    return df.groupby('date').agg(
-        polymarket_pnl=('cash', 'sum'),
-        polymarket_trades=('type', lambda s: (s == 'TRADE').sum()),
-    ).reset_index()
+    # Per-market PnL = sold + redeemed + rewards - bought; attribute to close date
+    trades  = df[df['type'] == 'TRADE']
+    redeems = df[df['type'] == 'REDEEM']
+    rewards = df[df['type'].isin(['REWARD', 'MAKER_REBATE'])]
+
+    market_pnl = []
+    for cid in df['conditionId'].unique():
+        t = trades [trades ['conditionId'] == cid]
+        r = redeems[redeems['conditionId'] == cid]
+        w = rewards[rewards['conditionId'] == cid]
+        bought   = t[t['side'] == 'BUY']['usd_value'].sum()
+        sold     = t[t['side'] == 'SELL']['usd_value'].sum()
+        redeemed = r['usd_value'].sum()
+        rebate   = w['usd_value'].sum()
+        # Closing events: SELLs + REDEEMs. If none, market is still open → skip (PnL = 0 so far).
+        closes = pd.concat([t[t['side'] == 'SELL'], r])
+        if len(closes) == 0:
+            continue
+        close_date = closes['timestamp'].max().tz_convert('UTC').date()
+        pnl        = sold + redeemed + rebate - bought
+        market_pnl.append({'date': close_date, 'pnl': pnl})
+
+    pnl_df = pd.DataFrame(market_pnl)
+
+    # Daily trade count = count of TRADE activity on that date (BUYs count too,
+    # since they represent active trading even if PnL is deferred).
+    trade_counts = trades.groupby('date').size().rename('polymarket_trades').reset_index()
+
+    if pnl_df.empty:
+        daily = trade_counts.rename(columns={'polymarket_trades':'polymarket_trades'})
+        daily['polymarket_pnl'] = 0.0
+        return daily[['date','polymarket_pnl','polymarket_trades']]
+
+    pnl_daily = pnl_df.groupby('date')['pnl'].sum().rename('polymarket_pnl').reset_index()
+    merged = pnl_daily.merge(trade_counts, on='date', how='outer').fillna(0)
+    merged['polymarket_trades'] = merged['polymarket_trades'].astype(int)
+    return merged
 
 
 # ── Kalshi ─────────────────────────────────────────────────────────────────
@@ -146,6 +179,12 @@ def _paginate(path: str, list_key: str, key_id: str, pem: str) -> list:
 
 
 def _fetch_kalshi() -> pd.DataFrame:
+    """Realized-PnL per UTC date.
+
+    For each ticker: PnL = revenue (from settlement + SELL fills) - cost (BUY fills).
+    Attribute the entire ticker's PnL to the date of its final closing event
+    (settlement or last SELL). Open positions contribute $0.
+    """
     key_id = os.environ.get('KALSHI_API_KEY', '').strip()
     pem    = _load_kalshi_pem()
     if not (key_id and pem):
@@ -154,8 +193,7 @@ def _fetch_kalshi() -> pd.DataFrame:
     def _keep(t: str) -> bool:
         return any(str(t).startswith(p) for p in KALSHI_PREFIXES) if KALSHI_PREFIXES else True
 
-    records = []
-
+    fills = []
     for f in _paginate('/portfolio/fills', 'fills', key_id, pem):
         ticker = f.get('ticker') or f.get('market_ticker', '')
         if not _keep(ticker): continue
@@ -167,31 +205,58 @@ def _fetch_kalshi() -> pd.DataFrame:
         usd    = price * count
         ts     = pd.to_datetime(f.get('created_time', ''), utc=True)
         if pd.isna(ts): continue
-        records.append({
-            'date':  ts.tz_convert('UTC').date(),
-            'cash':  usd if action == 'SELL' else -usd,
-            'is_trade': True,
-        })
+        fills.append({'ticker': ticker, 'ts': ts, 'action': action, 'usd': usd})
 
+    settlements = []
     for s in _paginate('/portfolio/settlements', 'settlements', key_id, pem):
         ticker  = s.get('ticker', '')
         if not _keep(ticker): continue
         revenue = int(s.get('revenue', 0) or 0) / 100
         ts      = pd.to_datetime(s.get('settled_time', ''), utc=True)
         if pd.isna(ts): continue
-        records.append({
-            'date':  ts.tz_convert('UTC').date(),
-            'cash':  revenue,
-            'is_trade': False,
-        })
+        settlements.append({'ticker': ticker, 'ts': ts, 'revenue': revenue})
 
-    if not records:
-        return pd.DataFrame(columns=['date','kalshi_pnl','kalshi_trades'])
-    cf = pd.DataFrame(records)
-    return cf.groupby('date').agg(
-        kalshi_pnl=('cash', 'sum'),
-        kalshi_trades=('is_trade', 'sum'),
-    ).reset_index()
+    fills_df = pd.DataFrame(fills)
+    sett_df  = pd.DataFrame(settlements)
+
+    # Per-ticker PnL = sells + settlement_revenue - buys; attribute to close date
+    tickers = set(fills_df['ticker']) if not fills_df.empty else set()
+    if not sett_df.empty:
+        tickers |= set(sett_df['ticker'])
+
+    market_pnl = []
+    for ticker in tickers:
+        tf = fills_df[fills_df['ticker'] == ticker] if not fills_df.empty else pd.DataFrame()
+        ts = sett_df [sett_df ['ticker'] == ticker] if not sett_df.empty  else pd.DataFrame()
+        bought   = tf[tf['action'] == 'BUY']['usd'].sum() if not tf.empty else 0
+        sold     = tf[tf['action'] == 'SELL']['usd'].sum() if not tf.empty else 0
+        redeemed = ts['revenue'].sum() if not ts.empty else 0
+        # Closing events: SELLs + settlements
+        close_events = pd.concat([
+            tf[tf['action'] == 'SELL'][['ts']] if not tf.empty else pd.DataFrame(columns=['ts']),
+            ts[['ts']] if not ts.empty else pd.DataFrame(columns=['ts']),
+        ])
+        if close_events.empty:
+            continue
+        close_date = close_events['ts'].max().tz_convert('UTC').date()
+        market_pnl.append({'date': close_date, 'pnl': sold + redeemed - bought})
+
+    pnl_df = pd.DataFrame(market_pnl)
+    fill_dates = (
+        fills_df.assign(date=lambda d: d['ts'].dt.tz_convert('UTC').dt.date)
+                .groupby('date').size().rename('kalshi_trades').reset_index()
+    ) if not fills_df.empty else pd.DataFrame(columns=['date','kalshi_trades'])
+
+    if pnl_df.empty:
+        if fill_dates.empty:
+            return pd.DataFrame(columns=['date','kalshi_pnl','kalshi_trades'])
+        fill_dates['kalshi_pnl'] = 0.0
+        return fill_dates[['date','kalshi_pnl','kalshi_trades']]
+
+    pnl_daily = pnl_df.groupby('date')['pnl'].sum().rename('kalshi_pnl').reset_index()
+    merged = pnl_daily.merge(fill_dates, on='date', how='outer').fillna(0)
+    merged['kalshi_trades'] = merged['kalshi_trades'].astype(int)
+    return merged
 
 
 # ── Main ───────────────────────────────────────────────────────────────────

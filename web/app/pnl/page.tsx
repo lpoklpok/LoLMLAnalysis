@@ -249,10 +249,10 @@ export default function PnLPage() {
             <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
               <h2 className="text-sm font-semibold text-gray-300 mb-3">Methodology</h2>
               <ul className="text-xs text-gray-400 space-y-1.5 list-disc pl-5">
-                <li><b className="text-gray-200">Cash-flow PnL</b> assigns each cash movement to the date it occurred — most accurate for daily reporting (matches what hits your account that day).</li>
-                <li><b className="text-gray-200">Polymarket:</b> filtered by title keywords from <code className="text-gray-500">TradingPnL/config.json</code> (LoL, MSI, Worlds, LEC/LCS/LCK/LPL, etc.). Manual exclusions for nullified markets are honored.</li>
-                <li><b className="text-gray-200">Kalshi:</b> filtered to tickers with the KXLOL prefix. Fills + settlements both contribute to daily cash flow.</li>
-                <li><b className="text-gray-200">Daily PnL ≠ weekly PnL sum</b> when positions stay open across the week — the cash-flow view captures BUYs as immediate negatives even if the position pays off later. Look at the cumulative chart for the realized + redemption story.</li>
+                <li><b className="text-gray-200">Realized PnL by close date.</b> Each market&apos;s lifetime PnL = sold + redeemed + rebates − bought, attributed entirely to the date of its final closing event (last SELL or REDEEM). Open positions contribute $0 to today&apos;s PnL — their BUYs sit as cost basis until settlement.</li>
+                <li><b className="text-gray-200">Days with $0 PnL but trade activity</b> = you opened positions that haven&apos;t resolved yet. The PnL will surface on the settle date.</li>
+                <li><b className="text-gray-200">Polymarket:</b> filtered by title keywords (LoL, MSI, Worlds, LEC/LCS/LCK/LPL, etc.). Manual exclusions for nullified markets are honored.</li>
+                <li><b className="text-gray-200">Kalshi:</b> filtered to KXLOL-prefixed tickers. Settlement revenue and SELL fills both close positions.</li>
               </ul>
             </div>
           </>
