@@ -86,6 +86,35 @@ function eventTs(slug: string): number {
 
 // ── Page ──────────────────────────────────────────────────────────────────
 
+// Short, distinct two-tone "ka-ching" generated via WebAudio so there's no
+// audio file to host. Triggered when a new `fill` row arrives via realtime.
+let _audioCtx: AudioContext | null = null
+function playFillPing() {
+  if (typeof window === 'undefined') return
+  try {
+    type WinAC = Window & { webkitAudioContext?: typeof AudioContext }
+    const w = window as WinAC
+    if (!_audioCtx) _audioCtx = new (w.AudioContext || w.webkitAudioContext!)()
+    const ctx = _audioCtx
+    if (ctx.state === 'suspended') void ctx.resume()
+    const now = ctx.currentTime
+    const blip = (freq: number, t0: number, dur = 0.12, gain = 0.18) => {
+      const osc = ctx.createOscillator()
+      const g   = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(freq, now + t0)
+      g.gain.setValueAtTime(0, now + t0)
+      g.gain.linearRampToValueAtTime(gain, now + t0 + 0.01)
+      g.gain.exponentialRampToValueAtTime(0.0001, now + t0 + dur)
+      osc.connect(g).connect(ctx.destination)
+      osc.start(now + t0)
+      osc.stop(now + t0 + dur + 0.02)
+    }
+    blip(880, 0)       // C-ish
+    blip(1318, 0.08)   // higher follow-up
+  } catch { /* autoplay blocked etc — ignore */ }
+}
+
 export default function MmPage() {
   const [configs, setConfigs] = useState<MmConfig[]>([])
   const [states,  setStates]  = useState<Record<string, MmState>>({})
@@ -150,6 +179,7 @@ export default function MmPage() {
         (p) => {
           const row = p.new as QuoteLogRow
           setLogs(prev => [row, ...prev].slice(0, 40))
+          if (row.action === 'fill') playFillPing()
         })
       .subscribe()
     // Safety-net poll at 15s for configs/states (realtime covers those too,
