@@ -48,26 +48,42 @@ interface PnlRow {
   updated_at: string
 }
 
+interface StateRow {
+  condition_id: string
+  outcome_index: number
+  side: string
+  active_order_id: string | null
+  active_price: number | null
+  active_size_shares: number | null
+  last_book_top_price: number | null
+  position_shares: number
+  paused_reason: string | null
+  updated_at: string
+}
+
 export default function SystematicPage() {
   const [rules, setRules] = useState<AutoRules | null>(null)
   const [enabled, setEnabled] = useState<EnabledRow[]>([])
   const [fills, setFills] = useState<FillRow[]>([])
   const [pnl, setPnl] = useState<PnlRow[]>([])
+  const [states, setStates] = useState<StateRow[]>([])
   const [saving, setSaving] = useState(false)
 
   const refresh = useCallback(async () => {
-    const [r, e, f, p] = await Promise.all([
+    const [r, e, f, p, s] = await Promise.all([
       supabase.from('mm_auto_rules').select('*').eq('id', 1).single(),
       supabase.from('mm_config')
         .select('condition_id,event_slug,event_title,market_type,outcome_index,outcome_label,quote_size_shares')
         .or('bid_enabled.eq.true,offer_enabled.eq.true'),
       supabase.from('mm_quotes_log').select('*').eq('action', 'fill').order('ts', { ascending: false }).limit(30),
       supabase.from('mm_pnl_daily').select('*').order('day', { ascending: false }).limit(14),
+      supabase.from('mm_state').select('*'),
     ])
     setRules(r.data as AutoRules | null)
     setEnabled((e.data ?? []) as EnabledRow[])
     setFills((f.data ?? []) as FillRow[])
     setPnl((p.data ?? []) as PnlRow[])
+    setStates((s.data ?? []) as StateRow[])
   }, [])
 
   useEffect(() => {
@@ -90,6 +106,16 @@ export default function SystematicPage() {
             setPnl(prev => {
               const without = prev.filter(x => x.day !== row.day)
               return [row, ...without].sort((a,b) => b.day.localeCompare(a.day)).slice(0, 14)
+            })
+          })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'mm_state' },
+          (p) => {
+            const row = (p.new ?? p.old) as StateRow
+            if (!row) return
+            const k = (r: StateRow) => `${r.condition_id}|${r.outcome_index}|${r.side}`
+            setStates(prev => {
+              const without = prev.filter(x => k(x) !== k(row))
+              return [row, ...without]
             })
           })
       .subscribe()
@@ -267,6 +293,115 @@ export default function SystematicPage() {
           <div><span className="text-gray-500 mr-2">Est. capital deployed:</span><span className="font-mono">${estCapital.toFixed(0)}</span></div>
           <div><span className="text-gray-500 mr-2">Room remaining:</span><span className="font-mono">${capRoom.toFixed(0)}</span></div>
         </section>
+
+        {/* Open positions (net by condition + outcome) */}
+        {(() => {
+          // Build (cond, oi) → {label, event_title} from enabled mm_config rows.
+          const nameByCo = new Map<string, { label: string; event: string; market: string }>()
+          for (const c of enabled) {
+            nameByCo.set(`${c.condition_id}|${c.outcome_index}`, {
+              label: c.outcome_label ?? `outcome_${c.outcome_index}`,
+              event: c.event_title ?? c.event_slug ?? c.condition_id.slice(0, 12),
+              market: c.market_type,
+            })
+          }
+          // Aggregate position_shares by (cond, oi) — sum across bid+offer rows.
+          // mm_state values are reconciled to actual Polymarket holdings.
+          const byCo = new Map<string, { event: string; market: string; outcome: string; pos: number }>()
+          for (const s of states) {
+            if (!s.position_shares) continue
+            const k = `${s.condition_id}|${s.outcome_index}`
+            const meta = nameByCo.get(k)
+            const cur = byCo.get(k) ?? {
+              event: meta?.event ?? s.condition_id.slice(0, 12),
+              market: meta?.market ?? '?',
+              outcome: meta?.label ?? `oi=${s.outcome_index}`,
+              pos: 0,
+            }
+            cur.pos += Number(s.position_shares)
+            byCo.set(k, cur)
+          }
+          const rows = [...byCo.values()].filter(r => Math.abs(r.pos) > 0.5).sort((a, b) => Math.abs(b.pos) - Math.abs(a.pos))
+          if (rows.length === 0) return null
+          return (
+            <section>
+              <h2 className="text-sm font-semibold text-gray-200 mb-3">Open positions ({rows.length})</h2>
+              <table className="w-full text-xs whitespace-nowrap">
+                <thead><tr className="border-b border-gray-800 text-gray-500">
+                  <th className="text-left  py-1.5 pr-4 font-medium">Event</th>
+                  <th className="text-left  py-1.5 pr-4 font-medium w-32">Market</th>
+                  <th className="text-left  py-1.5 pr-4 font-medium w-32">Outcome</th>
+                  <th className="text-right py-1.5 pr-4 font-medium w-24">Net shares</th>
+                </tr></thead>
+                <tbody>
+                  {rows.map(r => (
+                    <tr key={`${r.event}|${r.market}|${r.outcome}`} className="border-b border-gray-800/30">
+                      <td className="py-1 pr-4 text-gray-300 truncate max-w-md">{r.event}</td>
+                      <td className="py-1 pr-4 font-mono text-gray-400">{r.market}</td>
+                      <td className="py-1 pr-4 font-mono text-gray-400">{r.outcome}</td>
+                      <td className={`py-1 pr-4 font-mono text-right ${r.pos > 0 ? 'text-blue-300' : 'text-orange-300'}`}>
+                        {r.pos > 0 ? '+' : ''}{r.pos.toFixed(0)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )
+        })()}
+
+        {/* Live resting quotes */}
+        {(() => {
+          const live = states.filter(s => s.active_order_id && s.active_price != null)
+            .sort((a,b) => (b.updated_at || '').localeCompare(a.updated_at || ''))
+          if (live.length === 0) return (
+            <section>
+              <h2 className="text-sm font-semibold text-gray-200 mb-3">Live resting quotes</h2>
+              <p className="text-gray-500 text-xs">No active orders on the book.</p>
+            </section>
+          )
+          // (cond, oi) → outcome label for display
+          const lookup = new Map<string, { event: string; market: string; outcome: string }>()
+          for (const c of enabled) {
+            lookup.set(`${c.condition_id}|${c.outcome_index}`, {
+              event: c.event_title ?? c.event_slug ?? c.condition_id.slice(0, 12),
+              market: c.market_type,
+              outcome: c.outcome_label ?? `oi=${c.outcome_index}`,
+            })
+          }
+          return (
+            <section>
+              <h2 className="text-sm font-semibold text-gray-200 mb-3">Live resting quotes ({live.length})</h2>
+              <table className="w-full text-xs whitespace-nowrap">
+                <thead><tr className="border-b border-gray-800 text-gray-500">
+                  <th className="text-left  py-1.5 pr-4 font-medium">Event</th>
+                  <th className="text-left  py-1.5 pr-4 font-medium w-32">Market · Outcome</th>
+                  <th className="text-left  py-1.5 pr-4 font-medium w-14">Side</th>
+                  <th className="text-right py-1.5 pr-4 font-medium w-20">Price</th>
+                  <th className="text-right py-1.5 pr-4 font-medium w-20">Size</th>
+                  <th className="text-right py-1.5 pr-4 font-medium w-24">Book top</th>
+                  <th className="text-left  py-1.5 pr-4 font-medium w-32">Order ID</th>
+                </tr></thead>
+                <tbody>
+                  {live.map(s => {
+                    const meta = lookup.get(`${s.condition_id}|${s.outcome_index}`)
+                    return (
+                      <tr key={`${s.condition_id}|${s.outcome_index}|${s.side}`} className="border-b border-gray-800/30">
+                        <td className="py-1 pr-4 text-gray-300 truncate max-w-md">{meta?.event ?? s.condition_id.slice(0, 12)}</td>
+                        <td className="py-1 pr-4 font-mono text-gray-400">{meta?.market} · {meta?.outcome}</td>
+                        <td className={`py-1 pr-4 font-mono ${s.side === 'bid' ? 'text-green-400' : 'text-purple-400'}`}>{s.side}</td>
+                        <td className="py-1 pr-4 font-mono text-gray-200 text-right">{s.active_price?.toFixed(3)}</td>
+                        <td className="py-1 pr-4 font-mono text-gray-200 text-right">{Math.round(Number(s.active_size_shares ?? 0))}</td>
+                        <td className="py-1 pr-4 font-mono text-gray-500 text-right">{s.last_book_top_price?.toFixed(3) ?? '—'}</td>
+                        <td className="py-1 pr-4 font-mono text-gray-600 text-[10px]">{s.active_order_id?.slice(0, 14)}…</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </section>
+          )
+        })()}
 
         {/* Active events */}
         <section>
