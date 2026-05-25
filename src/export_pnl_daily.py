@@ -50,12 +50,13 @@ KALSHI_URL = 'https://api.elections.kalshi.com/trade-api/v2'
 # ── Polymarket ─────────────────────────────────────────────────────────────
 
 def _fetch_polymarket() -> pd.DataFrame:
-    """Realized-PnL per UTC date.
+    """Trade-date mark-to-current PnL.
 
-    For each market: PnL = total_sold + total_redeemed - total_bought
-    Attribute the entire market's PnL to the date of its final closing
-    event (last SELL or REDEEM). Markets still open contribute $0 today
-    (their BUYs sit as cost basis).
+    For each TRADE: value the position at the current outcome price (or
+    settle price if resolved), compute PnL from the entry price, attribute
+    to the trade's UTC date.
+      BUY:  pnl = size * (current_mid - price)
+      SELL: pnl = size * (price - current_mid)   (short closed at current)
     """
     rows, offset = [], 0
     while True:
@@ -75,7 +76,11 @@ def _fetch_polymarket() -> pd.DataFrame:
         'timestamp':   pd.to_datetime(a['timestamp'], unit='s', utc=True),
         'type':        a.get('type', ''),
         'conditionId': a.get('conditionId', ''),
+        'asset':       a.get('asset', '') or '',
+        'outcome':     a.get('outcome', '') or '',
         'side':        a.get('side', ''),
+        'price':       float(a.get('price', 0) or 0),
+        'size':        float(a.get('size', 0) or 0),
         'usd_value':   float(a.get('usdcSize', 0) or 0),
         'title':       a.get('title', '') or '',
     } for a in rows])
@@ -83,45 +88,83 @@ def _fetch_polymarket() -> pd.DataFrame:
     df = df[~df['conditionId'].isin(EXCLUDED_CIDS)]
     pat = '|'.join(KEYWORDS)
     df  = df[df['title'].str.lower().str.contains(pat, na=False)]
-    df['date'] = df['timestamp'].dt.tz_convert('UTC').dt.date
 
-    # Per-market PnL = sold + redeemed + rewards - bought; attribute to close date
-    trades  = df[df['type'] == 'TRADE']
-    redeems = df[df['type'] == 'REDEEM']
-    rewards = df[df['type'].isin(['REWARD', 'MAKER_REBATE'])]
+    trades = df[df['type'] == 'TRADE'].copy()
+    if trades.empty:
+        return pd.DataFrame(columns=['date','polymarket_pnl','polymarket_trades'])
 
-    market_pnl = []
-    for cid in df['conditionId'].unique():
-        t = trades [trades ['conditionId'] == cid]
-        r = redeems[redeems['conditionId'] == cid]
-        w = rewards[rewards['conditionId'] == cid]
-        bought   = t[t['side'] == 'BUY']['usd_value'].sum()
-        sold     = t[t['side'] == 'SELL']['usd_value'].sum()
-        redeemed = r['usd_value'].sum()
-        rebate   = w['usd_value'].sum()
-        # Closing events: SELLs + REDEEMs. If none, market is still open → skip (PnL = 0 so far).
-        closes = pd.concat([t[t['side'] == 'SELL'], r])
-        if len(closes) == 0:
-            continue
-        close_date = closes['timestamp'].max().tz_convert('UTC').date()
-        pnl        = sold + redeemed + rebate - bought
-        market_pnl.append({'date': close_date, 'pnl': pnl})
+    # Fetch current price for each unique (conditionId, outcome) via clob.markets
+    # which works for both open AND resolved markets.
+    unique_conds = trades['conditionId'].unique().tolist()
+    print(f'  Looking up current/settle prices for {len(unique_conds)} markets…')
 
-    pnl_df = pd.DataFrame(market_pnl)
+    from concurrent.futures import ThreadPoolExecutor
 
-    # Daily trade count = count of TRADE activity on that date (BUYs count too,
-    # since they represent active trading even if PnL is deferred).
-    trade_counts = trades.groupby('date').size().rename('polymarket_trades').reset_index()
+    def _market_prices(cond):
+        # Returns dict {outcome.lower(): current_or_settle_price} or None.
+        try:
+            r = requests.get(f'https://clob.polymarket.com/markets/{cond}', timeout=8)
+            if r.status_code != 200:
+                return cond, None
+            j = r.json()
+            out = {}
+            for tok in j.get('tokens', []):
+                outcome = str(tok.get('outcome', '')).lower()
+                winner  = tok.get('winner')
+                if winner is True:  out[outcome] = 1.0
+                elif winner is False: out[outcome] = 0.0
+                else:
+                    # Open market — use last trade price as proxy for current mid
+                    pr = tok.get('price')
+                    if pr is not None:
+                        try: out[outcome] = float(pr)
+                        except: pass
+            # Fallback: if no price on tokens, try gamma outcomePrices
+            if not out:
+                import json as _json
+                gr = requests.get('https://gamma-api.polymarket.com/markets',
+                                  params={'condition_ids': cond}, timeout=8)
+                if gr.status_code == 200 and gr.json():
+                    m = gr.json()[0]
+                    outs = m.get('outcomes'); ops = m.get('outcomePrices')
+                    if isinstance(outs, str): outs = _json.loads(outs)
+                    if isinstance(ops, str):  ops  = _json.loads(ops)
+                    if outs and ops:
+                        for o, p in zip(outs, ops):
+                            try: out[str(o).lower()] = float(p)
+                            except: pass
+            return cond, out
+        except Exception:
+            return cond, None
 
-    if pnl_df.empty:
-        daily = trade_counts.rename(columns={'polymarket_trades':'polymarket_trades'})
-        daily['polymarket_pnl'] = 0.0
-        return daily[['date','polymarket_pnl','polymarket_trades']]
+    price_map: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=15) as ex:
+        for cond, prices in ex.map(_market_prices, unique_conds):
+            price_map[cond] = prices or {}
 
-    pnl_daily = pnl_df.groupby('date')['pnl'].sum().rename('polymarket_pnl').reset_index()
-    merged = pnl_daily.merge(trade_counts, on='date', how='outer').fillna(0)
-    merged['polymarket_trades'] = merged['polymarket_trades'].astype(int)
-    return merged
+    missing = sum(1 for c in unique_conds if not price_map.get(c))
+    if missing:
+        print(f'  Missing prices for {missing}/{len(unique_conds)} markets (defaulting to entry price for those — PnL=0)')
+
+    def trade_pnl(row):
+        prices = price_map.get(row['conditionId']) or {}
+        target = str(row['outcome']).lower()
+        current = prices.get(target)
+        if current is None:
+            return 0.0  # unknown price → conservatively assume break-even
+        if row['side'] == 'BUY':
+            return row['size'] * (current - row['price'])
+        if row['side'] == 'SELL':
+            return row['size'] * (row['price'] - current)
+        return 0.0
+
+    trades['pnl']  = trades.apply(trade_pnl, axis=1)
+    trades['date'] = trades['timestamp'].dt.tz_convert('UTC').dt.date
+
+    return trades.groupby('date').agg(
+        polymarket_pnl=('pnl', 'sum'),
+        polymarket_trades=('pnl', 'size'),
+    ).reset_index()
 
 
 # ── Kalshi ─────────────────────────────────────────────────────────────────
@@ -179,11 +222,11 @@ def _paginate(path: str, list_key: str, key_id: str, pem: str) -> list:
 
 
 def _fetch_kalshi() -> pd.DataFrame:
-    """Realized-PnL per UTC date.
+    """Trade-date mark-to-current PnL.
 
-    For each ticker: PnL = revenue (from settlement + SELL fills) - cost (BUY fills).
-    Attribute the entire ticker's PnL to the date of its final closing event
-    (settlement or last SELL). Open positions contribute $0.
+    For each fill: value the position at the current Kalshi mid (or settle
+    if resolved), compute PnL from the entry price, attribute to the fill's
+    UTC date. BUY YES at $0.40 + current $0.55 → PnL = size * 0.15.
     """
     key_id = os.environ.get('KALSHI_API_KEY', '').strip()
     pem    = _load_kalshi_pem()
@@ -198,65 +241,70 @@ def _fetch_kalshi() -> pd.DataFrame:
         ticker = f.get('ticker') or f.get('market_ticker', '')
         if not _keep(ticker): continue
         action = (f.get('action') or '').upper()
-        side   = (f.get('side') or '').upper()
+        side   = (f.get('side') or '').upper()  # YES or NO
         price  = float((f.get('yes_price_dollars') if side == 'YES'
                          else f.get('no_price_dollars')) or 0)
         count  = float(f.get('count_fp', 0) or 0)
-        usd    = price * count
         ts     = pd.to_datetime(f.get('created_time', ''), utc=True)
         if pd.isna(ts): continue
-        fills.append({'ticker': ticker, 'ts': ts, 'action': action, 'usd': usd})
+        fills.append({'ticker': ticker, 'ts': ts, 'action': action, 'side': side,
+                      'price': price, 'count': count})
 
-    settlements = []
-    for s in _paginate('/portfolio/settlements', 'settlements', key_id, pem):
-        ticker  = s.get('ticker', '')
-        if not _keep(ticker): continue
-        revenue = int(s.get('revenue', 0) or 0) / 100
-        ts      = pd.to_datetime(s.get('settled_time', ''), utc=True)
-        if pd.isna(ts): continue
-        settlements.append({'ticker': ticker, 'ts': ts, 'revenue': revenue})
+    if not fills:
+        return pd.DataFrame(columns=['date','kalshi_pnl','kalshi_trades'])
 
     fills_df = pd.DataFrame(fills)
-    sett_df  = pd.DataFrame(settlements)
+    unique_tickers = fills_df['ticker'].unique().tolist()
+    print(f'  Looking up current/settle prices for {len(unique_tickers)} Kalshi markets…')
 
-    # Per-ticker PnL = sells + settlement_revenue - buys; attribute to close date
-    tickers = set(fills_df['ticker']) if not fills_df.empty else set()
-    if not sett_df.empty:
-        tickers |= set(sett_df['ticker'])
+    # For each ticker, fetch current YES price (or settle if closed).
+    # Public endpoint — no auth needed for /markets.
+    def _ticker_price(ticker):
+        try:
+            r = requests.get(f'{KALSHI_URL}/markets/{ticker}', timeout=8)
+            if r.status_code != 200: return ticker, None
+            m  = r.json().get('market', {})
+            st = m.get('status', '')
+            if st in ('finalized', 'settled', 'closed'):
+                res = m.get('result', '')
+                if res == 'yes': return ticker, 1.0
+                if res == 'no':  return ticker, 0.0
+            # Open market — use yes_bid/yes_ask midpoint, or last_price
+            yb = m.get('yes_bid'); ya = m.get('yes_ask')
+            if yb and ya:
+                # Both are in cents
+                return ticker, (yb + ya) / 2 / 100
+            lp = m.get('last_price')
+            if lp is not None:
+                return ticker, lp / 100
+            return ticker, None
+        except Exception:
+            return ticker, None
 
-    market_pnl = []
-    for ticker in tickers:
-        tf = fills_df[fills_df['ticker'] == ticker] if not fills_df.empty else pd.DataFrame()
-        ts = sett_df [sett_df ['ticker'] == ticker] if not sett_df.empty  else pd.DataFrame()
-        bought   = tf[tf['action'] == 'BUY']['usd'].sum() if not tf.empty else 0
-        sold     = tf[tf['action'] == 'SELL']['usd'].sum() if not tf.empty else 0
-        redeemed = ts['revenue'].sum() if not ts.empty else 0
-        # Closing events: SELLs + settlements
-        close_events = pd.concat([
-            tf[tf['action'] == 'SELL'][['ts']] if not tf.empty else pd.DataFrame(columns=['ts']),
-            ts[['ts']] if not ts.empty else pd.DataFrame(columns=['ts']),
-        ])
-        if close_events.empty:
-            continue
-        close_date = close_events['ts'].max().tz_convert('UTC').date()
-        market_pnl.append({'date': close_date, 'pnl': sold + redeemed - bought})
+    from concurrent.futures import ThreadPoolExecutor
+    yes_price_map: dict[str, float] = {}
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        for tk, px in ex.map(_ticker_price, unique_tickers):
+            if px is not None: yes_price_map[tk] = px
 
-    pnl_df = pd.DataFrame(market_pnl)
-    fill_dates = (
-        fills_df.assign(date=lambda d: d['ts'].dt.tz_convert('UTC').dt.date)
-                .groupby('date').size().rename('kalshi_trades').reset_index()
-    ) if not fills_df.empty else pd.DataFrame(columns=['date','kalshi_trades'])
+    def fill_pnl(row):
+        yes = yes_price_map.get(row['ticker'])
+        if yes is None: return 0.0
+        # Convert YES price to "price for the side traded"
+        current = yes if row['side'] == 'YES' else (1 - yes)
+        if row['action'] == 'BUY':
+            return row['count'] * (current - row['price'])
+        if row['action'] == 'SELL':
+            return row['count'] * (row['price'] - current)
+        return 0.0
 
-    if pnl_df.empty:
-        if fill_dates.empty:
-            return pd.DataFrame(columns=['date','kalshi_pnl','kalshi_trades'])
-        fill_dates['kalshi_pnl'] = 0.0
-        return fill_dates[['date','kalshi_pnl','kalshi_trades']]
+    fills_df['pnl']  = fills_df.apply(fill_pnl, axis=1)
+    fills_df['date'] = fills_df['ts'].dt.tz_convert('UTC').dt.date
 
-    pnl_daily = pnl_df.groupby('date')['pnl'].sum().rename('kalshi_pnl').reset_index()
-    merged = pnl_daily.merge(fill_dates, on='date', how='outer').fillna(0)
-    merged['kalshi_trades'] = merged['kalshi_trades'].astype(int)
-    return merged
+    return fills_df.groupby('date').agg(
+        kalshi_pnl=('pnl', 'sum'),
+        kalshi_trades=('pnl', 'size'),
+    ).reset_index()
 
 
 # ── Main ───────────────────────────────────────────────────────────────────

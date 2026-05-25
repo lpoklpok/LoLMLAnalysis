@@ -249,10 +249,10 @@ export default function PnLPage() {
             <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
               <h2 className="text-sm font-semibold text-gray-300 mb-3">Methodology</h2>
               <ul className="text-xs text-gray-400 space-y-1.5 list-disc pl-5">
-                <li><b className="text-gray-200">Realized PnL by close date.</b> Each market&apos;s lifetime PnL = sold + redeemed + rebates − bought, attributed entirely to the date of its final closing event (last SELL or REDEEM). Open positions contribute $0 to today&apos;s PnL — their BUYs sit as cost basis until settlement.</li>
-                <li><b className="text-gray-200">Days with $0 PnL but trade activity</b> = you opened positions that haven&apos;t resolved yet. The PnL will surface on the settle date.</li>
+                <li><b className="text-gray-200">Trade-date mark-to-current PnL.</b> For every trade you placed on day D, value the position at the <i>current</i> market price (or settle price if the market has resolved). PnL = size × (current_price − entry_price) for BUYs, mirrored for SELLs. Attributed to the trade&apos;s UTC date.</li>
+                <li><b className="text-gray-200">What this captures:</b> &ldquo;Was that day&apos;s trading directionally right?&rdquo; — open positions count at today&apos;s mid, resolved positions count at their final price. Updates daily as open markets reprice.</li>
                 <li><b className="text-gray-200">Polymarket:</b> filtered by title keywords (LoL, MSI, Worlds, LEC/LCS/LCK/LPL, etc.). Manual exclusions for nullified markets are honored.</li>
-                <li><b className="text-gray-200">Kalshi:</b> filtered to KXLOL-prefixed tickers. Settlement revenue and SELL fills both close positions.</li>
+                <li><b className="text-gray-200">Kalshi:</b> filtered to KXLOL-prefixed tickers. YES side scored at current yes_mid; NO side at (1 − yes_mid).</li>
               </ul>
             </div>
           </>
