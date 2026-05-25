@@ -6,20 +6,6 @@ import { supabase } from '../../lib/supabase'
 
 // ── Types ────────────────────────────────────────────────────────────────
 
-interface MarketRow {
-  condition_id: string
-  event_slug: string
-  event_title: string
-  tournament: string
-  team1: string
-  team2: string
-  market_type: string
-}
-interface BalanceSummary {
-  generated_at_utc: string
-  markets: (MarketRow & { last_trade_price: number; total_volume_usd: number })[]
-}
-
 interface MmConfig {
   id: number
   condition_id: string
@@ -32,7 +18,8 @@ interface MmConfig {
   team2: string | null
   outcome_label: string | null
   asset_id: string | null
-  enabled: boolean
+  bid_enabled: boolean
+  offer_enabled: boolean
   strategy: 'join_best' | 'penny_back'
   quote_size_usd: number
   max_size_pct: number
@@ -54,29 +41,35 @@ interface MmState {
   position_shares: number
   last_book_top_price: number | null
   last_book_top_size: number | null
-  last_quote_ts: string | null
   paused_reason: string | null
   updated_at: string
 }
 
-interface KillSwitch {
-  id: number
-  killed: boolean
-  reason: string | null
-  updated_at: string
-}
+interface KillSwitch { id: number; killed: boolean; reason: string | null; updated_at: string }
 
 interface QuoteLogRow {
-  id: number
-  ts: string
-  condition_id: string
-  outcome_index: number
-  side: string
-  action: string
-  price: number | null
-  size_shares: number | null
-  reason: string | null
-  dry_run: boolean
+  id: number; ts: string; condition_id: string; outcome_index: number; side: string
+  action: string; price: number | null; size_shares: number | null; reason: string | null; dry_run: boolean
+}
+
+// ── Group helper ──────────────────────────────────────────────────────────
+
+interface EventGroup {
+  event_slug: string
+  event_title: string
+  team1: string
+  team2: string
+  // Map keyed by market_type. Each market_type has TWO configs (outcome 0 + 1)
+  // — the team-picker switches which outcome the toggles operate on.
+  bySubmarket: Map<string, { outcome0: MmConfig | null; outcome1: MmConfig | null }>
+}
+
+// Order submarket types nicely
+const SUBMARKET_ORDER = ['match_winner', 'game_1_winner', 'game_2_winner', 'game_3_winner',
+                          'game_4_winner', 'game_5_winner', 'game_handicap']
+function subOrder(s: string): number {
+  const i = SUBMARKET_ORDER.indexOf(s)
+  return i < 0 ? 999 : i
 }
 
 // ── Page ──────────────────────────────────────────────────────────────────
@@ -86,20 +79,29 @@ export default function MmPage() {
   const [states,  setStates]  = useState<Record<string, MmState>>({})
   const [kill,    setKill]    = useState<KillSwitch | null>(null)
   const [logs,    setLogs]    = useState<QuoteLogRow[]>([])
-  const [balance, setBalance] = useState<BalanceSummary | null>(null)
   const [loading, setLoading] = useState(true)
-  const [showAdd, setShowAdd] = useState(false)
+  const [search,  setSearch]  = useState('')
+  const [filter,  setFilter]  = useState<'all' | 'active'>('active')
+
+  // Per-event anchor team — local UI state, defaults to team1 (outcome 0).
+  // Stored in localStorage so the choice persists between sessions.
+  const [anchorTeam, setAnchorTeam] = useState<Record<string, 0 | 1>>(() => {
+    if (typeof window === 'undefined') return {}
+    try { return JSON.parse(localStorage.getItem('mm_anchor') || '{}') } catch { return {} }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('mm_anchor', JSON.stringify(anchorTeam)) } catch {}
+  }, [anchorTeam])
 
   const stateKey = (c: { condition_id: string; outcome_index: number; side: string }) =>
     `${c.condition_id}|${c.outcome_index}|${c.side}`
 
   const refresh = useCallback(async () => {
-    const [cfg, st, ks, lg, bal] = await Promise.all([
-      supabase.from('mm_config').select('*').order('updated_at', { ascending: false }),
+    const [cfg, st, ks, lg] = await Promise.all([
+      supabase.from('mm_config').select('*'),
       supabase.from('mm_state').select('*'),
       supabase.from('mm_kill_switch').select('*').eq('id', 1).single(),
-      supabase.from('mm_quotes_log').select('*').order('ts', { ascending: false }).limit(50),
-      fetch('/api/poly-flow').then(r => r.ok ? r.json() : null).catch(() => null),
+      supabase.from('mm_quotes_log').select('*').order('ts', { ascending: false }).limit(40),
     ])
     setConfigs((cfg.data ?? []) as MmConfig[])
     const sMap: Record<string, MmState> = {}
@@ -107,7 +109,6 @@ export default function MmPage() {
     setStates(sMap)
     setKill(ks.data as KillSwitch | null)
     setLogs((lg.data ?? []) as QuoteLogRow[])
-    setBalance(bal as BalanceSummary | null)
     setLoading(false)
   }, [])
 
@@ -117,35 +118,67 @@ export default function MmPage() {
     return () => clearInterval(id)
   }, [refresh])
 
+  // Group configs by event_slug
+  const groups = useMemo<EventGroup[]>(() => {
+    const m = new Map<string, EventGroup>()
+    for (const c of configs) {
+      const slug = c.event_slug ?? c.condition_id
+      if (!m.has(slug)) {
+        m.set(slug, {
+          event_slug: slug, event_title: c.event_title ?? '',
+          team1: c.team1 ?? '', team2: c.team2 ?? '',
+          bySubmarket: new Map(),
+        })
+      }
+      const g = m.get(slug)!
+      const row = g.bySubmarket.get(c.market_type) ?? { outcome0: null, outcome1: null }
+      if (c.outcome_index === 0) row.outcome0 = c
+      else if (c.outcome_index === 1) row.outcome1 = c
+      g.bySubmarket.set(c.market_type, row)
+    }
+    return Array.from(m.values())
+  }, [configs])
+
+  const filteredGroups = useMemo(() => {
+    const q = search.toLowerCase()
+    return groups.filter(g => {
+      if (filter === 'active') {
+        const any = [...g.bySubmarket.values()].some(r =>
+          r.outcome0?.bid_enabled || r.outcome0?.offer_enabled
+          || r.outcome1?.bid_enabled || r.outcome1?.offer_enabled
+        )
+        if (!any) return false
+      }
+      if (q && !`${g.event_title} ${g.team1} ${g.team2}`.toLowerCase().includes(q)) return false
+      return true
+    }).sort((a, b) => {
+      // Active events first
+      const aActive = [...a.bySubmarket.values()].some(r => r.outcome0?.bid_enabled || r.outcome0?.offer_enabled || r.outcome1?.bid_enabled || r.outcome1?.offer_enabled)
+      const bActive = [...b.bySubmarket.values()].some(r => r.outcome0?.bid_enabled || r.outcome0?.offer_enabled || r.outcome1?.bid_enabled || r.outcome1?.offer_enabled)
+      if (aActive !== bActive) return aActive ? -1 : 1
+      return a.event_title.localeCompare(b.event_title)
+    })
+  }, [groups, search, filter])
+
   async function flipKill() {
     if (!kill) return
     const newKilled = !kill.killed
-    const reason = newKilled
-      ? prompt('Reason for emergency stop?', 'manual stop') || 'manual stop'
-      : null
-    await supabase.from('mm_kill_switch')
-      .update({ killed: newKilled, reason, updated_at: new Date().toISOString() })
-      .eq('id', 1)
+    const reason = newKilled ? (prompt('Reason for emergency stop?', 'manual stop') || 'manual stop') : null
+    await supabase.from('mm_kill_switch').update({ killed: newKilled, reason, updated_at: new Date().toISOString() }).eq('id', 1)
     refresh()
   }
 
-  async function toggleEnabled(c: MmConfig) {
-    await supabase.from('mm_config')
-      .update({ enabled: !c.enabled, updated_at: new Date().toISOString() })
-      .eq('id', c.id)
+  async function toggleFlag(cfg: MmConfig | null, flag: 'bid_enabled' | 'offer_enabled') {
+    if (!cfg) return
+    await supabase.from('mm_config').update({ [flag]: !cfg[flag], updated_at: new Date().toISOString() }).eq('id', cfg.id)
     refresh()
   }
 
-  async function deleteConfig(c: MmConfig) {
-    if (!confirm(`Delete MM config for ${c.event_title} (${c.market_type}, ${c.outcome_label}, ${c.side})?`)) return
-    await supabase.from('mm_config').delete().eq('id', c.id)
-    refresh()
-  }
-
-  async function updateField(c: MmConfig, field: keyof MmConfig, value: unknown) {
-    await supabase.from('mm_config')
-      .update({ [field]: value, updated_at: new Date().toISOString() })
-      .eq('id', c.id)
+  async function bulkSetEventOff(g: EventGroup) {
+    // Turn off all bid/offer flags for all submarkets in this event
+    const ids = [...g.bySubmarket.values()].flatMap(r => [r.outcome0?.id, r.outcome1?.id]).filter(Boolean) as number[]
+    if (!ids.length) return
+    await supabase.from('mm_config').update({ bid_enabled: false, offer_enabled: false, updated_at: new Date().toISOString() }).in('id', ids)
     refresh()
   }
 
@@ -158,15 +191,11 @@ export default function MmPage() {
             <p className="text-sm text-gray-400 mt-1">Polymarket LoL · DRY_RUN until you flip MM_LIVE on the worker</p>
           </div>
           {kill && (
-            <button
-              onClick={flipKill}
-              className={`px-6 py-3 rounded-lg font-bold text-sm border-2 transition-colors ${
-                kill.killed
-                  ? 'bg-gray-800 border-gray-700 text-gray-400 hover:border-green-500 hover:text-green-400'
-                  : 'bg-red-700/40 border-red-600 text-red-200 hover:bg-red-700/60'
-              }`}
-              title={kill.killed ? 'All quoting halted. Click to ENABLE (worker will start.)' : 'Worker is live. Click to EMERGENCY STOP.'}
-            >
+            <button onClick={flipKill}
+              className={`px-6 py-3 rounded-lg font-bold text-sm border-2 ${
+                kill.killed ? 'bg-gray-800 border-gray-700 text-gray-400 hover:border-green-500 hover:text-green-400'
+                            : 'bg-red-700/40 border-red-600 text-red-200 hover:bg-red-700/60'
+              }`}>
               {kill.killed ? '▶ ENABLE MM' : '■ EMERGENCY STOP'}
             </button>
           )}
@@ -174,74 +203,63 @@ export default function MmPage() {
         {kill && (
           <p className={`text-xs mt-2 font-mono ${kill.killed ? 'text-yellow-500' : 'text-green-400'}`}>
             kill_switch: {kill.killed ? `KILLED — ${kill.reason ?? '(no reason)'}` : 'ACTIVE — orders may be placed'}
-            <span className="text-gray-600 ml-3">last updated {new Date(kill.updated_at).toLocaleString()}</span>
+            <span className="text-gray-600 ml-3">{new Date(kill.updated_at).toLocaleString()}</span>
           </p>
         )}
       </header>
 
       <div className="px-6 py-4 border-b border-gray-800 flex gap-6 flex-wrap items-center">
-        <Link href="/"            className="text-sm text-gray-400 hover:text-gray-200">Dashboard</Link>
-        <Link href="/predictions" className="text-sm text-gray-400 hover:text-gray-200">Predictions</Link>
-        <Link href="/games"       className="text-sm text-gray-400 hover:text-gray-200">Game Explorer</Link>
-        <Link href="/trader"      className="text-sm text-gray-400 hover:text-gray-200">Trader</Link>
-        <Link href="/flow"        className="text-sm text-gray-400 hover:text-gray-200">Order Flow</Link>
+        <Link href="/"        className="text-sm text-gray-400 hover:text-gray-200">Dashboard</Link>
+        <Link href="/games"   className="text-sm text-gray-400 hover:text-gray-200">Game Explorer</Link>
+        <Link href="/trader"  className="text-sm text-gray-400 hover:text-gray-200">Trader</Link>
+        <Link href="/flow"    className="text-sm text-gray-400 hover:text-gray-200">Order Flow</Link>
         <span className="text-sm text-yellow-400 font-medium">Market Maker</span>
       </div>
 
-      <main className="px-6 py-6 max-w-7xl mx-auto">
-        {/* Configs */}
-        <section>
-          <div className="flex items-baseline justify-between mb-3">
-            <h2 className="text-sm font-semibold text-gray-200">Configured markets ({configs.length})</h2>
-            <button
-              onClick={() => setShowAdd(true)}
-              className="text-xs px-3 py-1.5 bg-blue-700/40 border border-blue-600 text-blue-200 rounded hover:bg-blue-700/60"
-            >
-              + Add market
-            </button>
-          </div>
+      <div className="px-6 py-3 border-b border-gray-800 flex gap-4 flex-wrap items-center">
+        <input type="text" placeholder="Search team / event…"
+          value={search} onChange={e => setSearch(e.target.value)}
+          className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm w-56" />
+        <div className="flex rounded overflow-hidden border border-gray-700 text-xs">
+          <button onClick={() => setFilter('active')}
+            className={`px-3 py-1.5 ${filter==='active' ? 'bg-yellow-500 text-gray-900 font-semibold' : 'bg-gray-800 text-gray-400 hover:text-gray-200'}`}>
+            Active</button>
+          <button onClick={() => setFilter('all')}
+            className={`px-3 py-1.5 ${filter==='all' ? 'bg-yellow-500 text-gray-900 font-semibold' : 'bg-gray-800 text-gray-400 hover:text-gray-200'}`}>
+            All events ({groups.length})</button>
+        </div>
+        <span className="text-xs text-gray-500 ml-auto">{loading ? 'Loading…' : `${filteredGroups.length} events`}</span>
+      </div>
 
-          {loading ? (
-            <p className="text-gray-500 text-sm">Loading…</p>
-          ) : configs.length === 0 ? (
-            <p className="text-gray-500 text-sm">No markets configured. Click <span className="text-blue-400">+ Add market</span> to set one up.</p>
-          ) : (
-            <div className="space-y-3">
-              {configs.map(c => {
-                const s = states[stateKey(c)]
-                return (
-                  <ConfigCard
-                    key={c.id}
-                    config={c}
-                    state={s}
-                    onToggle={() => toggleEnabled(c)}
-                    onDelete={() => deleteConfig(c)}
-                    onChange={(field, value) => updateField(c, field, value)}
-                  />
-                )
-              })}
-            </div>
-          )}
+      <main className="px-6 py-6 max-w-5xl mx-auto">
+        <section className="space-y-4">
+          {filteredGroups.map(g => (
+            <EventCard
+              key={g.event_slug}
+              group={g}
+              states={states}
+              anchor={anchorTeam[g.event_slug] ?? 0}
+              onAnchorChange={(team) => setAnchorTeam(prev => ({ ...prev, [g.event_slug]: team }))}
+              onToggle={(cfg, flag) => toggleFlag(cfg, flag)}
+              onTurnOffAll={() => bulkSetEventOff(g)}
+            />
+          ))}
         </section>
 
-        {/* Activity log */}
         <section className="mt-10">
           <h2 className="text-sm font-semibold text-gray-200 mb-3">Recent activity</h2>
           {logs.length === 0 ? (
             <p className="text-gray-500 text-xs">No activity yet.</p>
           ) : (
             <table className="w-full text-xs whitespace-nowrap">
-              <thead>
-                <tr className="border-b border-gray-800">
-                  <th className="text-left py-1.5 pr-4 font-medium text-gray-500 w-32">When</th>
-                  <th className="text-left py-1.5 pr-4 font-medium text-gray-500 w-20">Action</th>
-                  <th className="text-left py-1.5 pr-4 font-medium text-gray-500">Market</th>
-                  <th className="text-left py-1.5 pr-4 font-medium text-gray-500 w-16">Side</th>
-                  <th className="text-right py-1.5 pr-4 font-medium text-gray-500 w-20">Price</th>
-                  <th className="text-right py-1.5 pr-4 font-medium text-gray-500 w-20">Size</th>
-                  <th className="text-left py-1.5 pr-4 font-medium text-gray-500">Reason</th>
-                </tr>
-              </thead>
+              <thead><tr className="border-b border-gray-800">
+                <th className="text-left py-1.5 pr-4 font-medium text-gray-500 w-28">When</th>
+                <th className="text-left py-1.5 pr-4 font-medium text-gray-500 w-20">Action</th>
+                <th className="text-left py-1.5 pr-4 font-medium text-gray-500 w-16">Side</th>
+                <th className="text-right py-1.5 pr-4 font-medium text-gray-500 w-20">Price</th>
+                <th className="text-right py-1.5 pr-4 font-medium text-gray-500 w-20">Size</th>
+                <th className="text-left py-1.5 pr-4 font-medium text-gray-500">Reason</th>
+              </tr></thead>
               <tbody>
                 {logs.map(l => (
                   <tr key={l.id} className="border-b border-gray-800/30">
@@ -250,11 +268,9 @@ export default function MmPage() {
                       l.action === 'quote'  ? 'text-green-400' :
                       l.action === 'cancel' ? 'text-yellow-300' :
                       l.action === 'fill'   ? 'text-blue-300' :
-                      l.action === 'pause'  ? 'text-red-300' :
-                      'text-gray-300'
+                      l.action === 'pause'  ? 'text-red-300' : 'text-gray-300'
                     }`}>{l.action}{l.dry_run ? ' (dry)' : ''}</td>
-                    <td className="py-1 pr-4 text-gray-300">{l.condition_id.slice(0,10)}…</td>
-                    <td className="py-1 pr-4 font-mono text-gray-400">{l.side} #{l.outcome_index}</td>
+                    <td className="py-1 pr-4 font-mono text-gray-400">{l.side}</td>
                     <td className="py-1 pr-4 font-mono text-gray-300 text-right">{l.price?.toFixed(3) ?? '—'}</td>
                     <td className="py-1 pr-4 font-mono text-gray-300 text-right">{l.size_shares != null ? Math.round(l.size_shares).toLocaleString() : '—'}</td>
                     <td className="py-1 pr-4 text-gray-500">{l.reason ?? ''}</td>
@@ -265,246 +281,118 @@ export default function MmPage() {
           )}
         </section>
       </main>
-
-      {/* Add-market modal */}
-      {showAdd && balance && (
-        <AddMarketModal
-          balance={balance}
-          existing={configs}
-          onClose={() => setShowAdd(false)}
-          onAdded={() => { setShowAdd(false); refresh() }}
-        />
-      )}
     </div>
   )
 }
 
-// ── Config row card ───────────────────────────────────────────────────────
+// ── Event card ────────────────────────────────────────────────────────────
 
-function ConfigCard({
-  config, state, onToggle, onDelete, onChange,
+function EventCard({
+  group, states, anchor, onAnchorChange, onToggle, onTurnOffAll,
 }: {
-  config: MmConfig
-  state?: MmState
-  onToggle: () => void
-  onDelete: () => void
-  onChange: (field: keyof MmConfig, value: unknown) => void
+  group: EventGroup
+  states: Record<string, MmState>
+  anchor: 0 | 1
+  onAnchorChange: (team: 0 | 1) => void
+  onToggle: (cfg: MmConfig | null, flag: 'bid_enabled' | 'offer_enabled') => void
+  onTurnOffAll: () => void
 }) {
-  const c = config
-  const s = state
-  const enabled = c.enabled
+  const anchorTeam = anchor === 0 ? group.team1 : group.team2
+
+  const submarketKeys = useMemo(() =>
+    [...group.bySubmarket.keys()].sort((a, b) => subOrder(a) - subOrder(b)),
+  [group.bySubmarket])
+
+  const anyActive = [...group.bySubmarket.values()].some(r =>
+    r.outcome0?.bid_enabled || r.outcome0?.offer_enabled
+    || r.outcome1?.bid_enabled || r.outcome1?.offer_enabled
+  )
+
   return (
-    <div className={`border rounded-lg p-4 ${enabled ? 'border-green-700/60 bg-green-950/10' : 'border-gray-800 bg-gray-900/30'}`}>
-      <div className="flex items-start gap-3">
-        <button
-          onClick={onToggle}
-          className={`mt-1 px-3 py-1 rounded text-xs font-semibold border ${
-            enabled
-              ? 'bg-green-700/40 border-green-600 text-green-200'
-              : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500'
-          }`}
-        >{enabled ? 'ON' : 'OFF'}</button>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-baseline justify-between gap-3">
-            <div className="min-w-0">
-              <div className="font-semibold text-gray-100 truncate">
-                {c.team1} vs {c.team2}
-              </div>
-              <div className="text-xs text-gray-500 mt-0.5">
-                {c.market_type} · outcome={c.outcome_label} · side={c.side}
-                {s?.paused_reason && <span className="ml-3 text-red-300">PAUSED: {s.paused_reason}</span>}
-              </div>
-            </div>
-            <button onClick={onDelete} className="text-xs text-gray-500 hover:text-red-400">Delete</button>
+    <div className={`border rounded-lg ${anyActive ? 'border-green-700/60 bg-green-950/10' : 'border-gray-800 bg-gray-900/30'}`}>
+      <div className="px-4 py-3 border-b border-gray-800 flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <div className="font-semibold text-gray-100 truncate">{group.team1} vs {group.team2}</div>
+          <div className="text-xs text-gray-500 truncate">{group.event_title}</div>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-500">Anchor:</span>
+          <div className="flex rounded overflow-hidden border border-gray-700 text-xs">
+            <button onClick={() => onAnchorChange(0)}
+              className={`px-3 py-1 ${anchor === 0 ? 'bg-blue-700/60 text-blue-100' : 'bg-gray-800 text-gray-400 hover:text-gray-200'}`}>
+              {group.team1}</button>
+            <button onClick={() => onAnchorChange(1)}
+              className={`px-3 py-1 ${anchor === 1 ? 'bg-red-700/60 text-red-100' : 'bg-gray-800 text-gray-400 hover:text-gray-200'}`}>
+              {group.team2}</button>
           </div>
-
-          {/* Live state */}
-          {s && (
-            <div className="mt-2 text-xs font-mono text-gray-400 grid grid-cols-2 md:grid-cols-4 gap-2">
-              <div>Book top: <span className="text-gray-200">{s.last_book_top_price?.toFixed(3) ?? '—'}</span> @ <span className="text-gray-200">{s.last_book_top_size?.toFixed(0) ?? '—'}</span></div>
-              <div>Active order: <span className="text-yellow-300">{s.active_price ? `${s.active_price.toFixed(3)} × ${s.active_size_shares?.toFixed(0)}` : 'none'}</span></div>
-              <div>Fills today: <span className={s.fills_today_usd >= c.max_fill_usd * 0.8 ? 'text-red-300' : 'text-gray-200'}>${s.fills_today_usd.toFixed(0)}</span> / ${c.max_fill_usd.toFixed(0)}</div>
-              <div>Position: <span className="text-gray-200">{s.position_shares.toFixed(0)} sh</span></div>
-            </div>
+          {anyActive && (
+            <button onClick={onTurnOffAll}
+              className="text-xs text-red-400 hover:text-red-300 ml-2">Turn off all</button>
           )}
-
-          {/* Params */}
-          <div className="mt-3 flex flex-wrap gap-3 text-xs">
-            <ParamSelect label="Strategy" value={c.strategy} options={[['join_best','Join best'],['penny_back','Penny back']]} onChange={v => onChange('strategy', v)} />
-            <ParamNumber label="Quote size $"  value={c.quote_size_usd}    step={5}    min={5}    onChange={v => onChange('quote_size_usd', v)} />
-            <ParamNumber label="Max size %"    value={c.max_size_pct * 100} step={5}   min={1} max={100} onChange={v => onChange('max_size_pct', v/100)} />
-            <ParamNumber label="Max fill $"    value={c.max_fill_usd}      step={100}  min={0}    onChange={v => onChange('max_fill_usd', v)} />
-            <ParamNumber label="Min level $"   value={c.min_level_size_usd} step={5}   min={0}    onChange={v => onChange('min_level_size_usd', v)} />
-            <ParamNumber label="TTL s"         value={c.order_ttl_sec}     step={10}   min={5}    onChange={v => onChange('order_ttl_sec', v)} />
-          </div>
         </div>
       </div>
+
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-gray-800/50 text-gray-500">
+            <th className="text-left py-1.5 px-4 font-medium w-40">Submarket</th>
+            <th className="text-center py-1.5 px-2 font-medium w-16">Bid</th>
+            <th className="text-center py-1.5 px-2 font-medium w-16">Offer</th>
+            <th className="text-left py-1.5 px-4 font-medium text-[10px]">State (book top · active quote · fills · pos)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {submarketKeys.map(mt => {
+            const row = group.bySubmarket.get(mt)!
+            const cfg = anchor === 0 ? row.outcome0 : row.outcome1
+            const stateBid    = cfg ? states[`${cfg.condition_id}|${cfg.outcome_index}|bid`]   : null
+            const stateOffer  = cfg ? states[`${cfg.condition_id}|${cfg.outcome_index}|offer`] : null
+            return (
+              <tr key={mt} className="border-b border-gray-800/30 hover:bg-gray-900/30">
+                <td className="py-2 px-4 font-mono text-gray-300">{mt}</td>
+                <td className="py-2 px-2 text-center">
+                  <ToggleBtn on={!!cfg?.bid_enabled} onClick={() => onToggle(cfg, 'bid_enabled')} />
+                </td>
+                <td className="py-2 px-2 text-center">
+                  <ToggleBtn on={!!cfg?.offer_enabled} onClick={() => onToggle(cfg, 'offer_enabled')} />
+                </td>
+                <td className="py-2 px-4 font-mono text-[10px] text-gray-500 truncate">
+                  <SideState side="bid"   state={stateBid}   />
+                  <SideState side="offer" state={stateOffer} />
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }
 
-function ParamSelect({ label, value, options, onChange }: { label: string; value: string; options: [string,string][]; onChange: (v: string) => void }) {
+function ToggleBtn({ on, onClick }: { on: boolean; onClick: () => void }) {
   return (
-    <label className="flex items-center gap-1.5">
-      <span className="text-gray-500">{label}</span>
-      <select value={value} onChange={e => onChange(e.target.value)} className="bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-xs">
-        {options.map(([val, lbl]) => <option key={val} value={val}>{lbl}</option>)}
-      </select>
-    </label>
+    <button onClick={onClick}
+      className={`px-3 py-0.5 rounded text-[10px] font-semibold border ${
+        on
+          ? 'bg-green-700/40 border-green-600 text-green-200'
+          : 'bg-gray-800 border-gray-700 text-gray-500 hover:border-gray-500'
+      }`}>{on ? 'ON' : 'OFF'}</button>
   )
 }
 
-function ParamNumber({ label, value, step, min, max, onChange }: { label: string; value: number; step?: number; min?: number; max?: number; onChange: (v: number) => void }) {
+function SideState({ side, state }: { side: 'bid' | 'offer'; state: MmState | null }) {
+  if (!state) return null
+  const isPaused = !!state.paused_reason
   return (
-    <label className="flex items-center gap-1.5">
-      <span className="text-gray-500">{label}</span>
-      <input
-        type="number"
-        defaultValue={value}
-        step={step ?? 1}
-        min={min}
-        max={max}
-        onBlur={e => {
-          const v = parseFloat(e.target.value)
-          if (!isNaN(v) && v !== value) onChange(v)
-        }}
-        className="bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-xs w-20"
-      />
-    </label>
-  )
-}
-
-// ── Add-market modal ──────────────────────────────────────────────────────
-
-function AddMarketModal({
-  balance, existing, onClose, onAdded,
-}: {
-  balance: BalanceSummary
-  existing: MmConfig[]
-  onClose: () => void
-  onAdded: () => void
-}) {
-  const [eventSlug, setEventSlug] = useState('')
-  const [submarketKey, setSubmarketKey] = useState('')  // condition_id
-  const [outcomeIdx, setOutcomeIdx]   = useState(0)
-  const [side, setSide]               = useState<'bid'|'offer'|'both'>('both')
-
-  const events = useMemo(() => {
-    const seen = new Map<string, MarketRow>()
-    for (const m of balance.markets) {
-      if (m.event_slug && !seen.has(m.event_slug)) seen.set(m.event_slug, m)
-    }
-    return [...seen.values()].sort((a,b) => a.event_title.localeCompare(b.event_title))
-  }, [balance])
-
-  const submarkets = useMemo(() =>
-    balance.markets.filter(m => m.event_slug === eventSlug),
-  [balance, eventSlug])
-
-  const selectedSubmarket = submarkets.find(m => m.condition_id === submarketKey)
-
-  async function add() {
-    if (!selectedSubmarket) return
-    const outcome_label = outcomeIdx === 0 ? selectedSubmarket.team1 : selectedSubmarket.team2
-    // Try to pull the asset_id from the recent_trades feed (its known there)
-    let asset_id: string | null = null
-    try {
-      const r = await fetch('/api/poly-trades')
-      if (r.ok) {
-        const j = await r.json()
-        // recent_trades doesn't currently expose token id directly; worker can fetch.
-        asset_id = null
-      }
-    } catch {}
-
-    const row = {
-      condition_id: selectedSubmarket.condition_id,
-      market_type:  selectedSubmarket.market_type,
-      outcome_index: outcomeIdx,
-      side,
-      event_slug:   selectedSubmarket.event_slug,
-      event_title:  selectedSubmarket.event_title,
-      team1:        selectedSubmarket.team1,
-      team2:        selectedSubmarket.team2,
-      outcome_label,
-      asset_id,
-      enabled:      false,    // start disabled
-      strategy:     'join_best',
-      quote_size_usd: 50,
-      max_size_pct:   0.25,
-      max_fill_usd:   500,
-    }
-    const dupe = existing.find(c =>
-      c.condition_id === row.condition_id && c.outcome_index === row.outcome_index && c.side === row.side
-    )
-    if (dupe) {
-      alert('A config for this submarket+outcome+side already exists.')
-      return
-    }
-    const { error } = await supabase.from('mm_config').insert(row)
-    if (error) {
-      alert(`Insert failed: ${error.message}`)
-      return
-    }
-    onAdded()
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 w-full max-w-2xl">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold">Add MM market</h3>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-200">✕</button>
-        </div>
-        <div className="space-y-3 text-sm">
-          <div>
-            <label className="text-xs text-gray-400 block mb-1">Event</label>
-            <select value={eventSlug} onChange={e => { setEventSlug(e.target.value); setSubmarketKey('') }}
-              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5">
-              <option value="">— pick event —</option>
-              {events.map(e => <option key={e.event_slug} value={e.event_slug}>{e.team1} vs {e.team2} ({e.tournament || e.event_slug})</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="text-xs text-gray-400 block mb-1">Submarket</label>
-            <select value={submarketKey} onChange={e => setSubmarketKey(e.target.value)} disabled={!eventSlug}
-              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 disabled:opacity-50">
-              <option value="">— pick submarket —</option>
-              {submarkets.map(m => <option key={m.condition_id} value={m.condition_id}>{m.market_type}</option>)}
-            </select>
-          </div>
-          {selectedSubmarket && (
-            <>
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">Outcome</label>
-                <select value={outcomeIdx} onChange={e => setOutcomeIdx(parseInt(e.target.value))}
-                  className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5">
-                  <option value={0}>{selectedSubmarket.team1}</option>
-                  <option value={1}>{selectedSubmarket.team2}</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">Side</label>
-                <select value={side} onChange={e => setSide(e.target.value as 'bid'|'offer'|'both')}
-                  className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5">
-                  <option value="bid">Bid only (buy at best bid)</option>
-                  <option value="offer">Offer only (sell at best ask)</option>
-                  <option value="both">Both sides</option>
-                </select>
-              </div>
-            </>
-          )}
-        </div>
-        <div className="flex justify-end gap-2 mt-6">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
-          <button
-            onClick={add}
-            disabled={!selectedSubmarket}
-            className="px-4 py-2 text-sm bg-blue-700/40 border border-blue-600 text-blue-200 rounded hover:bg-blue-700/60 disabled:opacity-40"
-          >Add (starts OFF)</button>
-        </div>
-      </div>
+    <div className="flex flex-wrap gap-x-3">
+      <span className="text-gray-600">{side}:</span>
+      <span>top {state.last_book_top_price?.toFixed(3) ?? '—'} × {state.last_book_top_size?.toFixed(0) ?? '—'}</span>
+      <span className={state.active_price ? 'text-yellow-300' : 'text-gray-700'}>
+        active {state.active_price ? `${state.active_price.toFixed(3)} × ${state.active_size_shares?.toFixed(0)}` : 'none'}
+      </span>
+      <span>fills ${state.fills_today_usd.toFixed(0)}</span>
+      <span>pos {state.position_shares.toFixed(0)}</span>
+      {isPaused && <span className="text-red-400 truncate">PAUSED: {state.paused_reason}</span>}
     </div>
   )
 }
