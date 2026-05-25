@@ -11,7 +11,10 @@ interface Prediction {
   red_team: string
   league: string
   best_of: number
-  pred_blue_win: number
+  // null when this event is outside the model's coverage (e.g. LCK
+  // Challengers League). Such events still show in the sidebar with
+  // live Polymarket prices but no fair-value/edge columns.
+  pred_blue_win: number | null
   date: string
   poly_event_slug: string | null
   poly_team1: string | null   // OE canonical name of polymarket outcome[0]
@@ -187,8 +190,11 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
   if (!detail) return []
   const rows: Row[] = []
   const bo = pred.best_of
-  // Per-game side-neutral prob for blue team (the team we predict against)
+  // Per-game side-neutral prob for blue team. Null for events outside the
+  // model's coverage (e.g. LCK Challengers League) — we still render the
+  // row with prices, just no fair-value/edge columns.
   const pBlue = pred.pred_blue_win
+  const hasModel = pBlue != null && !Number.isNaN(pBlue)
 
   // For each polymarket submarket, compute model fair value for outcomes[0] and outcomes[1].
   for (const sm of detail.submarkets) {
@@ -201,18 +207,20 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
 
     if (sm.market_type === 'match_winner') {
       market_label = 'Match Winner'
-      // P(team1 wins series). team1 == blue → use pBlue, else use 1-pBlue
-      const team1IsBlue = _normTeam(o1) === _normTeam(pred.blue_team)
-      const pTeam1Game = team1IsBlue ? pBlue : 1 - pBlue
-      fv1 = seriesProb(pTeam1Game, bo)
-      fv2 = 1 - fv1
+      if (hasModel) {
+        const team1IsBlue = _normTeam(o1) === _normTeam(pred.blue_team)
+        const pTeam1Game = team1IsBlue ? (pBlue as number) : 1 - (pBlue as number)
+        fv1 = seriesProb(pTeam1Game, bo)
+        fv2 = 1 - fv1
+      }
     } else if (sm.market_type.startsWith('game_') && sm.market_type.endsWith('_winner')) {
       const gnum = parseInt(sm.market_type.replace('game_','').replace('_winner',''), 10)
       market_label = `Game ${gnum} Winner`
-      // Per-game side-neutral prob, same value for every game
-      const team1IsBlue = _normTeam(o1) === _normTeam(pred.blue_team)
-      fv1 = team1IsBlue ? pBlue : 1 - pBlue
-      fv2 = 1 - fv1
+      if (hasModel) {
+        const team1IsBlue = _normTeam(o1) === _normTeam(pred.blue_team)
+        fv1 = team1IsBlue ? (pBlue as number) : 1 - (pBlue as number)
+        fv2 = 1 - fv1
+      }
     } else if (sm.market_type === 'game_handicap') {
       market_label = 'Game Handicap'
       // Skip FV for v1 — handicap math is more involved (see merge_polymarket_data math)
@@ -392,11 +400,15 @@ function MainPanel({
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-wrap gap-x-8 gap-y-2 text-sm">
         <div>
           <span className="text-gray-500 mr-2">Model series WR ({pred.blue_team}):</span>
-          <span className="font-mono text-gray-100">{fmtPct(seriesProb(pred.pred_blue_win, pred.best_of))}</span>
+          <span className="font-mono text-gray-100">
+            {pred.pred_blue_win != null ? fmtPct(seriesProb(pred.pred_blue_win, pred.best_of)) : '—'}
+          </span>
         </div>
         <div>
           <span className="text-gray-500 mr-2">Per-game side-neutral:</span>
-          <span className="font-mono text-gray-100">{fmtPct(pred.pred_blue_win)}</span>
+          <span className="font-mono text-gray-100">
+            {pred.pred_blue_win != null ? fmtPct(pred.pred_blue_win) : '—'}
+          </span>
         </div>
         {pred.elo_diff != null && (
           <div>
@@ -1176,19 +1188,84 @@ export default function TraderPage() {
     else window.localStorage.removeItem('relay_secret')
   }, [])
 
-  // Load predictions on mount
+  // Load predictions + Polymarket-only events on mount
   useEffect(() => {
     let cancelled = false
     async function load() {
-      const { data, error: e } = await supabase
-        .from('upcoming_predictions')
-        .select('blue_team,red_team,league,best_of,pred_blue_win,date,poly_event_slug,poly_team1,poly_volume,blue_elo,red_elo,elo_diff')
-        .order('date', { ascending: true })
+      const [preds, pmb] = await Promise.all([
+        supabase.from('upcoming_predictions')
+          .select('blue_team,red_team,league,best_of,pred_blue_win,date,poly_event_slug,poly_team1,poly_volume,blue_elo,red_elo,elo_diff')
+          .order('date', { ascending: true }),
+        // Pull every Polymarket-tracked event so Challengers / Prime / CBLOL etc.
+        // surface here even though the model doesn't predict them.
+        supabase.from('poly_market_balance')
+          .select('event_slug,event_title,tournament,team1,team2,best_of,market_type,total_volume_usd'),
+      ])
       if (cancelled) return
-      if (e) { setError(e.message); setLoadingList(false); return }
-      const filtered = (data ?? []).filter(p => p.poly_event_slug)
-      setEvents(filtered as Prediction[])
-      if (filtered.length > 0) setSelectedSlug(filtered[0].poly_event_slug ?? null)
+      if (preds.error) { setError(preds.error.message); setLoadingList(false); return }
+
+      // 1) Events with a model prediction
+      const predRows = ((preds.data ?? []) as Prediction[]).filter(p => p.poly_event_slug)
+      const haveSlug = new Set(predRows.map(p => p.poly_event_slug))
+
+      // 2) Polymarket-only events (group balance rows by event_slug, dedupe)
+      const pmbBySlug = new Map<string, Prediction>()
+      for (const r of (pmb.data ?? []) as Array<{
+        event_slug: string; event_title: string | null; tournament: string | null;
+        team1: string | null; team2: string | null; best_of: number | null;
+        market_type: string; total_volume_usd: number | null;
+      }>) {
+        if (!r.event_slug || haveSlug.has(r.event_slug)) continue
+        const existing = pmbBySlug.get(r.event_slug)
+        const vol = (existing?.poly_volume ?? 0) + (r.market_type === 'match_winner' ? (r.total_volume_usd ?? 0) : 0)
+        // Date is encoded as the last segment of the slug: lol-…-YYYY-MM-DD
+        const m = r.event_slug.match(/(\d{4}-\d{2}-\d{2})$/)
+        const date = m ? `${m[1]}T00:00:00Z` : new Date().toISOString()
+        // Map tournament → short league badge
+        const tour = r.tournament ?? ''
+        const league =
+          /^LCK Challengers/i.test(tour) ? 'LCK-C' :
+          /^LCK\b/i.test(tour)           ? 'LCK'  :
+          /^LCS\b/i.test(tour)           ? 'LCS'  :
+          /^LEC\b/i.test(tour)           ? 'LEC'  :
+          /^LPL\b/i.test(tour)           ? 'LPL'  :
+          /Esports World Cup/i.test(tour) ? 'EWC' :
+          /Prime League/i.test(tour)     ? 'PRM'  :
+          /CBLOL/i.test(tour)            ? 'CBLOL':
+          /TCL/i.test(tour)              ? 'TCL'  :
+          /LJL/i.test(tour)              ? 'LJL'  :
+          /LCP/i.test(tour)              ? 'LCP'  :
+          /Hitpoint|Hitpoint Masters/i.test(tour) ? 'HM' :
+          /HLL/i.test(tour)              ? 'HLL'  :
+          /LPLOL/i.test(tour)            ? 'LPLOL':
+          /Rift Legends/i.test(tour)     ? 'RL'   :
+          /North American Challengers/i.test(tour) ? 'NACL' :
+          /LES\b/i.test(tour)            ? 'LES'  :
+          /LIT\b/i.test(tour)            ? 'LIT'  :
+          /Circuito Desafiante/i.test(tour) ? 'CDF' :
+          /Road Of Legends/i.test(tour)  ? 'ROL'  :
+          'OTHER'
+        pmbBySlug.set(r.event_slug, existing ?? {
+          blue_team: r.team1 ?? '',
+          red_team:  r.team2 ?? '',
+          league,
+          best_of:   r.best_of ?? 3,
+          pred_blue_win: null as unknown as number,  // sentinel: no model → fv columns blank
+          date,
+          poly_event_slug: r.event_slug,
+          poly_team1: r.team1,
+          poly_volume: vol,
+          blue_elo: null,
+          red_elo:  null,
+          elo_diff: null,
+        })
+        if (existing) existing.poly_volume = vol
+      }
+      const merged: Prediction[] = [...predRows, ...pmbBySlug.values()]
+        .sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''))
+
+      setEvents(merged)
+      if (merged.length > 0) setSelectedSlug(merged[0].poly_event_slug ?? null)
       setLoadingList(false)
     }
     load()
