@@ -23,6 +23,7 @@ interface MmConfig {
   offer_enabled: boolean
   strategy: 'join_best' | 'penny_back'
   quote_size_usd: number
+  quote_size_shares: number | null
   max_size_pct: number
   max_fill_usd: number
   max_position_shares: number
@@ -370,10 +371,11 @@ function EventCard({
       <table className="w-full text-xs">
         <thead>
           <tr className="border-b border-gray-800/50 text-gray-500">
-            <th className="text-left py-1.5 px-4 font-medium w-40">Submarket</th>
+            <th className="text-left  py-1.5 px-4 font-medium w-40">Submarket</th>
             <th className="text-center py-1.5 px-2 font-medium w-16">Bid</th>
             <th className="text-center py-1.5 px-2 font-medium w-16">Offer</th>
-            <th className="text-left py-1.5 px-4 font-medium text-[10px]">State (book top · active quote · fills · pos)</th>
+            <th className="text-center py-1.5 px-2 font-medium w-24" title="Quote size: shares (preferred) — falls back to USD if blank">Size</th>
+            <th className="text-left  py-1.5 px-4 font-medium text-[10px]">State (book top · active quote · fills · pos)</th>
           </tr>
         </thead>
         <tbody>
@@ -391,6 +393,9 @@ function EventCard({
                 <td className="py-2 px-2 text-center">
                   <ToggleBtn on={!!cfg?.offer_enabled} onClick={() => onToggle(cfg, 'offer_enabled')} />
                 </td>
+                <td className="py-2 px-2 text-center">
+                  {cfg && <SizeEditor cfg={cfg} />}
+                </td>
                 <td className="py-2 px-4 font-mono text-[10px] text-gray-500 truncate">
                   <SideState side="bid"   state={stateBid}   />
                   <SideState side="offer" state={stateOffer} />
@@ -400,6 +405,43 @@ function EventCard({
           })}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// Per-row size editor. Lets the user set EITHER:
+//   - `quote_size_shares` (preferred, exact share count regardless of price)
+//   - `quote_size_usd`    (legacy, derived shares = USD / target_px)
+// Toggle between modes with the unit button.
+function SizeEditor({ cfg }: { cfg: MmConfig }) {
+  const [unit, setUnit] = useState<'sh' | '$'>(cfg.quote_size_shares != null ? 'sh' : '$')
+  const value = unit === 'sh' ? (cfg.quote_size_shares ?? '') : cfg.quote_size_usd
+  const save = async (raw: string) => {
+    const v = parseFloat(raw)
+    if (isNaN(v) || v <= 0) return
+    if (unit === 'sh') {
+      await supabase.from('mm_config')
+        .update({ quote_size_shares: v, updated_at: new Date().toISOString() })
+        .eq('id', cfg.id)
+    } else {
+      // Switching to USD mode: clear shares so worker falls back to USD/price
+      await supabase.from('mm_config')
+        .update({ quote_size_shares: null, quote_size_usd: v, updated_at: new Date().toISOString() })
+        .eq('id', cfg.id)
+    }
+  }
+  return (
+    <div className="flex items-center gap-1 justify-center">
+      <input type="number" step={unit === 'sh' ? 10 : 5} min={1}
+        defaultValue={value === '' ? '' : value}
+        onBlur={e => save(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+        className="w-14 bg-gray-800 border border-gray-700 rounded px-1 py-0.5 text-xs font-mono text-right" />
+      <button onClick={() => setUnit(u => u === 'sh' ? '$' : 'sh')}
+        className="text-[10px] text-gray-500 hover:text-gray-200 w-4"
+        title="Toggle unit. shares = exact count; $ = USD that gets divided by price">
+        {unit}
+      </button>
     </div>
   )
 }
