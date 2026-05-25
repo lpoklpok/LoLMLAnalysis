@@ -24,14 +24,15 @@ interface PnLData {
   generated_at_utc:  string
   wallet:            string
   kalshi_available:  boolean
+  start_date:        string
   days:              DayRow[]
-  cumulative_30d:    CumRow[]
+  cumulative:        CumRow[]
   totals: {
-    polymarket_pnl_7d:    number
-    kalshi_pnl_7d:        number
-    total_pnl_7d:         number
-    polymarket_trades_7d: number
-    kalshi_trades_7d:     number
+    polymarket_pnl:    number
+    kalshi_pnl:        number
+    total_pnl:         number
+    polymarket_trades: number
+    kalshi_trades:     number
   }
 }
 
@@ -115,7 +116,7 @@ export default function PnLPage() {
     )
   }, [data])
 
-  const cum30 = data?.cumulative_30d ?? []
+  const cum = data?.cumulative ?? []
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
@@ -146,28 +147,28 @@ export default function PnLPage() {
 
         {data && (
           <>
-            {/* 7-day totals */}
+            {/* Totals since start_date */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <StatCard label="Total 7-day"      value={fmt$(data.totals.total_pnl_7d)}
-                        valueColor={clrFor(data.totals.total_pnl_7d)}
-                        sub={`${data.totals.polymarket_trades_7d + data.totals.kalshi_trades_7d} trades`} />
-              <StatCard label="Polymarket 7-day" value={fmt$(data.totals.polymarket_pnl_7d)}
-                        valueColor={clrFor(data.totals.polymarket_pnl_7d)}
-                        sub={`${data.totals.polymarket_trades_7d} trades`} />
-              <StatCard label="Kalshi 7-day"     value={data.kalshi_available ? fmt$(data.totals.kalshi_pnl_7d) : 'N/A'}
-                        valueColor={data.kalshi_available ? clrFor(data.totals.kalshi_pnl_7d) : 'text-gray-500'}
-                        sub={data.kalshi_available ? `${data.totals.kalshi_trades_7d} trades` : 'Kalshi unavailable'} />
+              <StatCard label={`Total since ${data.start_date}`} value={fmt$(data.totals.total_pnl)}
+                        valueColor={clrFor(data.totals.total_pnl)}
+                        sub={`${data.totals.polymarket_trades + data.totals.kalshi_trades} trades`} />
+              <StatCard label="Polymarket" value={fmt$(data.totals.polymarket_pnl)}
+                        valueColor={clrFor(data.totals.polymarket_pnl)}
+                        sub={`${data.totals.polymarket_trades} trades`} />
+              <StatCard label="Kalshi"     value={data.kalshi_available ? fmt$(data.totals.kalshi_pnl) : 'N/A'}
+                        valueColor={data.kalshi_available ? clrFor(data.totals.kalshi_pnl) : 'text-gray-500'}
+                        sub={data.kalshi_available ? `${data.totals.kalshi_trades} trades` : 'Kalshi unavailable'} />
               <StatCard label="Best/Worst Day"
                         value={`${fmt$(Math.max(...data.days.map(d => d.total_pnl)))} / ${fmt$(Math.min(...data.days.map(d => d.total_pnl)))}`}
                         valueColor="text-gray-200"
                         sub="best vs worst single day" />
             </div>
 
-            {/* 7-day breakdown table */}
+            {/* Daily breakdown table since start_date */}
             <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-              <h2 className="text-lg font-semibold text-gray-100 mb-1">Daily breakdown — last 7 days</h2>
+              <h2 className="text-lg font-semibold text-gray-100 mb-1">Daily breakdown — since {data.start_date}</h2>
               <p className="text-xs text-gray-500 mb-5">
-                Cash-flow PnL by UTC date. BUY → cash out, SELL/REDEEM → cash in.
+                Trade-date mark-to-current PnL by UTC date.
                 LoL markets only ({data.kalshi_available ? 'PM keywords + Kalshi KXLOL* prefix' : 'PM only — Kalshi auth unavailable'}).
               </p>
 
@@ -207,17 +208,17 @@ export default function PnLPage() {
                   </tbody>
                   <tfoot>
                     <tr className="border-t-2 border-gray-700">
-                      <td className="px-2 py-2 text-gray-400 font-semibold">7-day total</td>
-                      <td className={`px-2 py-2 text-right font-mono font-bold ${clrFor(data.totals.polymarket_pnl_7d)}`}>
-                        {fmt$(data.totals.polymarket_pnl_7d)}
+                      <td className="px-2 py-2 text-gray-400 font-semibold">Total</td>
+                      <td className={`px-2 py-2 text-right font-mono font-bold ${clrFor(data.totals.polymarket_pnl)}`}>
+                        {fmt$(data.totals.polymarket_pnl)}
                       </td>
-                      <td className="px-2 py-2 text-right text-gray-500 font-mono">{data.totals.polymarket_trades_7d}</td>
-                      <td className={`px-2 py-2 text-right font-mono font-bold ${clrFor(data.totals.kalshi_pnl_7d)}`}>
-                        {fmt$(data.totals.kalshi_pnl_7d)}
+                      <td className="px-2 py-2 text-right text-gray-500 font-mono">{data.totals.polymarket_trades}</td>
+                      <td className={`px-2 py-2 text-right font-mono font-bold ${clrFor(data.totals.kalshi_pnl)}`}>
+                        {fmt$(data.totals.kalshi_pnl)}
                       </td>
-                      <td className="px-2 py-2 text-right text-gray-500 font-mono">{data.totals.kalshi_trades_7d}</td>
-                      <td className={`px-2 py-2 text-right font-mono font-extrabold text-lg border-l border-gray-800 ${clrFor(data.totals.total_pnl_7d)}`}>
-                        {fmt$(data.totals.total_pnl_7d)}
+                      <td className="px-2 py-2 text-right text-gray-500 font-mono">{data.totals.kalshi_trades}</td>
+                      <td className={`px-2 py-2 text-right font-mono font-extrabold text-lg border-l border-gray-800 ${clrFor(data.totals.total_pnl)}`}>
+                        {fmt$(data.totals.total_pnl)}
                       </td>
                     </tr>
                   </tfoot>
@@ -225,21 +226,21 @@ export default function PnLPage() {
               </div>
             </div>
 
-            {/* 30-day cumulative sparkline */}
-            {cum30.length > 0 && (
+            {/* Cumulative sparkline since start_date */}
+            {cum.length > 0 && (
               <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-                <h2 className="text-lg font-semibold text-gray-100 mb-1">Cumulative PnL — last 30 days</h2>
+                <h2 className="text-lg font-semibold text-gray-100 mb-1">Cumulative PnL — since {data.start_date}</h2>
                 <p className="text-xs text-gray-500 mb-4">
-                  {cum30.length > 0 && `${cum30[0].date} → ${cum30[cum30.length-1].date} · ${cum30.length} active days`}
+                  {`${cum[0].date} → ${cum[cum.length-1].date} · ${cum.length} days`}
                 </p>
                 <div className="bg-gray-950 rounded p-3 border border-gray-800">
-                  <SparkLine data={cum30.map(c => c.cum_pnl)} color={cum30[cum30.length-1].cum_pnl >= 0 ? '#34d399' : '#f87171'} height={120} />
+                  <SparkLine data={cum.map(c => c.cum_pnl)} color={cum[cum.length-1].cum_pnl >= 0 ? '#34d399' : '#f87171'} height={120} />
                   <div className="flex justify-between text-xs text-gray-500 mt-2 font-mono">
-                    <span>{cum30[0].date}</span>
-                    <span className={clrFor(cum30[cum30.length-1].cum_pnl)}>
-                      ending {fmt$(cum30[cum30.length-1].cum_pnl)}
+                    <span>{cum[0].date}</span>
+                    <span className={clrFor(cum[cum.length-1].cum_pnl)}>
+                      ending {fmt$(cum[cum.length-1].cum_pnl)}
                     </span>
-                    <span>{cum30[cum30.length-1].date}</span>
+                    <span>{cum[cum.length-1].date}</span>
                   </div>
                 </div>
               </div>

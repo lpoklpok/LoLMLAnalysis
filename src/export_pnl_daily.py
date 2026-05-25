@@ -41,6 +41,7 @@ EXCLUDED_CIDS = {
     '0x9be6eece606031076710039492dbef046237321699a8129e263ee6b1190b7fa2',
 }
 KALSHI_PREFIXES = ['KXLOL']
+START_DATE = pd.Timestamp('2026-05-18', tz=None)  # window starts here, grows as days pass
 OUT_PATH = Path(__file__).resolve().parent.parent / 'web' / 'public' / 'pnl_daily.json'
 
 DATA_API  = 'https://data-api.polymarket.com'
@@ -336,22 +337,11 @@ def main():
 
     today = pd.Timestamp.utcnow().normalize().tz_localize(None)
 
-    win30 = merged[merged['date'] >= today - pd.Timedelta(days=30)].copy()
-    win30['cum_pnl'] = win30['total_pnl'].cumsum()
-    cumulative_30d = [
-        {'date': d.strftime('%Y-%m-%d'),
-         'polymarket_pnl': round(p, 2),
-         'kalshi_pnl':     round(k, 2),
-         'total_pnl':      round(t, 2),
-         'cum_pnl':        round(c, 2)}
-        for d, p, k, t, c in zip(win30['date'], win30['polymarket_pnl'],
-                                  win30['kalshi_pnl'], win30['total_pnl'], win30['cum_pnl'])
-    ]
-
+    # Build all days from START_DATE through today (inclusive).
     by_date = {row['date']: row for _, row in merged.iterrows()}
     days = []
-    for i in range(6, -1, -1):
-        d = today - pd.Timedelta(days=i)
+    d = START_DATE
+    while d <= today:
         r = by_date.get(d)
         if r is not None:
             days.append({
@@ -366,29 +356,44 @@ def main():
             days.append({'date': d.strftime('%Y-%m-%d'),
                          'polymarket_pnl': 0.0, 'kalshi_pnl': 0.0, 'total_pnl': 0.0,
                          'polymarket_trades': 0, 'kalshi_trades': 0})
+        d = d + pd.Timedelta(days=1)
+
+    # Cumulative line: running sum from START_DATE.
+    cum = 0.0
+    cumulative = []
+    for r in days:
+        cum += r['total_pnl']
+        cumulative.append({
+            'date':            r['date'],
+            'polymarket_pnl':  r['polymarket_pnl'],
+            'kalshi_pnl':      r['kalshi_pnl'],
+            'total_pnl':       r['total_pnl'],
+            'cum_pnl':         round(cum, 2),
+        })
 
     totals = {
-        'polymarket_pnl_7d':    round(sum(d['polymarket_pnl'] for d in days), 2),
-        'kalshi_pnl_7d':        round(sum(d['kalshi_pnl'] for d in days), 2),
-        'total_pnl_7d':         round(sum(d['total_pnl'] for d in days), 2),
-        'polymarket_trades_7d': sum(d['polymarket_trades'] for d in days),
-        'kalshi_trades_7d':     sum(d['kalshi_trades'] for d in days),
+        'polymarket_pnl':    round(sum(d['polymarket_pnl'] for d in days), 2),
+        'kalshi_pnl':        round(sum(d['kalshi_pnl'] for d in days), 2),
+        'total_pnl':         round(sum(d['total_pnl'] for d in days), 2),
+        'polymarket_trades': sum(d['polymarket_trades'] for d in days),
+        'kalshi_trades':     sum(d['kalshi_trades'] for d in days),
     }
 
     out = {
         'generated_at_utc': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         'wallet':           WALLET,
         'kalshi_available': kalshi_available,
+        'start_date':       START_DATE.strftime('%Y-%m-%d'),
         'days':             days,
         'totals':           totals,
-        'cumulative_30d':   cumulative_30d,
+        'cumulative':       cumulative,
     }
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(OUT_PATH, 'w') as f:
         json.dump(out, f, indent=2)
-    print(f'Wrote {OUT_PATH} — totals: PM ${totals["polymarket_pnl_7d"]:+,.0f}, '
-          f'Kalshi ${totals["kalshi_pnl_7d"]:+,.0f}, total ${totals["total_pnl_7d"]:+,.0f}')
+    print(f'Wrote {OUT_PATH} — totals since {START_DATE.date()}: PM ${totals["polymarket_pnl"]:+,.0f}, '
+          f'Kalshi ${totals["kalshi_pnl"]:+,.0f}, total ${totals["total_pnl"]:+,.0f}')
 
 
 if __name__ == '__main__':
