@@ -141,8 +141,21 @@ export default function MmPage() {
 
   useEffect(() => {
     refresh()
-    const id = setInterval(refresh, 5_000)
-    return () => clearInterval(id)
+    // Realtime: prepend new mm_quotes_log rows the instant the worker
+    // writes them (instead of waiting up to 5s for the next poll).
+    const ch = supabase
+      .channel('mm-quotes-log')
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'mm_quotes_log' },
+        (p) => {
+          const row = p.new as QuoteLogRow
+          setLogs(prev => [row, ...prev].slice(0, 40))
+        })
+      .subscribe()
+    // Safety-net poll at 15s for configs/states (realtime covers those too,
+    // but a slow heartbeat catches any dropped subscriptions).
+    const id = setInterval(refresh, 15_000)
+    return () => { clearInterval(id); supabase.removeChannel(ch) }
   }, [refresh])
 
   // Group configs by event_slug
