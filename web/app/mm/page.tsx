@@ -92,9 +92,14 @@ let _audioCtx: AudioContext | null = null
 function playFillPing() {
   if (typeof window === 'undefined') return
   try {
-    type WinAC = Window & { webkitAudioContext?: typeof AudioContext }
+    type WinAC = Window & {
+      AudioContext?: typeof AudioContext
+      webkitAudioContext?: typeof AudioContext
+    }
     const w = window as WinAC
-    if (!_audioCtx) _audioCtx = new (w.AudioContext || w.webkitAudioContext!)()
+    const Ctor = w.AudioContext || w.webkitAudioContext
+    if (!Ctor) return
+    if (!_audioCtx) _audioCtx = new Ctor()
     const ctx = _audioCtx
     if (ctx.state === 'suspended') void ctx.resume()
     const now = ctx.currentTime
