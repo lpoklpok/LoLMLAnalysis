@@ -257,18 +257,29 @@ export default function MmPage() {
     refresh()
   }
 
+  // Optimistic patch: flip local state IMMEDIATELY, then send the update to
+  // Supabase in the background. The realtime subscription will reconcile any
+  // drift if the write fails or differs. This makes toggles feel instant
+  // instead of waiting for the 150-300ms Supabase round-trip.
+  const updateConfig = useCallback(async (id: number, patch: Partial<MmConfig>) => {
+    setConfigs(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c))
+    await supabase.from('mm_config')
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq('id', id)
+  }, [])
+
   async function toggleFlag(cfg: MmConfig | null, flag: 'bid_enabled' | 'offer_enabled') {
     if (!cfg) return
-    await supabase.from('mm_config').update({ [flag]: !cfg[flag], updated_at: new Date().toISOString() }).eq('id', cfg.id)
-    refresh()
+    await updateConfig(cfg.id, { [flag]: !cfg[flag] })
   }
 
   async function bulkSetEventOff(g: EventGroup) {
-    // Turn off all bid/offer flags for all submarkets in this event
     const ids = [...g.bySubmarket.values()].flatMap(r => [r.outcome0?.id, r.outcome1?.id]).filter(Boolean) as number[]
     if (!ids.length) return
-    await supabase.from('mm_config').update({ bid_enabled: false, offer_enabled: false, updated_at: new Date().toISOString() }).in('id', ids)
-    refresh()
+    setConfigs(prev => prev.map(c => ids.includes(c.id) ? { ...c, bid_enabled: false, offer_enabled: false } : c))
+    await supabase.from('mm_config')
+      .update({ bid_enabled: false, offer_enabled: false, updated_at: new Date().toISOString() })
+      .in('id', ids)
   }
 
   return (
@@ -333,6 +344,7 @@ export default function MmPage() {
               onToggle={(cfg, flag) => toggleFlag(cfg, flag)}
               onTurnOffAll={() => bulkSetEventOff(g)}
               onTogglePin={() => togglePin(g.event_slug)}
+              onUpdateConfig={updateConfig}
             />
           ))}
         </section>
@@ -379,7 +391,7 @@ export default function MmPage() {
 // ── Event card ────────────────────────────────────────────────────────────
 
 function EventCard({
-  group, states, anchor, pinned, onAnchorChange, onToggle, onTurnOffAll, onTogglePin,
+  group, states, anchor, pinned, onAnchorChange, onToggle, onTurnOffAll, onTogglePin, onUpdateConfig,
 }: {
   group: EventGroup
   states: Record<string, MmState>
@@ -389,6 +401,7 @@ function EventCard({
   onToggle: (cfg: MmConfig | null, flag: 'bid_enabled' | 'offer_enabled') => void
   onTurnOffAll: () => void
   onTogglePin: () => void
+  onUpdateConfig: (id: number, patch: Partial<MmConfig>) => Promise<void>
 }) {
   const anchorTeam = anchor === 0 ? group.team1 : group.team2
 
@@ -469,10 +482,10 @@ function EventCard({
                   <ToggleBtn on={!!cfg?.offer_enabled} onClick={() => onToggle(cfg, 'offer_enabled')} />
                 </td>
                 <td className="py-2 px-2 text-center">
-                  {cfg && <SizeEditor cfg={cfg} />}
+                  {cfg && <SizeEditor cfg={cfg} onUpdateConfig={onUpdateConfig} />}
                 </td>
                 <td className="py-2 px-2 text-center">
-                  {cfg && <StrategyToggle cfg={cfg} />}
+                  {cfg && <StrategyToggle cfg={cfg} onUpdateConfig={onUpdateConfig} />}
                 </td>
                 <td className="py-2 px-4 font-mono text-[10px] text-gray-500 truncate">
                   <SideState side="bid"   state={stateBid}   />
@@ -488,14 +501,15 @@ function EventCard({
 }
 
 // Per-row size editor. Always shares — exact count, price-agnostic.
-function SizeEditor({ cfg }: { cfg: MmConfig }) {
+function SizeEditor({ cfg, onUpdateConfig }: {
+  cfg: MmConfig
+  onUpdateConfig: (id: number, patch: Partial<MmConfig>) => Promise<void>
+}) {
   const value = cfg.quote_size_shares ?? ''
-  const save = async (raw: string) => {
+  const save = (raw: string) => {
     const v = parseFloat(raw)
     if (isNaN(v) || v <= 0) return
-    await supabase.from('mm_config')
-      .update({ quote_size_shares: v, updated_at: new Date().toISOString() })
-      .eq('id', cfg.id)
+    void onUpdateConfig(cfg.id, { quote_size_shares: v })
   }
   return (
     <input type="number" step={10} min={1}
@@ -508,15 +522,13 @@ function SizeEditor({ cfg }: { cfg: MmConfig }) {
 }
 
 // Per-row strategy toggle: Join the best level vs penny one cent behind.
-function StrategyToggle({ cfg }: { cfg: MmConfig }) {
+function StrategyToggle({ cfg, onUpdateConfig }: {
+  cfg: MmConfig
+  onUpdateConfig: (id: number, patch: Partial<MmConfig>) => Promise<void>
+}) {
   const isPenny = cfg.strategy === 'penny_back'
-  const flip = async () => {
-    await supabase.from('mm_config')
-      .update({
-        strategy: isPenny ? 'join_best' : 'penny_back',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', cfg.id)
+  const flip = () => {
+    void onUpdateConfig(cfg.id, { strategy: isPenny ? 'join_best' : 'penny_back' })
   }
   return (
     <button onClick={flip}
