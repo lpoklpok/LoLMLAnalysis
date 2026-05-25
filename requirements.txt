@@ -1,6 +1,7 @@
 beautifulsoup4==4.14.3
 certifi==2026.4.22
 charset-normalizer==3.4.7
+cryptography>=42.0
 filelock==3.29.0
 gdown==6.0.0
 google-api-python-client>=2.130

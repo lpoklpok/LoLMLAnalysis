@@ -1,144 +1,209 @@
 """
 export_pnl_daily.py
-Pulls Polymarket + Kalshi trade history via the existing TradingPnL source modules,
-buckets P&L by date using the cash-flow method, and writes the last 7 days plus
-30-day cumulative history to web/public/pnl_daily.json for the /pnl page.
+Pulls Polymarket + Kalshi trade history, buckets cash-flow P&L by UTC date,
+and writes the last 7 days + 30-day cumulative view to web/public/pnl_daily.json
+for the /pnl page.
 
-Reads Kalshi credentials from TradingPnL/.env (KALSHI_API_KEY, KALSHI_PRIVATE_KEY_PATH).
-Reads Polymarket wallet from TradingPnL/config.json.
-LoL-only filter applied (matches the config: included_title_keywords for PM,
-included_ticker_prefixes for Kalshi).
+Designed to run both locally and in GitHub Actions. Reads credentials from env:
+  POLYMARKET_WALLET     — proxy wallet address (defaults to lpoklpok's wallet)
+  KALSHI_API_KEY        — RSA key UUID (Kalshi step skipped if missing)
+  KALSHI_PRIVATE_KEY    — PEM contents (multi-line). Use KALSHI_PRIVATE_KEY_PATH
+                          to point to a local .pem file instead.
 
-Output JSON shape:
-  {
-    "generated_at_utc": "...",
-    "wallet":           "0x9560...",
-    "days": [
-      {"date": "2026-05-19", "polymarket_pnl": 123.45, "kalshi_pnl": 67.89,
-       "total_pnl": 191.34, "polymarket_trades": 12, "kalshi_trades": 3}
-    ],
-    "totals": {
-      "polymarket_pnl_7d":   ...,
-      "kalshi_pnl_7d":       ...,
-      "total_pnl_7d":        ...,
-      "polymarket_trades_7d": ...,
-      "kalshi_trades_7d":     ...
-    },
-    "cumulative_30d": [{"date":"2026-04-25","cum_pnl":0,...}]
-  }
+LoL-only filter applied by title keyword (Polymarket) and KXLOL ticker prefix
+(Kalshi).
 """
+import base64
 import datetime
 import json
 import os
-import sys
+import time
 from pathlib import Path
 
 import pandas as pd
+import requests
 from dotenv import load_dotenv
 
-# Reuse the existing TradingPnL source modules — they're battle-tested.
-TPL_ROOT = Path('/Users/kevinwang/2027Projects/TradingPnL')
-sys.path.insert(0, str(TPL_ROOT))
-load_dotenv(TPL_ROOT / '.env')
+# Pull local TradingPnL/.env when present (for local runs); harmless on CI.
+for env_path in (
+    Path('/Users/kevinwang/2027Projects/TradingPnL/.env'),
+    Path(__file__).resolve().parent.parent / '.env',
+):
+    if env_path.exists():
+        load_dotenv(env_path)
 
-from src.sources import polymarket as pm   # noqa: E402
-from src.sources import kalshi    as ka    # noqa: E402
-
+# ── Config ──────────────────────────────────────────────────────────────────
+WALLET   = os.environ.get('POLYMARKET_WALLET', '0x9560dbf536660b5fc71efbe75b144f92013b9467')
+KEYWORDS = ['lol', 'game handicap', 'games total', 'first stand', 'esports world',
+            'lec', 'lcs', 'lck', 'lpl', 'msi', 'worlds', 'cblol']
+EXCLUDED_CIDS = {
+    '0xdd61d5b118b791f379888a4c560b48a0469509e42107325126b046ea2a348b93',
+    '0x9be6eece606031076710039492dbef046237321699a8129e263ee6b1190b7fa2',
+}
+KALSHI_PREFIXES = ['KXLOL']
 OUT_PATH = Path(__file__).resolve().parent.parent / 'web' / 'public' / 'pnl_daily.json'
 
-
-def _config() -> dict:
-    with open(TPL_ROOT / 'config.json') as f:
-        return json.load(f)
+DATA_API  = 'https://data-api.polymarket.com'
+KALSHI_URL = 'https://api.elections.kalshi.com/trade-api/v2'
 
 
-def _polymarket_daily(cfg: dict) -> pd.DataFrame:
-    """Polymarket cash-flow P&L per UTC date, filtered to LoL markets."""
-    wallet   = cfg['polymarket']['wallet']
-    keywords = [k.lower() for k in cfg['polymarket'].get('included_title_keywords', [])]
-    excluded = set(cfg['polymarket'].get('excluded_condition_ids', {}).keys())
+# ── Polymarket ─────────────────────────────────────────────────────────────
 
-    activity = pm.fetch_activity(wallet)
-    if activity.empty:
+def _fetch_polymarket() -> pd.DataFrame:
+    rows, offset = [], 0
+    while True:
+        r = requests.get(f'{DATA_API}/activity',
+                         params={'user': WALLET, 'limit': 500, 'offset': offset}, timeout=20)
+        if not r.ok: break
+        batch = r.json()
+        if not batch: break
+        rows.extend(batch)
+        if len(batch) < 500: break
+        offset += 500
+        time.sleep(0.1)
+    if not rows:
         return pd.DataFrame(columns=['date','polymarket_pnl','polymarket_trades'])
 
-    activity = activity[~activity['conditionId'].isin(excluded)]
-    if keywords:
-        pat = '|'.join(keywords)
-        activity = activity[activity['title'].str.lower().str.contains(pat, na=False)]
+    df = pd.DataFrame([{
+        'timestamp':   pd.to_datetime(a['timestamp'], unit='s', utc=True),
+        'type':        a.get('type', ''),
+        'conditionId': a.get('conditionId', ''),
+        'side':        a.get('side', ''),
+        'usd_value':   float(a.get('usdcSize', 0) or 0),
+        'title':       a.get('title', '') or '',
+    } for a in rows])
 
-    activity = activity.copy()
-    activity['date'] = activity['timestamp'].dt.tz_convert('UTC').dt.date
+    df = df[~df['conditionId'].isin(EXCLUDED_CIDS)]
+    pat = '|'.join(KEYWORDS)
+    df  = df[df['title'].str.lower().str.contains(pat, na=False)]
+    df['date'] = df['timestamp'].dt.tz_convert('UTC').dt.date
 
-    # Cash flow:
-    #   BUY  → -usd_value (cash out)
-    #   SELL → +usd_value (cash in)
-    #   REDEEM → +usd_value (settlement payout)
-    def cash_flow(row):
+    def cash(row):
         if row['type'] == 'TRADE':
             return row['usd_value'] if row['side'] == 'SELL' else -row['usd_value']
-        if row['type'] == 'REDEEM':
-            return row['usd_value']
-        if row['type'] in ('REWARD', 'MAKER_REBATE'):
+        if row['type'] in ('REDEEM', 'REWARD', 'MAKER_REBATE'):
             return row['usd_value']
         return 0.0
-    activity['cash'] = activity.apply(cash_flow, axis=1)
-
-    daily = activity.groupby('date').agg(
+    df['cash'] = df.apply(cash, axis=1)
+    return df.groupby('date').agg(
         polymarket_pnl=('cash', 'sum'),
         polymarket_trades=('type', lambda s: (s == 'TRADE').sum()),
     ).reset_index()
-    return daily
 
 
-def _kalshi_daily(cfg: dict) -> pd.DataFrame:
-    """Kalshi cash-flow P&L per UTC date, filtered to LoL markets."""
-    prefixes = cfg['kalshi'].get('included_ticker_prefixes', [])
+# ── Kalshi ─────────────────────────────────────────────────────────────────
 
-    fills, settlements = ka.fetch_fills(), ka.fetch_settlements()
+def _load_kalshi_pem() -> str | None:
+    """Return PEM contents (string) or None if not configured."""
+    pem = os.environ.get('KALSHI_PRIVATE_KEY')
+    if pem:
+        return pem.replace('\\n', '\n')  # GH Actions sometimes escapes newlines
+    pem_path = os.environ.get('KALSHI_PRIVATE_KEY_PATH')
+    if pem_path and Path(pem_path).exists():
+        return Path(pem_path).read_text()
+    return None
 
-    def _keep_ticker(t: str) -> bool:
-        if not prefixes:
-            return True
-        return any(str(t).startswith(p) for p in prefixes)
 
-    cash_records = []
+def _kalshi_sign(key_id: str, pem: str, method: str, path: str) -> dict:
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+    ts  = str(int(time.time() * 1000))
+    msg = (ts + method.upper() + '/trade-api/v2' + path).encode()
+    private_key = serialization.load_pem_private_key(pem.encode(), password=None)
+    sig = private_key.sign(
+        msg,
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()),
+                    salt_length=padding.PSS.MAX_LENGTH),
+        hashes.SHA256(),
+    )
+    return {
+        'KALSHI-ACCESS-KEY':       key_id,
+        'KALSHI-ACCESS-TIMESTAMP': ts,
+        'KALSHI-ACCESS-SIGNATURE': base64.b64encode(sig).decode(),
+        'Content-Type':            'application/json',
+    }
 
-    if not fills.empty:
-        f = fills[fills['ticker'].apply(_keep_ticker)].copy()
-        f['date']  = f['timestamp'].dt.tz_convert('UTC').dt.date
-        # BUY → cash out, SELL → cash in (action column is BUY/SELL)
-        f['cash']  = f.apply(lambda r: r['usd_value'] if r['action'] == 'SELL' else -r['usd_value'], axis=1)
-        for _, r in f.iterrows():
-            cash_records.append({'date': r['date'], 'cash': r['cash'], 'is_trade': True})
 
-    if not settlements.empty:
-        s = settlements[settlements['ticker'].apply(_keep_ticker)].copy()
-        s['date'] = s['timestamp'].dt.tz_convert('UTC').dt.date
-        # revenue net of cost is the settlement P&L; revenue is the cash inflow
-        for _, r in s.iterrows():
-            cash_records.append({'date': r['date'], 'cash': r['revenue'], 'is_trade': False})
+def _kalshi_get(path: str, key_id: str, pem: str, params: dict = None) -> dict:
+    headers = _kalshi_sign(key_id, pem, 'GET', path)
+    r = requests.get(f'{KALSHI_URL}{path}', headers=headers, params=params, timeout=15)
+    r.raise_for_status()
+    return r.json()
 
-    if not cash_records:
+
+def _paginate(path: str, list_key: str, key_id: str, pem: str) -> list:
+    rows, cursor = [], None
+    while True:
+        params = {'limit': 200}
+        if cursor: params['cursor'] = cursor
+        data   = _kalshi_get(path, key_id, pem, params)
+        batch  = data.get(list_key, [])
+        rows.extend(batch)
+        cursor = data.get('cursor')
+        if not cursor or not batch: break
+        time.sleep(0.15)
+    return rows
+
+
+def _fetch_kalshi() -> pd.DataFrame:
+    key_id = os.environ.get('KALSHI_API_KEY', '').strip()
+    pem    = _load_kalshi_pem()
+    if not (key_id and pem):
+        raise RuntimeError('Kalshi credentials missing (KALSHI_API_KEY + KALSHI_PRIVATE_KEY)')
+
+    def _keep(t: str) -> bool:
+        return any(str(t).startswith(p) for p in KALSHI_PREFIXES) if KALSHI_PREFIXES else True
+
+    records = []
+
+    for f in _paginate('/portfolio/fills', 'fills', key_id, pem):
+        ticker = f.get('ticker') or f.get('market_ticker', '')
+        if not _keep(ticker): continue
+        action = (f.get('action') or '').upper()
+        side   = (f.get('side') or '').upper()
+        price  = float((f.get('yes_price_dollars') if side == 'YES'
+                         else f.get('no_price_dollars')) or 0)
+        count  = float(f.get('count_fp', 0) or 0)
+        usd    = price * count
+        ts     = pd.to_datetime(f.get('created_time', ''), utc=True)
+        if pd.isna(ts): continue
+        records.append({
+            'date':  ts.tz_convert('UTC').date(),
+            'cash':  usd if action == 'SELL' else -usd,
+            'is_trade': True,
+        })
+
+    for s in _paginate('/portfolio/settlements', 'settlements', key_id, pem):
+        ticker  = s.get('ticker', '')
+        if not _keep(ticker): continue
+        revenue = int(s.get('revenue', 0) or 0) / 100
+        ts      = pd.to_datetime(s.get('settled_time', ''), utc=True)
+        if pd.isna(ts): continue
+        records.append({
+            'date':  ts.tz_convert('UTC').date(),
+            'cash':  revenue,
+            'is_trade': False,
+        })
+
+    if not records:
         return pd.DataFrame(columns=['date','kalshi_pnl','kalshi_trades'])
-
-    cf = pd.DataFrame(cash_records)
-    daily = cf.groupby('date').agg(
+    cf = pd.DataFrame(records)
+    return cf.groupby('date').agg(
         kalshi_pnl=('cash', 'sum'),
         kalshi_trades=('is_trade', 'sum'),
     ).reset_index()
-    return daily
 
+
+# ── Main ───────────────────────────────────────────────────────────────────
 
 def main():
-    cfg = _config()
     print('Fetching Polymarket activity…')
-    pm_daily = _polymarket_daily(cfg)
+    pm_daily = _fetch_polymarket()
     print(f'  {len(pm_daily)} Polymarket days')
 
     print('Fetching Kalshi fills+settlements…')
     try:
-        ka_daily = _kalshi_daily(cfg)
+        ka_daily = _fetch_kalshi()
         print(f'  {len(ka_daily)} Kalshi days')
         kalshi_available = True
     except Exception as e:
@@ -146,15 +211,14 @@ def main():
         ka_daily = pd.DataFrame(columns=['date','kalshi_pnl','kalshi_trades'])
         kalshi_available = False
 
-    # Merge: outer join on date so days with only one source still appear
     merged = pm_daily.merge(ka_daily, on='date', how='outer').fillna(0)
     merged['date'] = pd.to_datetime(merged['date'])
     merged = merged.sort_values('date')
     merged['total_pnl'] = merged['polymarket_pnl'] + merged['kalshi_pnl']
 
-    # 30-day cumulative window for the chart
-    today  = pd.Timestamp.utcnow().normalize().tz_localize(None)
-    win30  = merged[merged['date'] >= today - pd.Timedelta(days=30)].copy()
+    today = pd.Timestamp.utcnow().normalize().tz_localize(None)
+
+    win30 = merged[merged['date'] >= today - pd.Timedelta(days=30)].copy()
     win30['cum_pnl'] = win30['total_pnl'].cumsum()
     cumulative_30d = [
         {'date': d.strftime('%Y-%m-%d'),
@@ -166,13 +230,12 @@ def main():
                                   win30['kalshi_pnl'], win30['total_pnl'], win30['cum_pnl'])
     ]
 
-    # 7-day breakdown table (back-fill missing days with zeros)
-    win7_dates = [today - pd.Timedelta(days=i) for i in range(6, -1, -1)]
     by_date = {row['date']: row for _, row in merged.iterrows()}
     days = []
-    for d in win7_dates:
-        if d in by_date:
-            r = by_date[d]
+    for i in range(6, -1, -1):
+        d = today - pd.Timedelta(days=i)
+        r = by_date.get(d)
+        if r is not None:
             days.append({
                 'date':              d.strftime('%Y-%m-%d'),
                 'polymarket_pnl':    round(float(r['polymarket_pnl']), 2),
@@ -182,11 +245,9 @@ def main():
                 'kalshi_trades':     int(r.get('kalshi_trades', 0) or 0),
             })
         else:
-            days.append({
-                'date': d.strftime('%Y-%m-%d'),
-                'polymarket_pnl': 0.0, 'kalshi_pnl': 0.0, 'total_pnl': 0.0,
-                'polymarket_trades': 0, 'kalshi_trades': 0,
-            })
+            days.append({'date': d.strftime('%Y-%m-%d'),
+                         'polymarket_pnl': 0.0, 'kalshi_pnl': 0.0, 'total_pnl': 0.0,
+                         'polymarket_trades': 0, 'kalshi_trades': 0})
 
     totals = {
         'polymarket_pnl_7d':    round(sum(d['polymarket_pnl'] for d in days), 2),
@@ -198,7 +259,7 @@ def main():
 
     out = {
         'generated_at_utc': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-        'wallet':           cfg['polymarket']['wallet'],
+        'wallet':           WALLET,
         'kalshi_available': kalshi_available,
         'days':             days,
         'totals':           totals,
