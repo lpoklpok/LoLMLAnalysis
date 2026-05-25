@@ -38,23 +38,36 @@ interface EnabledRow {
   quote_size_shares: number | null
 }
 
+interface PnlRow {
+  day: string
+  cost_basis: number
+  mtm_value: number
+  unrealized_pnl: number
+  fills_count: number
+  fills_usd: number
+  updated_at: string
+}
+
 export default function SystematicPage() {
   const [rules, setRules] = useState<AutoRules | null>(null)
   const [enabled, setEnabled] = useState<EnabledRow[]>([])
   const [fills, setFills] = useState<FillRow[]>([])
+  const [pnl, setPnl] = useState<PnlRow[]>([])
   const [saving, setSaving] = useState(false)
 
   const refresh = useCallback(async () => {
-    const [r, e, f] = await Promise.all([
+    const [r, e, f, p] = await Promise.all([
       supabase.from('mm_auto_rules').select('*').eq('id', 1).single(),
       supabase.from('mm_config')
         .select('condition_id,event_slug,event_title,market_type,outcome_index,outcome_label,quote_size_shares')
         .or('bid_enabled.eq.true,offer_enabled.eq.true'),
       supabase.from('mm_quotes_log').select('*').eq('action', 'fill').order('ts', { ascending: false }).limit(30),
+      supabase.from('mm_pnl_daily').select('*').order('day', { ascending: false }).limit(14),
     ])
     setRules(r.data as AutoRules | null)
     setEnabled((e.data ?? []) as EnabledRow[])
     setFills((f.data ?? []) as FillRow[])
+    setPnl((p.data ?? []) as PnlRow[])
   }, [])
 
   useEffect(() => {
@@ -69,6 +82,15 @@ export default function SystematicPage() {
             if (row.condition_id && (row as { action?: string }).action === 'fill') {
               setFills(prev => [row, ...prev].slice(0, 30))
             }
+          })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'mm_pnl_daily' },
+          (p) => {
+            const row = (p.new ?? p.old) as PnlRow
+            if (!row) return
+            setPnl(prev => {
+              const without = prev.filter(x => x.day !== row.day)
+              return [row, ...without].sort((a,b) => b.day.localeCompare(a.day)).slice(0, 14)
+            })
           })
       .subscribe()
     const id = setInterval(refresh, 30_000)
@@ -112,6 +134,92 @@ export default function SystematicPage() {
       </header>
 
       <main className="px-6 py-6 max-w-6xl mx-auto space-y-6">
+        {/* Today's PnL — most prominent block on the page */}
+        {(() => {
+          const today = new Date().toISOString().slice(0, 10)
+          const todayRow = pnl.find(p => p.day === today)
+          const prevRow  = pnl.find(p => p.day < today)
+          const dayDelta = todayRow && prevRow
+            ? Number(todayRow.unrealized_pnl) - Number(prevRow.unrealized_pnl)
+            : null
+          const upnl = todayRow ? Number(todayRow.unrealized_pnl) : 0
+          const col = upnl >= 0 ? 'text-green-300' : 'text-red-300'
+          return (
+            <section className="bg-gray-900 border border-gray-800 rounded-xl p-5 flex items-center gap-8">
+              <div>
+                <div className="text-xs text-gray-500 uppercase tracking-wide">Today MTM PnL</div>
+                <div className={`text-3xl font-mono font-semibold ${col}`}>
+                  {upnl >= 0 ? '+' : ''}${upnl.toFixed(2)}
+                </div>
+                {dayDelta != null && (
+                  <div className="text-[11px] text-gray-500 mt-1">
+                    Δ vs yesterday: <span className={dayDelta >= 0 ? 'text-green-400' : 'text-red-400'}>
+                      {dayDelta >= 0 ? '+' : ''}${dayDelta.toFixed(2)}
+                    </span>
+                  </div>
+                )}
+              </div>
+              <div className="border-l border-gray-800 pl-8">
+                <div className="text-xs text-gray-500">Cost basis</div>
+                <div className="font-mono text-gray-200">${Number(todayRow?.cost_basis ?? 0).toFixed(2)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">MTM value</div>
+                <div className="font-mono text-gray-200">${Number(todayRow?.mtm_value ?? 0).toFixed(2)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Fills today</div>
+                <div className="font-mono text-gray-200">
+                  {todayRow?.fills_count ?? 0} · ${Number(todayRow?.fills_usd ?? 0).toFixed(0)}
+                </div>
+              </div>
+              <div className="ml-auto text-[10px] text-gray-600">
+                updated {todayRow ? new Date(todayRow.updated_at).toLocaleTimeString() : '—'}
+              </div>
+            </section>
+          )
+        })()}
+
+        {/* Daily PnL history */}
+        {pnl.length > 1 && (
+          <section>
+            <h2 className="text-sm font-semibold text-gray-200 mb-3">Daily PnL ({pnl.length} days)</h2>
+            <table className="w-full text-xs whitespace-nowrap">
+              <thead><tr className="border-b border-gray-800 text-gray-500">
+                <th className="text-left py-1.5 pr-4 font-medium w-24">Day</th>
+                <th className="text-right py-1.5 pr-4 font-medium w-28">Unrealized PnL</th>
+                <th className="text-right py-1.5 pr-4 font-medium w-24">Δ vs prior</th>
+                <th className="text-right py-1.5 pr-4 font-medium w-24">Cost</th>
+                <th className="text-right py-1.5 pr-4 font-medium w-24">MTM</th>
+                <th className="text-right py-1.5 pr-4 font-medium w-16">Fills</th>
+                <th className="text-right py-1.5 pr-4 font-medium w-24">Volume</th>
+              </tr></thead>
+              <tbody>
+                {pnl.map((row, i) => {
+                  const next = pnl[i + 1]
+                  const delta = next ? Number(row.unrealized_pnl) - Number(next.unrealized_pnl) : null
+                  const c = Number(row.unrealized_pnl) >= 0 ? 'text-green-400' : 'text-red-400'
+                  return (
+                    <tr key={row.day} className="border-b border-gray-800/30">
+                      <td className="py-1 pr-4 font-mono text-gray-300">{row.day}</td>
+                      <td className={`py-1 pr-4 font-mono text-right ${c}`}>
+                        {Number(row.unrealized_pnl) >= 0 ? '+' : ''}${Number(row.unrealized_pnl).toFixed(2)}
+                      </td>
+                      <td className={`py-1 pr-4 font-mono text-right ${delta == null ? 'text-gray-600' : delta >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                        {delta == null ? '—' : `${delta >= 0 ? '+' : ''}$${delta.toFixed(2)}`}
+                      </td>
+                      <td className="py-1 pr-4 font-mono text-gray-400 text-right">${Number(row.cost_basis).toFixed(0)}</td>
+                      <td className="py-1 pr-4 font-mono text-gray-400 text-right">${Number(row.mtm_value).toFixed(0)}</td>
+                      <td className="py-1 pr-4 font-mono text-gray-400 text-right">{row.fills_count}</td>
+                      <td className="py-1 pr-4 font-mono text-gray-400 text-right">${Number(row.fills_usd).toFixed(0)}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </section>
+        )}
+
         {/* Master switch */}
         <section className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex items-center justify-between">
           <div>
