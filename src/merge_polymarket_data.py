@@ -105,6 +105,10 @@ def _norm_team(s) -> str:
         'orbitanonymo':      'anonymoesports',
         # PM 'BIG' vs OE 'Berlin International Gaming' (BIG is the acronym)
         'big':               'berlininternationalgaming',
+        # PM 'FURIA Esports' vs OE 'FURIA' (CBLOL — OE uses the short form)
+        'furiaesports':      'furia',
+        # PM 'NRG Esports' vs OE 'NRG' (NACL — OE uses the short form)
+        'nrgesports':        'nrg',
     }
     return aliases.get(s, s)
 

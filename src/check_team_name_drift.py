@@ -49,6 +49,8 @@ def _norm_team(s) -> str:
         'theotterside':      'otterside',
         'orbitanonymo':      'anonymoesports',
         'big':               'berlininternationalgaming',
+        'furiaesports':      'furia',
+        'nrgesports':        'nrg',
     }
     return aliases.get(s, s)
 
@@ -116,7 +118,10 @@ def main() -> int:
     # PM events: keep upcoming / very-recent only.
     snaps['match_date'] = pd.to_datetime(snaps['match_date'], errors='coerce', utc=True)
     snaps = snaps[snaps['match_date'].notna()]
-    pm_cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=2)
+    # 7-day lookback so we catch misses on games that happened in the last
+    # few days (e.g. the daily run didn't merge them due to a new team-name
+    # variant). Future events still surface here too.
+    pm_cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=7)
     snaps = snaps[snaps['match_date'] >= pm_cutoff]
 
     # Unique events: one row per (event_slug, team1, team2, match_date)
@@ -152,31 +157,41 @@ def main() -> int:
 
         # First try: candidates are OE teams the anchor has actually played
         # (highest signal — proves the matchup exists in OE).
+        # Containment match (one key is a prefix/suffix of the other) gets
+        # priority over raw ratio: 'nrgesports' vs 'nrg' has ratio 0.46 but
+        # is almost certainly the same team because PM key fully contains OE.
         opponents = oe_team_opponents.get(anchor_key, set())
         best = None
+        def _score(drift, cand):
+            # Boost when one is contained in the other (long-form abbreviation).
+            if len(drift) >= 3 and len(cand) >= 3 and (drift in cand or cand in drift):
+                return 1.0 + SequenceMatcher(None, drift, cand).ratio()
+            return SequenceMatcher(None, drift, cand).ratio()
         if opponents:
             for cand_key in opponents:
-                sim = SequenceMatcher(None, drift_key, cand_key).ratio()
-                if best is None or sim > best['similarity']:
+                score = _score(drift_key, cand_key)
+                if best is None or score > best['score']:
                     best = {'oe_team': oe_team_to_name[cand_key],
                             'oe_key':  cand_key,
-                            'similarity': round(sim, 3),
+                            'score':   score,
+                            'similarity': round(SequenceMatcher(None, drift_key, cand_key).ratio(), 3),
                             'via': 'anchor-opponent'}
 
         # Fallback: PM team and OE team are similar enough that they're
         # plausibly the same team, even if anchor hasn't played them yet.
         # Tighter ratio threshold here to avoid false positives.
         FALLBACK_MIN_RATIO = 0.80
-        if best is None or best['similarity'] < FALLBACK_MIN_RATIO:
+        if best is None or best.get('score', 0) < FALLBACK_MIN_RATIO:
             for cand_key, cand_name in oe_team_to_name.items():
                 if len(cand_key) < 6: continue
-                sim = SequenceMatcher(None, drift_key, cand_key).ratio()
-                if sim >= FALLBACK_MIN_RATIO and (best is None or sim > best['similarity']):
+                score = _score(drift_key, cand_key)
+                if score >= FALLBACK_MIN_RATIO and (best is None or score > best.get('score', 0)):
                     best = {'oe_team': cand_name,
                             'oe_key':  cand_key,
-                            'similarity': round(sim, 3),
+                            'score':   score,
+                            'similarity': round(SequenceMatcher(None, drift_key, cand_key).ratio(), 3),
                             'via': 'global-fuzzy'}
-        if best is None or best['similarity'] < 0.5:
+        if best is None or best.get('score', 0) < 0.5:
             continue
 
         drifts.append({
