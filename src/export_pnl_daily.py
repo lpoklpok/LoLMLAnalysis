@@ -33,7 +33,8 @@ for env_path in (
         load_dotenv(env_path)
 
 # ── Config ──────────────────────────────────────────────────────────────────
-WALLET   = os.environ.get('POLYMARKET_WALLET', '0x9560dbf536660b5fc71efbe75b144f92013b9467')
+_DEFAULT_WALLET = '0x9560dbf536660b5fc71efbe75b144f92013b9467'
+WALLET   = (os.environ.get('POLYMARKET_WALLET') or '').strip() or _DEFAULT_WALLET
 KEYWORDS = ['lol', 'game handicap', 'games total', 'first stand', 'esports world',
             'lec', 'lcs', 'lck', 'lpl', 'msi', 'worlds', 'cblol']
 EXCLUDED_CIDS = {
