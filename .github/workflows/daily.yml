@@ -43,6 +43,16 @@ jobs:
           restore-keys: |
             processed-v2-
 
+      # The cache above restores data/processed from previous runs, which
+      # silently overwrites the snapshot CSV freshly committed by the Fly
+      # snapshot worker. Force-refresh those specific files from git so we
+      # pick up the latest hourly snapshots before the merge step runs.
+      - name: Refresh worker-committed files from git (snapshot + trades)
+        run: |
+          git fetch --quiet origin main
+          git checkout origin/main -- \
+            data/processed/polymarket_submarket_snapshots.csv 2>/dev/null || true
+
       - name: Refresh OE mirror (copy Tim's CSV to your Drive folder)
         env:
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
