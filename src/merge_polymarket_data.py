@@ -74,10 +74,19 @@ def bo5_g5_prob(p_series: float, p1: float, p2: float, p3: float, p4: float,
 # ── Snapshot lookup ─────────────────────────────────────────────────────────
 
 def _norm_team(s) -> str:
-    """Normalize a team name for join keys — drop case + all non-alphanumerics.
-    Handles OE 'BNK FEARX' vs Polymarket 'BNK FearX' (case), and
-    'Nongshim RedForce' vs 'Nongshim Red Force' (whitespace). """
-    return re.sub(r'[^a-z0-9]', '', str(s).lower())
+    """Normalize a team name for join keys — drop case + diacritics + all non-alphanumerics.
+    Handles OE 'BNK FEARX' vs Polymarket 'BNK FearX' (case),
+    'Nongshim RedForce' vs 'Nongshim Red Force' (whitespace), and
+    OE 'LØS' vs Polymarket 'LOS' (the Scandinavian Ø needs to map to O,
+    not get dropped entirely)."""
+    import unicodedata
+    # NFKD decomposes 'é' → 'e' + combining accent; 'Ø' has no decomposition
+    # so handle it explicitly along with 'ł' (similar non-decomposable letter).
+    s = str(s).lower()
+    s = s.replace('ø', 'o').replace('ł', 'l').replace('æ', 'ae').replace('œ', 'oe')
+    s = unicodedata.normalize('NFKD', s)
+    s = ''.join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r'[^a-z0-9]', '', s)
 
 
 def _team_pair_key(blue: str, red: str) -> tuple:
