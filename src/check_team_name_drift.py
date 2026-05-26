@@ -111,11 +111,11 @@ def main() -> int:
     snaps = pd.read_csv(SNAP_CSV, low_memory=False)
     games = pd.read_csv(GAMES_CSV, low_memory=False, usecols=['blue_team_teamname', 'red_team_teamname', 'date'])
 
-    # Restrict to recent OE games (last 60 days) so we don't flag historical
-    # teams that no longer play.
+    # Restrict to recent OE games (last 90 days) so we don't flag historical
+    # teams that no longer play but might appear as nearest neighbors.
     games['date'] = pd.to_datetime(games['date'], errors='coerce')
-    cutoff = pd.Timestamp.utcnow().tz_localize(None) - pd.Timedelta(days=60)
-    games = games[games['date'] >= cutoff]
+    oe_cutoff = pd.Timestamp.utcnow().tz_localize(None) - pd.Timedelta(days=90)
+    games = games[games['date'] >= oe_cutoff]
 
     # Build OE team set + a name lookup (display name for each normalized key)
     oe_keys: dict[str, str] = {}
@@ -123,11 +123,13 @@ def main() -> int:
         for name in games[col].dropna().unique():
             oe_keys.setdefault(_norm_team(name), str(name))
 
-    # Polymarket teams from snapshot CSV. Only consider events with future or
-    # recent (last 60 days) match dates so we focus on tradable misses.
+    # Polymarket teams from snapshot CSV — UPCOMING events only.
+    # (A small grace window catches a market that just resolved today, so the
+    # daily run still flags a mismatch we missed.)
     snaps['match_date'] = pd.to_datetime(snaps['match_date'], errors='coerce', utc=True)
     snaps = snaps[snaps['match_date'].notna()]
-    snaps = snaps[snaps['match_date'] >= pd.Timestamp(cutoff, tz='UTC')]
+    pm_cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=1)
+    snaps = snaps[snaps['match_date'] >= pm_cutoff]
     pm_keys: dict[str, str] = {}
     for col in ('team1', 'team2'):
         for name in snaps[col].dropna().unique():

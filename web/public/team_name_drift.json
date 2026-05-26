@@ -1,32 +1,8 @@
 {
-  "generated_at_utc": "2026-05-26T22:52:12Z",
-  "total_drifts": 5,
-  "new_drifts": 3,
+  "generated_at_utc": "2026-05-26T22:57:23Z",
+  "total_drifts": 1,
+  "new_drifts": 0,
   "drifts": [
-    {
-      "polymarket_team": "NRG Esports",
-      "polymarket_key": "nrgesports",
-      "oe_team": "NCG Esports",
-      "oe_key": "ncgesports",
-      "edit_distance": 1,
-      "similarity": 0.9
-    },
-    {
-      "polymarket_team": "The Otter Side",
-      "polymarket_key": "theotterside",
-      "oe_team": "Otter Side",
-      "oe_key": "otterside",
-      "edit_distance": 3,
-      "similarity": 0.857
-    },
-    {
-      "polymarket_team": "Senshi Esports Club",
-      "polymarket_key": "senshiesportsclub",
-      "oe_team": "Senshi eSports",
-      "oe_key": "senshiesports",
-      "edit_distance": 4,
-      "similarity": 0.867
-    },
     {
       "polymarket_team": "UCAM Esports Club",
       "polymarket_key": "ucamesportsclub",
@@ -34,14 +10,6 @@
       "oe_key": "ucamesports",
       "edit_distance": 4,
       "similarity": 0.846
-    },
-    {
-      "polymarket_team": "FURIA Esports",
-      "polymarket_key": "furiaesports",
-      "oe_team": "Frank Esports",
-      "oe_key": "frankesports",
-      "edit_distance": 4,
-      "similarity": 0.833
     }
   ]
 }
