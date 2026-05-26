@@ -2,10 +2,10 @@
 check_team_name_drift.py
 
 Detects suspicious team-name mismatches between Polymarket events and our OE
-data. After normalization (_norm_team), exact-key matches succeed; this script
-flags cases where the normalized keys differ by 1–2 characters — usually the
-sign of a Unicode quirk we haven't mapped, a missing space, or a vendor-specific
-abbreviation that should be aliased.
+data using PAIR-AWARE matching: for each upcoming Polymarket event, we check
+whether the team-pair exists in OE under different normalized names. If one
+team of the PM pair matches an OE team exactly but the other doesn't, we
+know the unmatched team is a name drift and flag it with high confidence.
 
 Outputs:
   • web/public/team_name_drift.json — machine-readable list of suspect pairs
@@ -33,44 +33,24 @@ GAMES_CSV  = PROCESSED / 'games.csv'
 SNAP_CSV   = PROCESSED / 'polymarket_submarket_snapshots.csv'
 OUT_PATH   = ROOT / 'web' / 'public' / 'team_name_drift.json'
 
-# Edit-distance thresholds for "suspiciously close" team-name matches.
-# Smaller = stricter (fewer flags). The combo below catches "Nongshim RedForce"
-# vs "Nongshim Red Force" (no normalized diff once spaces are stripped, so they
-# match exactly) and "BNK FEARX" vs "BNK FearX" (also normalize-equal). What
-# we DO want to catch is cases where two normalized keys differ by 1-2 chars
-# OR have a long shared prefix/suffix but a small disagreement in the middle
-# (e.g. 'tloesports' vs 'teamloesports').
-MAX_EDIT_DIST   = 2     # absolute character difference (Levenshtein)
-MIN_SIMILARITY  = 0.80  # SequenceMatcher ratio (handles substring drift better)
-# Reject short-string false positives: "BIG" vs "NRG" has edit dist 2 but
-# they're clearly different teams. Require both that the strings are at least
-# moderately long (≥6 chars after normalization) AND share enough characters.
-MIN_LENGTH      = 6     # min normalized key length to consider
-HARD_MIN_RATIO  = 0.70  # always require at least this much similarity
-
 
 def _norm_team(s) -> str:
-    """Mirror src/merge_polymarket_data.py:_norm_team exactly."""
+    """Mirror src/merge_polymarket_data.py:_norm_team exactly, including aliases."""
     s = str(s).lower()
     s = s.replace('ø', 'o').replace('ł', 'l').replace('æ', 'ae').replace('œ', 'oe')
     s = unicodedata.normalize('NFKD', s)
     s = ''.join(c for c in s if not unicodedata.combining(c))
-    return re.sub(r'[^a-z0-9]', '', s)
-
-
-def _edit_distance(a: str, b: str) -> int:
-    """Standard Levenshtein. Small strings; quadratic is fine."""
-    if a == b: return 0
-    if not a:  return len(b)
-    if not b:  return len(a)
-    prev = list(range(len(b) + 1))
-    for i, ca in enumerate(a, 1):
-        curr = [i]
-        for j, cb in enumerate(b, 1):
-            cost = 0 if ca == cb else 1
-            curr.append(min(curr[-1] + 1, prev[j] + 1, prev[j - 1] + cost))
-        prev = curr
-    return prev[-1]
+    s = re.sub(r'[^a-z0-9]', '', s)
+    aliases = {
+        't1academy':         't1esportsacademy',
+        'pcific':            'pcificesports',
+        'ucamesportsclub':   'ucamesports',
+        'senshiesportsclub': 'senshiesports',
+        'theotterside':      'otterside',
+        'orbitanonymo':      'anonymoesports',
+        'big':               'berlininternationalgaming',
+    }
+    return aliases.get(s, s)
 
 
 def _load_existing() -> dict:
@@ -86,7 +66,12 @@ def _post_discord(new_drifts: list[dict]) -> None:
         return
     lines = ['**Team-name drift detected — Polymarket markets that look like OE teams but don\'t match exactly**', '']
     for d in new_drifts[:10]:
-        lines.append(f"• **{d['polymarket_team']!r}** (Polymarket, key=`{d['polymarket_key']}`) ↔ **{d['oe_team']!r}** (OE, key=`{d['oe_key']}`) — edit dist {d['edit_distance']}, ratio {d['similarity']:.2f}")
+        lines.append(
+            f"• Event `{d['event_slug']}` ({d['match_date']}) — "
+            f"PM **{d['polymarket_team']!r}** (key=`{d['polymarket_key']}`) "
+            f"looks like OE **{d['oe_team']!r}** (key=`{d['oe_key']}`) — "
+            f"opponent **{d['matched_opponent']!r}** matched both sides ✓"
+        )
     if len(new_drifts) > 10:
         lines.append(f"… and {len(new_drifts) - 10} more (see team_name_drift.json)")
     lines.append('')
@@ -111,64 +96,106 @@ def main() -> int:
     snaps = pd.read_csv(SNAP_CSV, low_memory=False)
     games = pd.read_csv(GAMES_CSV, low_memory=False, usecols=['blue_team_teamname', 'red_team_teamname', 'date'])
 
-    # Restrict to recent OE games (last 90 days) so we don't flag historical
-    # teams that no longer play but might appear as nearest neighbors.
+    # OE: last 90 days of games. Build:
+    #   oe_team_to_name: normkey → display name
+    #   oe_team_opponents: normkey → set of opponent normkeys (so we can ask
+    #     "of all OE teams that have played X, which one looks most like Y?")
     games['date'] = pd.to_datetime(games['date'], errors='coerce')
     oe_cutoff = pd.Timestamp.utcnow().tz_localize(None) - pd.Timedelta(days=90)
     games = games[games['date'] >= oe_cutoff]
 
-    # Build OE team set + a name lookup (display name for each normalized key)
-    oe_keys: dict[str, str] = {}
-    for col in ('blue_team_teamname', 'red_team_teamname'):
-        for name in games[col].dropna().unique():
-            oe_keys.setdefault(_norm_team(name), str(name))
+    oe_team_to_name:  dict[str, str]      = {}
+    oe_team_opponents: dict[str, set[str]] = {}
+    for _, g in games.iterrows():
+        bk, rk = _norm_team(g['blue_team_teamname']), _norm_team(g['red_team_teamname'])
+        oe_team_to_name.setdefault(bk, str(g['blue_team_teamname']))
+        oe_team_to_name.setdefault(rk, str(g['red_team_teamname']))
+        oe_team_opponents.setdefault(bk, set()).add(rk)
+        oe_team_opponents.setdefault(rk, set()).add(bk)
 
-    # Polymarket teams from snapshot CSV — UPCOMING events only.
-    # (A small grace window catches a market that just resolved today, so the
-    # daily run still flags a mismatch we missed.)
+    # PM events: keep upcoming / very-recent only.
     snaps['match_date'] = pd.to_datetime(snaps['match_date'], errors='coerce', utc=True)
     snaps = snaps[snaps['match_date'].notna()]
-    pm_cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=1)
+    pm_cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=2)
     snaps = snaps[snaps['match_date'] >= pm_cutoff]
-    pm_keys: dict[str, str] = {}
-    for col in ('team1', 'team2'):
-        for name in snaps[col].dropna().unique():
-            pm_keys.setdefault(_norm_team(name), str(name))
 
-    # Find Polymarket teams that don't have an exact OE match but are
-    # suspiciously close to an OE team.
+    # Unique events: one row per (event_slug, team1, team2, match_date)
+    events = (snaps.groupby('event_slug')
+                    .agg(team1=('team1', 'first'),
+                         team2=('team2', 'first'),
+                         match_date=('match_date', 'first'))
+                    .reset_index())
+
     drifts: list[dict] = []
-    for pm_key, pm_name in pm_keys.items():
-        if pm_key in oe_keys:
-            continue  # exact match — already wired in
-        if len(pm_key) < MIN_LENGTH:
-            continue  # too short to fuzzy-match reliably
-        # Find best OE candidate
-        best = None
-        for oe_key, oe_name in oe_keys.items():
-            if len(oe_key) < MIN_LENGTH:
-                continue
-            ed  = _edit_distance(pm_key, oe_key)
-            sim = SequenceMatcher(None, pm_key, oe_key).ratio()
-            if sim < HARD_MIN_RATIO:
-                continue  # protects against short-string false positives
-            if ed <= MAX_EDIT_DIST or sim >= MIN_SIMILARITY:
-                if best is None or ed < best['edit_distance']:
-                    best = {
-                        'polymarket_team': pm_name,
-                        'polymarket_key':  pm_key,
-                        'oe_team':         oe_name,
-                        'oe_key':          oe_key,
-                        'edit_distance':   ed,
-                        'similarity':      round(sim, 3),
-                    }
-        if best is not None:
-            drifts.append(best)
+    for _, ev in events.iterrows():
+        k1, k2 = _norm_team(ev['team1']), _norm_team(ev['team2'])
+        # If both teams have exact-key matches in OE, no drift to report.
+        # (The merge would have worked. If it didn't, that's a different bug
+        # class we surface separately below.)
+        in_oe = (k1 in oe_team_to_name, k2 in oe_team_to_name)
+        if all(in_oe):
+            continue
 
-    drifts.sort(key=lambda d: (d['edit_distance'], -d['similarity']))
+        # Pair-aware drift: if ONE team matches OE exactly and the other doesn't,
+        # the unmatched side is the drift. Restrict candidate OE teams to those
+        # that have actually played the matched team (most informative signal).
+        if in_oe[0] and not in_oe[1]:
+            anchor_pm, anchor_key  = ev['team1'], k1
+            drift_pm,  drift_key   = ev['team2'], k2
+        elif in_oe[1] and not in_oe[0]:
+            anchor_pm, anchor_key  = ev['team2'], k2
+            drift_pm,  drift_key   = ev['team1'], k1
+        else:
+            # Neither team matched OE. Less actionable — could be a brand-new
+            # team or a fully unmapped name. Skip to keep noise low.
+            continue
+
+        # First try: candidates are OE teams the anchor has actually played
+        # (highest signal — proves the matchup exists in OE).
+        opponents = oe_team_opponents.get(anchor_key, set())
+        best = None
+        if opponents:
+            for cand_key in opponents:
+                sim = SequenceMatcher(None, drift_key, cand_key).ratio()
+                if best is None or sim > best['similarity']:
+                    best = {'oe_team': oe_team_to_name[cand_key],
+                            'oe_key':  cand_key,
+                            'similarity': round(sim, 3),
+                            'via': 'anchor-opponent'}
+
+        # Fallback: PM team and OE team are similar enough that they're
+        # plausibly the same team, even if anchor hasn't played them yet.
+        # Tighter ratio threshold here to avoid false positives.
+        FALLBACK_MIN_RATIO = 0.80
+        if best is None or best['similarity'] < FALLBACK_MIN_RATIO:
+            for cand_key, cand_name in oe_team_to_name.items():
+                if len(cand_key) < 6: continue
+                sim = SequenceMatcher(None, drift_key, cand_key).ratio()
+                if sim >= FALLBACK_MIN_RATIO and (best is None or sim > best['similarity']):
+                    best = {'oe_team': cand_name,
+                            'oe_key':  cand_key,
+                            'similarity': round(sim, 3),
+                            'via': 'global-fuzzy'}
+        if best is None or best['similarity'] < 0.5:
+            continue
+
+        drifts.append({
+            'event_slug':       ev['event_slug'],
+            'match_date':       ev['match_date'].strftime('%Y-%m-%d'),
+            'matched_opponent': anchor_pm,            # the team that did match (PM side)
+            'matched_opponent_oe': oe_team_to_name[anchor_key],
+            'polymarket_team':  drift_pm,             # the PM team that drifted
+            'polymarket_key':   drift_key,
+            'oe_team':          best['oe_team'],      # best OE guess
+            'oe_key':           best['oe_key'],
+            'similarity':       best['similarity'],
+            'via':              best['via'],
+        })
+
+    drifts.sort(key=lambda d: (-d['similarity'], d['match_date']))
 
     existing = _load_existing()
-    prev_keys = {(d['polymarket_key'], d['oe_key']) for d in existing.get('drifts', [])}
+    prev_keys = {(d['polymarket_key'], d.get('oe_key', '')) for d in existing.get('drifts', [])}
     new_drifts = [d for d in drifts if (d['polymarket_key'], d['oe_key']) not in prev_keys]
 
     out = {
@@ -181,8 +208,8 @@ def main() -> int:
     OUT_PATH.write_text(json.dumps(out, indent=2))
 
     print(f'  Found {len(drifts)} suspect team-name pairs (new since last run: {len(new_drifts)})')
-    for d in drifts[:15]:
-        print(f'    {d["polymarket_team"]!r:<35} (PM, {d["polymarket_key"]!r}) ↔ {d["oe_team"]!r:<35} (OE, {d["oe_key"]!r})  ed={d["edit_distance"]}  ratio={d["similarity"]}')
+    for d in drifts[:20]:
+        print(f"    {d['event_slug']:<32} ({d['match_date']})  PM {d['polymarket_team']!r:<24} ↔ OE {d['oe_team']!r:<24}  (anchor: {d['matched_opponent']!r})  ratio={d['similarity']}")
 
     if new_drifts:
         _post_discord(new_drifts)

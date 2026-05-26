@@ -74,19 +74,39 @@ def bo5_g5_prob(p_series: float, p1: float, p2: float, p3: float, p4: float,
 # ── Snapshot lookup ─────────────────────────────────────────────────────────
 
 def _norm_team(s) -> str:
-    """Normalize a team name for join keys — drop case + diacritics + all non-alphanumerics.
+    """Normalize a team name for join keys — drop case + diacritics + all non-alphanumerics,
+    then apply known PM/OE aliases.
+
     Handles OE 'BNK FEARX' vs Polymarket 'BNK FearX' (case),
-    'Nongshim RedForce' vs 'Nongshim Red Force' (whitespace), and
-    OE 'LØS' vs Polymarket 'LOS' (the Scandinavian Ø needs to map to O,
-    not get dropped entirely)."""
+    'Nongshim RedForce' vs 'Nongshim Red Force' (whitespace),
+    OE 'LØS' vs Polymarket 'LOS' (Scandinavian Ø → O, not dropped),
+    and known PM-only-tweaks (PM 'T1 Academy' vs OE 'T1 Esports Academy', etc.)."""
     import unicodedata
-    # NFKD decomposes 'é' → 'e' + combining accent; 'Ø' has no decomposition
-    # so handle it explicitly along with 'ł' (similar non-decomposable letter).
     s = str(s).lower()
     s = s.replace('ø', 'o').replace('ł', 'l').replace('æ', 'ae').replace('œ', 'oe')
     s = unicodedata.normalize('NFKD', s)
     s = ''.join(c for c in s if not unicodedata.combining(c))
-    return re.sub(r'[^a-z0-9]', '', s)
+    s = re.sub(r'[^a-z0-9]', '', s)
+    # Known PM ↔ OE alias collapses. Both sides normalize to the same canonical
+    # key so the merge picks them up. Add a row here when the drift checker
+    # flags a real same-team-different-name mismatch.
+    aliases = {
+        # PM 'T1 Academy' vs OE 'T1 Esports Academy'
+        't1academy':         't1esportsacademy',
+        # PM 'PCIFIC' vs OE 'PCIFIC Esports'
+        'pcific':            'pcificesports',
+        # PM 'UCAM Esports Club' vs OE 'UCAM Esports'
+        'ucamesportsclub':   'ucamesports',
+        # PM 'Senshi Esports Club' vs OE 'Senshi eSports'
+        'senshiesportsclub': 'senshiesports',
+        # PM 'The Otter Side' vs OE 'Otter Side'
+        'theotterside':      'otterside',
+        # PM 'Orbit Anonymo' vs OE 'Anonymo Esports' (sponsor prefix only on PM)
+        'orbitanonymo':      'anonymoesports',
+        # PM 'BIG' vs OE 'Berlin International Gaming' (BIG is the acronym)
+        'big':               'berlininternationalgaming',
+    }
+    return aliases.get(s, s)
 
 
 def _team_pair_key(blue: str, red: str) -> tuple:

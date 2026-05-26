@@ -1,15 +1,6 @@
 {
-  "generated_at_utc": "2026-05-26T22:57:23Z",
-  "total_drifts": 1,
+  "generated_at_utc": "2026-05-26T23:06:19Z",
+  "total_drifts": 0,
   "new_drifts": 0,
-  "drifts": [
-    {
-      "polymarket_team": "UCAM Esports Club",
-      "polymarket_key": "ucamesportsclub",
-      "oe_team": "UCAM Esports",
-      "oe_key": "ucamesports",
-      "edit_distance": 4,
-      "similarity": 0.846
-    }
-  ]
+  "drifts": []
 }
