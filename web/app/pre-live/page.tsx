@@ -534,16 +534,23 @@ export default function PreLivePage() {
                   </div>
                 </div>
 
-                <table className="w-full text-sm">
+                <table className="w-full text-xs">
                   <thead>
-                    <tr className="text-xs text-gray-500 border-b border-gray-800">
-                      <th className="text-left  px-2 py-2">Market</th>
-                      <th className="text-left  px-2 py-2">Favored outcome</th>
-                      <th className="text-right px-2 py-2">Fair (model)</th>
-                      <th className="text-right px-2 py-2">Market mid</th>
-                      <th className="text-right px-2 py-2">Edge</th>
-                      <th className="text-right px-2 py-2">Bid/Ask</th>
-                      <th className="text-center px-2 py-2">Quote?</th>
+                    <tr className="text-[10px] text-gray-500 uppercase tracking-wide border-b border-gray-800">
+                      <th rowSpan={2} className="text-left px-2 py-2">Market</th>
+                      <th colSpan={4} className="text-left px-2 py-1 border-l border-gray-800 bg-gray-800/30">Outcome 1</th>
+                      <th colSpan={4} className="text-left px-2 py-1 border-l border-gray-800 bg-gray-800/30">Outcome 2</th>
+                      <th rowSpan={2} className="text-center px-2 py-2 border-l border-gray-800">Action / Quote</th>
+                    </tr>
+                    <tr className="text-[10px] text-gray-500 border-b border-gray-800">
+                      <th className="text-left  px-2 py-1 border-l border-gray-800">Name</th>
+                      <th className="text-right px-2 py-1">Fair</th>
+                      <th className="text-right px-2 py-1">Mkt</th>
+                      <th className="text-right px-2 py-1">Edge</th>
+                      <th className="text-left  px-2 py-1 border-l border-gray-800">Name</th>
+                      <th className="text-right px-2 py-1">Fair</th>
+                      <th className="text-right px-2 py-1">Mkt</th>
+                      <th className="text-right px-2 py-1">Edge</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -597,31 +604,63 @@ export default function PreLivePage() {
                       const key = `${selectedEvent.slug}|${sm.market_type}|${favIdx}`
                       const enabled = marketEnabled[key] ?? aboveThresh
 
+                      // Per-outcome edge (signed)
+                      const edge1_pp = fair_o1 != null ? (fair_o1 - mid1) * 100 : null
+                      const edge2_pp = fair_o2 != null ? (fair_o2 - mid2) * 100 : null
+
+                      // For game_handicap: display the spread alongside the outcome name
+                      let label1 = sm.outcomes[0]
+                      let label2 = sm.outcomes[1]
+                      if (label === 'game_handicap') {
+                        const h = parseHandicap(sm.question)
+                        if (h) {
+                          const favIdxName = matchOutcome(sm.outcomes, h.favName)
+                          if (favIdxName === 0) { label1 = `${sm.outcomes[0]} −${h.spread}`; label2 = `${sm.outcomes[1]} +${h.spread}` }
+                          if (favIdxName === 1) { label1 = `${sm.outcomes[0]} +${h.spread}`; label2 = `${sm.outcomes[1]} −${h.spread}` }
+                        }
+                      }
+
                       return (
                         <tr key={smi} className="border-b border-gray-800/40">
-                          <td className="px-2 py-2 font-mono text-xs text-gray-400">{label}</td>
-                          <td className="px-2 py-2">
-                            {fair_o1 != null ? (
-                              <span className={favIdx === 0 ? 'text-blue-300' : 'text-red-300'}>{sm.outcomes[favIdx]}</span>
-                            ) : <span className="text-gray-600">—</span>}
+                          <td className="px-2 py-2 font-mono text-gray-400">{label}</td>
+
+                          {/* Outcome 1 */}
+                          <td className="px-2 py-2 border-l border-gray-800">
+                            <span className="text-blue-300">{label1}</span>
                           </td>
-                          <td className="px-2 py-2 text-right font-mono">{fair_o1 != null ? pct(fairFav) : '—'}</td>
-                          <td className="px-2 py-2 text-right font-mono">{Number.isFinite(marketFav) && marketFav > 0 ? pct(marketFav) : '—'}</td>
-                          <td className={`px-2 py-2 text-right font-mono ${clrEdge(edge_pp)}`}>
-                            {fair_o1 != null ? `${edge_pp >= 0 ? '+' : ''}${edge_pp.toFixed(1)}pp` : '—'}
+                          <td className="px-2 py-2 text-right font-mono">{fair_o1 != null ? pct(fair_o1) : '—'}</td>
+                          <td className="px-2 py-2 text-right font-mono text-gray-400">{Number.isFinite(mid1) && mid1 > 0 ? pct(mid1) : '—'}</td>
+                          <td className={`px-2 py-2 text-right font-mono ${edge1_pp != null ? clrEdge(edge1_pp) : ''}`}>
+                            {edge1_pp != null ? `${edge1_pp >= 0 ? '+' : ''}${edge1_pp.toFixed(1)}pp` : '—'}
                           </td>
-                          <td className="px-2 py-2 text-right font-mono text-xs text-gray-500">
-                            {sm.outcome_bids[favIdx] != null ? `${(sm.outcome_bids[favIdx]!*100).toFixed(0)}` : '—'}
-                            /
-                            {sm.outcome_asks[favIdx] != null ? `${(sm.outcome_asks[favIdx]!*100).toFixed(0)}` : '—'}
+
+                          {/* Outcome 2 */}
+                          <td className="px-2 py-2 border-l border-gray-800">
+                            <span className="text-red-300">{label2}</span>
                           </td>
-                          <td className="px-2 py-2 text-center">
-                            <input
-                              type="checkbox" checked={enabled} disabled={!aboveThresh}
-                              onChange={e => setMarketEnabled(s => ({ ...s, [key]: e.target.checked }))}
-                              className="accent-emerald-500"
-                              title={aboveThresh ? 'Quoter would post here when wired up' : `Edge below ${edgeThreshold}pp threshold`}
-                            />
+                          <td className="px-2 py-2 text-right font-mono">{fair_o2 != null ? pct(fair_o2) : '—'}</td>
+                          <td className="px-2 py-2 text-right font-mono text-gray-400">{Number.isFinite(mid2) && mid2 > 0 ? pct(mid2) : '—'}</td>
+                          <td className={`px-2 py-2 text-right font-mono ${edge2_pp != null ? clrEdge(edge2_pp) : ''}`}>
+                            {edge2_pp != null ? `${edge2_pp >= 0 ? '+' : ''}${edge2_pp.toFixed(1)}pp` : '—'}
+                          </td>
+
+                          {/* Action */}
+                          <td className="px-2 py-2 text-center border-l border-gray-800">
+                            {fair_o1 != null && aboveThresh ? (
+                              <div className="flex items-center justify-center gap-2">
+                                <span className="text-[10px] bg-emerald-700/40 text-emerald-300 px-1.5 py-0.5 rounded font-semibold">
+                                  BUY {favIdx === 0 ? '◀' : '▶'}
+                                </span>
+                                <input
+                                  type="checkbox" checked={enabled}
+                                  onChange={e => setMarketEnabled(s => ({ ...s, [key]: e.target.checked }))}
+                                  className="accent-emerald-500"
+                                  title="Quoter would post here when wired up"
+                                />
+                              </div>
+                            ) : (
+                              <span className="text-gray-700 text-[10px]">—</span>
+                            )}
                           </td>
                         </tr>
                       )
