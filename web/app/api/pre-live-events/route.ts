@@ -85,8 +85,13 @@ export async function GET() {
     const t2 = String(outcomes[1]).trim()
     if (!t1 || !t2) continue
 
-    const game_start = (ev.gameStartTime as string | null)
+    // Polymarket exposes the actual match kickoff on the EVENT as `startTime`
+    // (gameStartTime + eventStartTime live on the market children but the
+    // event-level startTime mirrors the parent market's gameStartTime).
+    const game_start = (ev.startTime as string | null)
+                     ?? (ev.gameStartTime as string | null)
                      ?? (ev.eventStartTime as string | null)
+                     ?? (ev.eventDate as string | null)
                      ?? null
     const start_ms = game_start ? Date.parse(game_start) : NaN
     const has_pregame = !Number.isNaN(start_ms) && start_ms > now
