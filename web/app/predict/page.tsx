@@ -31,21 +31,33 @@ interface ModelParams {
 
 interface TeamSnapshot { date: string; elo: number; rwr: number | null; gd15: number | null; roster: string[] }
 interface TeamStateHistory {
-  generated:        string
-  window_days:      number
-  gd15_roll?:       number
-  teams:            Record<string, TeamSnapshot[]>
-  player_gd15_tail?: Record<string, number[]>
+  generated:           string
+  window_days:         number
+  gd15_roll?:          number
+  teams:               Record<string, TeamSnapshot[]>
+  // [[date_iso, gd15], ...] per player — filter by chosen date, then rolling mean of last 5
+  player_gd15_dated?:  Record<string, Array<[string, number]>>
 }
 
 // Team gd15 from per-player rolling tails — matches feature_engineering.py:515-519
-function teamGd15FromRoster(roster: string[], tails: Record<string, number[]> | undefined, n = 5): number | null {
+// + date-aware filtering: only includes entries STRICTLY BEFORE asOfDate.
+function teamGd15FromRoster(
+  roster: string[],
+  tails: Record<string, Array<[string, number]>> | undefined,
+  asOfDate: string,
+  n = 5,
+): number | null {
   if (!tails || roster.length === 0) return null
+  const cutoff = asOfDate || ''  // empty string = no cutoff (use everything)
   const laneMeans: number[] = []
   for (const p of roster) {
     const h = tails[p]
-    if (h && h.length >= 2) {
-      const slice = h.slice(-n)
+    if (!h) continue
+    const filtered = cutoff
+      ? h.filter(([d]) => d < cutoff).map(([, v]) => v)
+      : h.map(([, v]) => v)
+    if (filtered.length >= 2) {
+      const slice = filtered.slice(-n)
       laneMeans.push(slice.reduce((a, b) => a + b, 0) / slice.length)
     }
   }
@@ -179,10 +191,10 @@ export default function PredictPage() {
   function teamState(team: string) {
     const cur = params?.teams[team]
     const roster = effectiveRoster(team)
-    // Recompute team gd15 from this team's actual roster + per-player gd15 tails
-    // (matches feature_engineering._rolling_gd15 + np.nanmean). If roster
-    // override differs from the snapshot's roster, this picks up the change.
-    const computed_gd15 = teamGd15FromRoster(roster, history?.player_gd15_tail, history?.gd15_roll ?? 5)
+    // Recompute team gd15 from this team's actual roster + per-player gd15 tails.
+    // Matches feature_engineering._rolling_gd15 + np.nanmean, with date-aware
+    // filtering so picking "5-27 midnight" excludes 5-27's games from the rolling.
+    const computed_gd15 = teamGd15FromRoster(roster, history?.player_gd15_dated, asOfDate, history?.gd15_roll ?? 5)
 
     if (asOfDate) {
       const snap = stateAt(team, asOfDate)
