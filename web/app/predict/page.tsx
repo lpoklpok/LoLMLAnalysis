@@ -66,7 +66,9 @@ function rawFeatures(
 }
 
 function zFromFeats(params: ModelParams, feats: Record<string, number>, withIntercept: boolean): number {
-  let z = withIntercept ? params.intercept : 0
+  // Defensive ?? 0 — until next daily pipeline writes intercept, fall back to no intercept.
+  // Marginal effect: ~2pp difference in sided predictions until intercept is back.
+  let z = withIntercept ? (params.intercept ?? 0) : 0
   for (let i = 0; i < params.features.length; i++) {
     const fname = params.features[i]
     const v = feats[fname]
