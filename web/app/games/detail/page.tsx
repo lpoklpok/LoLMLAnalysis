@@ -70,7 +70,11 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
 }
 
 function Draft({ game }: { game: Game }) {
-  const blueOrderFirst = num(game, 'blue_team_firstPick') === 1
+  const firstPickFlag    = num(game, 'blue_team_firstPick')
+  const blueOrderFirst   = firstPickFlag === 1
+  const firstPickKnown   = firstPickFlag === 0 || firstPickFlag === 1
+  const firstPickTeam    = blueOrderFirst ? str(game, 'blue_team_teamname') : str(game, 'red_team_teamname')
+  const firstPickColor   = blueOrderFirst ? 'text-blue-300' : 'text-red-300'
   const renderSide = (side: Side, color: string) => (
     <div>
       <div className="grid grid-cols-[40px_1fr] gap-2 mb-3">
@@ -100,14 +104,25 @@ function Draft({ game }: { game: Game }) {
     </div>
   )
   return (
-    <Panel title={`Draft${blueOrderFirst === true ? ' (Blue first pick)' : ''}`}>
+    <Panel title="Draft">
+      {firstPickKnown && (
+        <p className="text-xs text-gray-500 mb-4">
+          First pick: <span className={`${firstPickColor} font-semibold`}>{firstPickTeam}</span>
+        </p>
+      )}
       <div className="grid md:grid-cols-2 gap-6">
         <div>
-          <h3 className="text-xs text-blue-300 font-semibold mb-2">{str(game, 'blue_team_teamname')}</h3>
+          <h3 className="text-xs text-blue-300 font-semibold mb-2 flex items-center gap-2">
+            {str(game, 'blue_team_teamname')}
+            {blueOrderFirst && <span className="text-[10px] bg-blue-900/70 text-blue-200 px-1.5 py-0.5 rounded">1st pick</span>}
+          </h3>
           {renderSide('blue', 'bg-blue-900/40 text-blue-200')}
         </div>
         <div>
-          <h3 className="text-xs text-red-300 font-semibold mb-2">{str(game, 'red_team_teamname')}</h3>
+          <h3 className="text-xs text-red-300 font-semibold mb-2 flex items-center gap-2">
+            {str(game, 'red_team_teamname')}
+            {firstPickKnown && !blueOrderFirst && <span className="text-[10px] bg-red-900/70 text-red-200 px-1.5 py-0.5 rounded">1st pick</span>}
+          </h3>
           {renderSide('red', 'bg-red-900/40 text-red-200')}
         </div>
       </div>
