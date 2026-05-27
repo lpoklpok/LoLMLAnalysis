@@ -544,11 +544,43 @@ export default function PreLivePage() {
           <h1 className="text-2xl font-bold text-emerald-400">Pre-Live Trader</h1>
           <p className="text-xs text-gray-500 mt-1">Compare model fair value vs Polymarket mid for upcoming LoL series · tweak inputs · see where to bet</p>
         </div>
-        <nav className="flex gap-5 text-sm">
-          <Link href="/"       className="text-gray-400 hover:text-gray-200">Home</Link>
-          <Link href="/trader" className="text-gray-400 hover:text-gray-200">Trader (Live)</Link>
-          <Link href="/calculator" className="text-gray-400 hover:text-gray-200">Calculator</Link>
-        </nav>
+        <div className="flex items-center gap-4">
+          <button
+            disabled={submitting}
+            onClick={async () => {
+              if (!confirm(
+                'PANIC: cancel EVERY Polymarket order on your wallet and disable all quoter rows.\n\n' +
+                'This kills BOTH:\n' +
+                '  • all dashboard-enabled quoter orders\n' +
+                '  • any orders you placed manually (Tinker, Polymarket UI, etc.)\n\n' +
+                'Continue?'
+              )) return
+              setSubmitting(true)
+              try {
+                const r = await fetch('/api/quoter/panic', { method: 'POST' })
+                const j = await r.json()
+                if (j.ok) {
+                  alert(`Cancelled. Disabled ${j.disabled} quoter row(s).`)
+                } else {
+                  alert(`Partial panic — quoter rows disabled (${j.disabled}). Relay error: ${j.cancel_error}`)
+                }
+                await reloadActive()
+              } catch (e) {
+                alert(`Panic failed: ${e}`)
+              }
+              setSubmitting(false)
+            }}
+            className="bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white font-bold px-4 py-2 rounded text-sm shadow-lg shadow-red-900/50"
+            title="Cancel ALL orders (quoter + manual) and disable all quoter rows"
+          >
+            🚨 PANIC: KILL ALL
+          </button>
+          <nav className="flex gap-5 text-sm">
+            <Link href="/"       className="text-gray-400 hover:text-gray-200">Home</Link>
+            <Link href="/trader" className="text-gray-400 hover:text-gray-200">Trader (Live)</Link>
+            <Link href="/calculator" className="text-gray-400 hover:text-gray-200">Calculator</Link>
+          </nav>
+        </div>
       </header>
 
       <div className="max-w-7xl mx-auto px-6 py-6 space-y-5">
