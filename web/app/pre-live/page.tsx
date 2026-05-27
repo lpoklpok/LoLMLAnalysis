@@ -92,6 +92,18 @@ function getH2H(params: ModelParams, t1: string, t2: string): number {
   return params.fill.h2h_wr ?? 0.5
 }
 
+// Player H2H is stored under alphabetically-sorted key `p0|||p1|||pos` where wins = wins for p0.
+function getPlayerH2H(
+  params: ModelParams, ownPlayer: string, oppPlayer: string, pos: string
+): { wr: number; n: number } | null {
+  if (!ownPlayer || !oppPlayer) return null
+  const [p0, p1] = ownPlayer <= oppPlayer ? [ownPlayer, oppPlayer] : [oppPlayer, ownPlayer]
+  const entry = params.player_h2h[`${p0}|||${p1}|||${pos}`]
+  if (!entry || entry.n === 0) return null
+  const winsForOwn = p0 === ownPlayer ? entry.wins : entry.n - entry.wins
+  return { wr: winsForOwn / entry.n, n: entry.n }
+}
+
 function rawZ(p: ModelParams, t1: string, t2: string, playoffs: boolean, elo1?: number, elo2?: number): number {
   const s1 = p.teams[t1], s2 = p.teams[t2], f = p.fill
   const raw: Record<string, number> = {
@@ -236,10 +248,11 @@ function StatCell({ label, value }: { label: string; value: string }) {
 }
 
 function TeamPanel({
-  params, teamName, teamKey, otherTeamName, customRoster, customElo, side,
+  params, teamName, teamKey, otherTeamName, otherTeamKey, customRoster, oppRoster, customElo, side,
 }: {
   params: ModelParams; teamName: string; teamKey: string | null
-  otherTeamName: string; customRoster: string[]; customElo: number | null
+  otherTeamName: string; otherTeamKey: string | null
+  customRoster: string[]; oppRoster: string[]; customElo: number | null
   side: 'left' | 'right'
 }) {
   if (!teamKey) {
@@ -270,15 +283,25 @@ function TeamPanel({
         <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1.5">Lineup (player ELOs)</div>
         <div className="space-y-1">
           {(['top','jng','mid','bot','sup'] as const).map((pos, i) => {
-            const player = customRoster[i] ?? (params.rosters[teamKey]?.[i] ?? '—')
-            const elo    = params.player_elos[player]
-            const isSub  = player !== (params.rosters[teamKey]?.[i] ?? '')
+            const player    = customRoster[i] ?? (params.rosters[teamKey]?.[i] ?? '—')
+            const oppPlayer = oppRoster[i]    ?? (otherTeamKey ? params.rosters[otherTeamKey]?.[i] ?? '' : '')
+            const elo       = params.player_elos[player]
+            const isSub     = player !== (params.rosters[teamKey]?.[i] ?? '')
+            const h2h       = getPlayerH2H(params, player, oppPlayer, pos)
+            const h2hCls    = h2h == null      ? 'text-gray-600'
+                            : h2h.n < 5        ? 'text-gray-500 italic'
+                            : h2h.wr >= 0.55   ? 'text-emerald-400'
+                            : h2h.wr <= 0.45   ? 'text-rose-400'
+                            :                    'text-gray-300'
             return (
-              <div key={pos} className="grid grid-cols-[40px_1fr_auto] gap-2 items-center text-xs">
+              <div key={pos} className="grid grid-cols-[40px_1fr_auto_auto] gap-2 items-center text-xs">
                 <span className="font-mono text-[10px] text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded text-center">
                   {pos.toUpperCase()}
                 </span>
                 <span className={`truncate ${isSub ? 'text-purple-300' : 'text-gray-200'}`}>{player}</span>
+                <span className={`font-mono text-[10px] ${h2hCls}`} title={h2h ? `H2H vs ${oppPlayer}: ${h2h.n} games` : 'no H2H data'}>
+                  {h2h ? `${(h2h.wr * 100).toFixed(0)}% (${h2h.n})` : '—'}
+                </span>
                 <span className="font-mono text-xs text-gray-400">{elo != null ? elo.toFixed(0) : '—'}</span>
               </div>
             )
@@ -816,12 +839,14 @@ export default function PreLivePage() {
             <div className="grid md:grid-cols-2 gap-4">
               <TeamPanel
                 params={params} teamName={selectedEvent.team1} teamKey={teamKey1}
-                otherTeamName={selectedEvent.team2} customRoster={blueRoster}
+                otherTeamName={selectedEvent.team2} otherTeamKey={teamKey2}
+                customRoster={blueRoster} oppRoster={redRoster}
                 customElo={customElo1} side="left"
               />
               <TeamPanel
                 params={params} teamName={selectedEvent.team2} teamKey={teamKey2}
-                otherTeamName={selectedEvent.team1} customRoster={redRoster}
+                otherTeamName={selectedEvent.team1} otherTeamKey={teamKey1}
+                customRoster={redRoster} oppRoster={blueRoster}
                 customElo={customElo2} side="right"
               />
             </div>
