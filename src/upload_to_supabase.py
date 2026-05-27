@@ -113,8 +113,32 @@ def _sanitize_record(record: dict) -> dict:
     return out
 
 
+def _existing_columns(client, table: str) -> set[str]:
+    """Return the set of columns currently in the target Supabase table.
+    Used to gracefully skip columns whose ALTER TABLE migration hasn't been
+    applied yet — otherwise the insert would 400 on the first unknown column."""
+    try:
+        resp = client.table(table).select('*').limit(1).execute()
+        if resp.data:
+            return set(resp.data[0].keys())
+        # Table is empty — fall back to inserting a probe to learn the schema?
+        # Easier: rely on the table having at least one row from prior upload.
+        # If totally empty, just return None to mean "send everything".
+    except Exception as e:
+        print(f"  Couldn't introspect {table} columns: {e!r}")
+    return set()
+
+
 def _upload_table(client, table: str, df: pd.DataFrame):
-    print(f"Uploading {len(df):,} rows to '{table}'...")
+    existing_cols = _existing_columns(client, table)
+    if existing_cols:
+        skipped = [c for c in df.columns if c not in existing_cols]
+        if skipped:
+            print(f"  Skipping {len(skipped)} cols not in '{table}' schema "
+                  f"(run the SQL migration to unlock): {skipped[:5]}{' ...' if len(skipped) > 5 else ''}")
+            df = df[[c for c in df.columns if c in existing_cols]]
+
+    print(f"Uploading {len(df):,} rows × {len(df.columns)} cols to '{table}'...")
 
     # Truncate existing data
     client.table(table).delete().neq('gameid', '').execute()
