@@ -128,6 +128,9 @@ jobs:
       - name: Export draft simulator lookups JSON
         run: python src/export_draft_lookups.py
 
+      - name: Export team-state history JSON (for /predict date toggle)
+        run: python src/export_team_state_history.py
+
       - name: Export daily PnL JSON (Polymarket + Kalshi)
         env:
           POLYMARKET_WALLET:  ${{ secrets.POLYMARKET_WALLET }}

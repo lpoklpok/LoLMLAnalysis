@@ -157,6 +157,9 @@ export default function Dashboard() {
         <Link href="/draft-sim" className="text-sm text-cyan-400 hover:text-cyan-300 transition-colors">
           Draft Sim →
         </Link>
+        <Link href="/predict" className="text-sm text-violet-400 hover:text-violet-300 transition-colors">
+          Predict (manual) →
+        </Link>
         <span className="text-xs text-gray-500">
           {loading ? 'Loading…' : `${(stats?.total_games ?? 0).toLocaleString()} games`}
         </span>
