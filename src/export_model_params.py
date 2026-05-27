@@ -152,8 +152,12 @@ def main():
         ckpt = json.load(f)
 
     # Train the logistic-regression model on the MAJOR-leagues feature file
-    # only (LCK/LEC/LPL) — same as before. Don't expand training data here.
-    features_train = pd.read_csv(PROCESSED / 'features.csv', low_memory=False)
+    # IMPORTANT: train on the SAME dataset as upload_game_features.py
+    # (features_all.csv, all leagues) so /predict's coefficients match the
+    # game_features.model_pred shown on /games. Previously this used the
+    # filtered features.csv, producing a different LR — meaning /predict
+    # and /games disagreed by ~3pp on every game.
+    features_train = pd.read_csv(PROCESSED / 'features_all.csv', low_memory=False)
     features_train['date'] = pd.to_datetime(features_train['date'], utc=True)
 
     # But for the team enumeration / per-team stats (ELO, roster, gd15, etc.)
