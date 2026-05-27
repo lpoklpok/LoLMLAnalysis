@@ -472,6 +472,9 @@ function EventCard({
             <th className="text-center py-1.5 px-2 font-medium w-16">Offer</th>
             <th className="text-center py-1.5 px-2 font-medium w-20" title="Quote size in shares">Size (sh)</th>
             <th className="text-center py-1.5 px-2 font-medium w-20" title="Pricing strategy: Join the best level vs penny one cent behind">Strat</th>
+            <th className="text-center py-1.5 px-2 font-medium w-20" title="min_level_size_usd: skip quoting if top-of-book size × price is less than this $ value">Min Lvl $</th>
+            <th className="text-center py-1.5 px-2 font-medium w-20" title="max_fill_usd: pause once today's fills reach this $ value">Fill Cap $</th>
+            <th className="text-center py-1.5 px-2 font-medium w-20" title="max_position_shares: pause once |position| reaches this share count">Pos Cap sh</th>
             <th className="text-left  py-1.5 px-4 font-medium text-[10px]">State (book top · active quote · fills · pos)</th>
           </tr>
         </thead>
@@ -495,6 +498,15 @@ function EventCard({
                 </td>
                 <td className="py-2 px-2 text-center">
                   {cfg && <StrategyToggle cfg={cfg} onUpdateConfig={onUpdateConfig} />}
+                </td>
+                <td className="py-2 px-2 text-center">
+                  {cfg && <NumEditor cfg={cfg} field="min_level_size_usd" step={50} onUpdateConfig={onUpdateConfig} />}
+                </td>
+                <td className="py-2 px-2 text-center">
+                  {cfg && <NumEditor cfg={cfg} field="max_fill_usd"       step={50} onUpdateConfig={onUpdateConfig} />}
+                </td>
+                <td className="py-2 px-2 text-center">
+                  {cfg && <NumEditor cfg={cfg} field="max_position_shares" step={50} onUpdateConfig={onUpdateConfig} />}
                 </td>
                 <td className="py-2 px-4 font-mono text-[10px] text-gray-500 truncate">
                   <SideState side="bid"   state={stateBid}   />
@@ -523,6 +535,32 @@ function SizeEditor({ cfg, onUpdateConfig }: {
   return (
     <input type="number" step={10} min={1}
       key={value}
+      defaultValue={value}
+      onBlur={e => save(e.target.value)}
+      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+      className="w-16 bg-gray-800 border border-gray-700 rounded px-1 py-0.5 text-xs font-mono text-right" />
+  )
+}
+
+// Generic numeric editor for any numeric MmConfig field. Lets the user
+// override worker-side thresholds (min_level_size_usd, max_fill_usd,
+// max_position_shares) inline so trades aren't blocked by static caps.
+type NumericMmField = 'min_level_size_usd' | 'max_fill_usd' | 'max_position_shares' | 'max_size_pct'
+function NumEditor({ cfg, field, step, onUpdateConfig }: {
+  cfg: MmConfig
+  field: NumericMmField
+  step: number
+  onUpdateConfig: (id: number, patch: Partial<MmConfig>) => Promise<void>
+}) {
+  const value = (cfg[field] as number | undefined) ?? ''
+  const save = (raw: string) => {
+    const v = parseFloat(raw)
+    if (isNaN(v) || v < 0) return
+    void onUpdateConfig(cfg.id, { [field]: v } as Partial<MmConfig>)
+  }
+  return (
+    <input type="number" step={step} min={0}
+      key={String(value)}
       defaultValue={value}
       onBlur={e => save(e.target.value)}
       onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
