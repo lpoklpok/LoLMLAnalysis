@@ -131,6 +131,12 @@ jobs:
       - name: Export team-state history JSON (for /predict date toggle)
         run: python src/export_team_state_history.py
 
+      - name: Export pick tendencies JSON (for /predict)
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python src/export_pick_tendencies.py
+
       - name: Export daily PnL JSON (Polymarket + Kalshi)
         env:
           POLYMARKET_WALLET:  ${{ secrets.POLYMARKET_WALLET }}

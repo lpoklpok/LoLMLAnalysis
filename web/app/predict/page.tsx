@@ -29,6 +29,21 @@ interface ModelParams {
   player_elos:   Record<string, number>
 }
 
+interface PickStats {
+  total: number
+  side?: { blue: { n: number; pct: number }; red: { n: number; pct: number } }
+  pick?: { first: { n: number; pct: number }; second: { n: number; pct: number } }
+}
+interface TeamPickTendencies {
+  after_loss:     PickStats
+  as_g1_favorite: PickStats
+}
+interface PickTendenciesFile {
+  generated: string
+  window:    string
+  teams:     Record<string, TeamPickTendencies>
+}
+
 interface TeamSnapshot { date: string; elo: number; rwr: number | null; gd15: number | null; roster: string[] }
 interface TeamStateHistory {
   generated:              string
@@ -186,9 +201,10 @@ function zFromFeats(params: ModelParams, feats: Record<string, number>, withInte
 type SideMode = 'symmetric' | 'blue_t1' | 'blue_t2'
 
 export default function PredictPage() {
-  const [params,  setParams]  = useState<ModelParams | null>(null)
-  const [history, setHistory] = useState<TeamStateHistory | null>(null)
-  const [err,     setErr]     = useState<string | null>(null)
+  const [params,  setParams]   = useState<ModelParams | null>(null)
+  const [history, setHistory]  = useState<TeamStateHistory | null>(null)
+  const [picks,   setPicks]    = useState<PickTendenciesFile | null>(null)
+  const [err,     setErr]      = useState<string | null>(null)
 
   const [team1, setTeam1] = useState<string>('Gen.G')
   const [team2, setTeam2] = useState<string>('Hanwha Life Esports')
@@ -230,7 +246,8 @@ export default function PredictPage() {
     Promise.all([
       fetch('/model_params.json').then(r => r.json()),
       fetch('/team_state_history.json').then(r => r.json()),
-    ]).then(([p, h]) => { setParams(p); setHistory(h) })
+      fetch('/pick_tendencies.json').then(r => r.ok ? r.json() : null).catch(() => null),
+    ]).then(([p, h, pk]) => { setParams(p); setHistory(h); setPicks(pk) })
     .catch(e => setErr(String(e)))
   }, [])
 
@@ -997,6 +1014,68 @@ export default function PredictPage() {
             })()}
           </div>
         )}
+
+        {/* Pick tendencies table (2026 only) */}
+        {picks && (picks.teams[team1] || picks.teams[team2]) && (
+          <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
+            <h2 className="text-lg font-semibold mb-1">Pick tendencies <span className="text-xs text-zinc-500 font-normal">(2026 only)</span></h2>
+            <div className="text-[11px] text-zinc-500 mb-3">
+              Behavior when this team has draft choice (after losing a previous game in series) and when they enter G1 as the ELO favorite.
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <TendencyCard team={team1} stats={picks.teams[team1]} color="blue" />
+              <TendencyCard team={team2} stats={picks.teams[team2]} color="red" />
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function TendencyCard({ team, stats, color }: {
+  team: string
+  stats?: TeamPickTendencies
+  color: 'blue' | 'red'
+}) {
+  const colorCls = color === 'blue' ? 'text-blue-400' : 'text-rose-400'
+  if (!stats) {
+    return (
+      <div className="bg-zinc-950 border border-zinc-800 rounded p-3">
+        <h3 className={`text-sm font-semibold ${colorCls}`}>{team}</h3>
+        <div className="text-xs text-zinc-500 mt-2">No 2026 data</div>
+      </div>
+    )
+  }
+  return (
+    <div className="bg-zinc-950 border border-zinc-800 rounded p-3 text-xs">
+      <h3 className={`text-sm font-semibold ${colorCls} mb-2`}>{team}</h3>
+      <TendencyBlock title="After a loss (had draft choice)" stats={stats.after_loss} />
+      <TendencyBlock title="As G1 favorite (ELO advantage)"  stats={stats.as_g1_favorite} />
+    </div>
+  )
+}
+
+function TendencyBlock({ title, stats }: { title: string; stats: PickStats }) {
+  if (stats.total === 0) {
+    return (
+      <div className="mb-3">
+        <div className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">{title}</div>
+        <div className="text-zinc-600">no data</div>
+      </div>
+    )
+  }
+  const pct = (p: number, n: number) => `${(p * 100).toFixed(0)}% (${n})`
+  return (
+    <div className="mb-3">
+      <div className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">{title} <span className="text-zinc-600">n={stats.total}</span></div>
+      <div className="grid grid-cols-[64px_1fr_1fr] gap-2 font-mono">
+        <span className="text-zinc-500">side</span>
+        <span><span className="text-blue-400">blue</span> {pct(stats.side!.blue.pct, stats.side!.blue.n)}</span>
+        <span><span className="text-rose-400">red</span>  {pct(stats.side!.red.pct,  stats.side!.red.n)}</span>
+        <span className="text-zinc-500">pick</span>
+        <span><span className="text-zinc-300">1st</span> {pct(stats.pick!.first.pct, stats.pick!.first.n)}</span>
+        <span><span className="text-zinc-300">2nd</span> {pct(stats.pick!.second.pct, stats.pick!.second.n)}</span>
       </div>
     </div>
   )
