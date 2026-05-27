@@ -154,25 +154,46 @@ function computeProbs(params: ModelParams, t1: string, t2: string, playoffs: boo
 function pct(p: number, d = 1): string { return `${(p * 100).toFixed(d)}%` }
 
 /**
- * P(team wins best-of-{bestOf} series by at least `spread+0.5` games), given
- * a constant per-game probability `p` for that team. Closed-form negative
- * binomial: series ends when first team reaches k = ceil(bo/2) wins, so a
- * cover-by-N occurs when team1 wins AND team2's wins ≤ k - N.
+ * Enumerate every (team1_wins, team2_wins) terminal state for a Bo(N) series,
+ * weighted by probability, using the model's actual per-game probabilities
+ * (g1, g2 conditional on G1 winner, and g3+ side-agnostic). Returns an array
+ * of {t1, t2, prob}.
  */
-function coverProb(p: number, bestOf: number, coverBy: number): number {
+function seriesScoreDistribution(
+  g1: number, g2_t1won: number, g2_t2won: number, g3plus: number, bestOf: number,
+): { t1: number; t2: number; prob: number }[] {
   const k = Math.ceil(bestOf / 2)
-  const maxOppWins = k - coverBy
-  if (maxOppWins < 0) return 0  // can't cover (e.g. -3.5 in Bo3)
-  if (maxOppWins >= k) return 1 // 0 spread = just P(win series)
-  let total = 0
-  function nCr(n: number, r: number): number {
-    if (r < 0 || r > n) return 0
-    let c = 1
-    for (let i = 0; i < r; i++) c = c * (n - i) / (i + 1)
-    return c
+  const out: { t1: number; t2: number; prob: number }[] = []
+  function walk(t1w: number, t2w: number, prev: 't1' | 't2' | null, prob: number) {
+    if (t1w === k || t2w === k) {
+      out.push({ t1: t1w, t2: t2w, prob }); return
+    }
+    const gameNum = t1w + t2w + 1
+    let pT1: number
+    if (gameNum === 1) pT1 = g1
+    else if (gameNum === 2) pT1 = prev === 't1' ? g2_t1won : g2_t2won
+    else pT1 = g3plus
+    walk(t1w + 1, t2w, 't1', prob * pT1)
+    walk(t1w, t2w + 1, 't2', prob * (1 - pT1))
   }
-  for (let j = 0; j <= maxOppWins; j++) {
-    total += nCr(k - 1 + j, j) * Math.pow(p, k) * Math.pow(1 - p, j)
+  walk(0, 0, null, 1)
+  return out
+}
+
+/**
+ * P(team wins by at least `coverBy` games) given a full ProbBundle. `which`
+ * picks which team's perspective (1 = event's team1, 2 = team2). Uses the
+ * exact per-game series-score distribution rather than the constant-p
+ * negative binomial — handles the G2 draft swap correctly.
+ */
+function coverProb(probs: ProbBundle, bestOf: number, coverBy: number,
+                    which: 1 | 2): number {
+  if (coverBy < 1) return which === 1 ? probs.series : 1 - probs.series
+  const dist = seriesScoreDistribution(probs.g1, probs.g2_t1won, probs.g2_t2won, probs.g1, bestOf)
+  let total = 0
+  for (const { t1, t2, prob } of dist) {
+    const margin = which === 1 ? t1 - t2 : t2 - t1
+    if (margin >= coverBy) total += prob
   }
   return total
 }
@@ -546,13 +567,14 @@ export default function PreLivePage() {
                       } else if (label === 'game_handicap') {
                         const h = parseHandicap(sm.question)
                         if (h) {
-                          // Favorite per the question
+                          // Which outcome is the favorite (negative spread)?
                           const favIdx = matchOutcome(sm.outcomes, h.favName)
                           if (favIdx !== null) {
+                            // Map outcome favIdx → event-team perspective. If favIdx is the
+                            // outcome that matches event.team1, the favorite's "perspective" is team1.
                             const favIsT1 = (favIdx === 0) === o1IsT1
-                            const pFav    = favIsT1 ? probs.g1 : 1 - probs.g1
-                            const coverBy = Math.ceil(h.spread)   // 1.5 → cover by 2, 2.5 → cover by 3
-                            const favFair = coverProb(pFav, bo, coverBy)
+                            const coverBy = Math.ceil(h.spread)
+                            const favFair = coverProb(probs, bo, coverBy, favIsT1 ? 1 : 2)
                             fair_o1 = favIdx === 0 ? favFair : 1 - favFair
                           }
                         }
