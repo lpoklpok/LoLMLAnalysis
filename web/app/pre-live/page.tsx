@@ -392,7 +392,16 @@ export default function PreLivePage() {
     } catch { /* skip event */ }
     if (!evDetail) return []
 
-    const out: Awaited<ReturnType<typeof computeEligibleRowsForEvent>> = []
+    // Dedup per (market_type, outcome_idx). Polymarket can have multiple
+    // markets with the same market_type for a single event (e.g. game_handicap
+    // -1.5 AND -2.5 both have market_type='game_handicap'). The Supabase PK
+    // is (event_slug, market_type, outcome_idx) so sending duplicates fails
+    // with code 21000. Keep the row with the largest absolute edge.
+    type Row = { market_type: string; outcome_idx: 0|1; enabled: boolean;
+                 outcome_name?: string; match_question?: string;
+                 target_fair?: number; token_id?: string;
+                 event_slug: string; event_title: string; _edge_pp: number }
+    const best: Record<string, Row> = {}
     for (const sm of evDetail.submarkets) {
       const mid1 = sm.outcome_mids[0]; const mid2 = sm.outcome_mids[1]
       const o1IsT1 = _norm(sm.outcomes[0]) === _norm(ev.team1)
@@ -419,14 +428,21 @@ export default function PreLivePage() {
       const ePP = Math.abs(fIdx === 0 ? e1 : e2) * 100
       if (ePP < edgeThreshold) continue
       const tgt = fIdx === 0 ? fair_o1 : fair_o2
-      out.push({
+      const dedupKey = `${sm.market_type}|${fIdx}`
+      const candidate: Row = {
         event_slug: ev.slug, event_title: ev.title,
         market_type: sm.market_type, outcome_idx: fIdx, enabled: true,
         outcome_name: sm.outcomes[fIdx], match_question: sm.question,
         target_fair: tgt, token_id: sm.token_ids[fIdx] ?? undefined,
-      })
+        _edge_pp: ePP,
+      }
+      const existing = best[dedupKey]
+      if (!existing || candidate._edge_pp > existing._edge_pp) {
+        best[dedupKey] = candidate
+      }
     }
-    return out
+    // Strip the helper _edge_pp field before returning
+    return Object.values(best).map(({ _edge_pp: _, ...r }) => r)
   }
 
   async function toggleQuote(args: {
