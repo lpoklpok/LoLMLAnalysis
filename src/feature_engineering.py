@@ -668,8 +668,13 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
                 player_gd15[blue_players[i]].append(val)
                 player_gd15[red_players[i]].append(-val)
 
-        # Update outperformance histories (only when market odds available)
+        # Update outperformance histories (only when market odds available).
+        # Prefer OddsPortal (long history, well-vetted) but fall back to Polymarket
+        # implied probability (covers major-league games from 2026-05-22 onward
+        # that OddsPortal doesn't have).
         q = getattr(g, 'q_blue_win', None)
+        if q is None or pd.isna(q):
+            q = getattr(g, 'poly_blue_win_prob', None)
         if q is not None and not pd.isna(q):
             team_outperf[blue_team].append(blue_win - float(q))
             team_outperf[red_team].append((1 - blue_win) - (1 - float(q)))
