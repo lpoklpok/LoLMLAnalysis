@@ -137,6 +137,24 @@ export default function PredictPage() {
     return snaps[snaps.length - 1]
   }
 
+  // Walk backwards through a team's snapshots starting at asOfDate's selected snap,
+  // returning the most recent non-null value for a given key. Used as a fallback
+  // when today's snap has gd15=null (e.g. games.csv doesn't have today's games yet).
+  function lastNonNull<K extends 'gd15' | 'rwr' | 'elo'>(team: string, isoDate: string, key: K): number | null {
+    const snaps = history?.teams[team] ?? []
+    if (snaps.length === 0) return null
+    // Find the snapshot we'd normally use, then walk backward
+    const targetIdx = !isoDate
+      ? snaps.length - 1
+      : snaps.findIndex(s => s.date >= isoDate)
+    const start = targetIdx >= 0 ? targetIdx : snaps.length - 1
+    for (let i = start; i >= 0; i--) {
+      const v = snaps[i][key]
+      if (v != null) return v as number
+    }
+    return null
+  }
+
   // ----- Resolve team state for prediction -----
   // If asOfDate is set: use snapshot (elo/rwr/gd15 from history) + current model_params for outperf
   //                      (outperf rebuild is more involved; gd15 is now in history)
@@ -147,15 +165,21 @@ export default function PredictPage() {
       const snap = stateAt(team, asOfDate)
       if (snap) return {
         elo:     snap.elo,
-        rwr:     snap.rwr,
-        gd15:    snap.gd15 ?? cur?.gd15 ?? null,
+        rwr:     snap.rwr ?? lastNonNull(team, asOfDate, 'rwr'),
+        // For gd15: walk backwards if today's snap is null (today's games haven't
+        // been ingested yet). Don't fall back to model_params.gd15 — those values
+        // can be stale/wrong (e.g. an outlier dominant game).
+        gd15:    snap.gd15 ?? lastNonNull(team, asOfDate, 'gd15'),
         outperf: cur?.outperf ?? null,
       }
     }
+    // Latest (no date): use most-recent snapshot, falling back to model_params for fields
+    // that aren't in history (outperf only).
+    const snap = stateAt(team, '')
     return {
-      elo:     cur?.elo     ?? null,
-      rwr:     cur?.rwr     ?? null,
-      gd15:    cur?.gd15    ?? null,
+      elo:     snap?.elo  ?? cur?.elo  ?? null,
+      rwr:     snap?.rwr  ?? cur?.rwr  ?? null,
+      gd15:    snap?.gd15 ?? lastNonNull(team, '', 'gd15') ?? cur?.gd15 ?? null,
       outperf: cur?.outperf ?? null,
     }
   }
