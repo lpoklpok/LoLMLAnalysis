@@ -753,22 +753,34 @@ export default function PreLivePage() {
               disabled={submitting || events.filter(e=>e.has_pregame).length === 0}
               onClick={async () => {
                 if (!params) return
-                if (!confirm(`Sweep ALL ${events.filter(e=>e.has_pregame).length} upcoming events and enable every market with edge ≥ ${edgeThreshold}pp at $${maxSizeUsd} size?`)) return
+                const upcoming = events.filter(e => e.has_pregame)
+                if (!confirm(`Sweep ALL ${upcoming.length} upcoming events and enable every market with edge ≥ ${edgeThreshold}pp at $${maxSizeUsd} size?`)) return
                 setSubmitting(true)
                 try {
-                  const all: Awaited<ReturnType<typeof computeEligibleRowsForEvent>> = []
-                  for (const ev of events.filter(e=>e.has_pregame)) {
-                    const rs = await computeEligibleRowsForEvent(ev)
-                    all.push(...rs)
+                  // Parallel: kick off all event computations at once. Each
+                  // computeEligibleRowsForEvent already does its own fetches
+                  // and try/catches; failures yield [] rather than throw.
+                  const t0 = Date.now()
+                  const results = await Promise.all(upcoming.map(ev => computeEligibleRowsForEvent(ev)))
+                  const all = results.flat()
+                  const elapsed = ((Date.now() - t0)/1000).toFixed(1)
+                  if (all.length === 0) {
+                    alert(`No eligible markets found across ${upcoming.length} events (took ${elapsed}s).`)
+                    setSubmitting(false); return
                   }
-                  if (all.length === 0) { alert('No eligible markets found across all events.'); setSubmitting(false); return }
-                  await fetch('/api/quoter/toggle', {
+                  // Bulk upsert in one call
+                  const r = await fetch('/api/quoter/toggle', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                      rows: all.map(r => ({ ...r, max_size_usd: maxSizeUsd, edge_threshold_pp: edgeThreshold })),
+                      rows: all.map(row => ({ ...row, max_size_usd: maxSizeUsd, edge_threshold_pp: edgeThreshold })),
                     }),
                   })
-                  alert(`Enabled ${all.length} quotes across ${new Set(all.map(r=>r.event_slug)).size} events.`)
+                  if (!r.ok) {
+                    alert(`Sweep failed (HTTP ${r.status}): ${(await r.text()).slice(0, 200)}`)
+                    setSubmitting(false); return
+                  }
+                  const respBody = await r.json()
+                  alert(`Enabled ${respBody.updated ?? all.length} quotes across ${new Set(all.map(x=>x.event_slug)).size} events. (computed in ${elapsed}s)`)
                   await reloadActive()
                 } catch (e) {
                   alert(`Sweep failed: ${e}`)
