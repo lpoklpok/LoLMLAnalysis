@@ -48,7 +48,7 @@ def _pull_game_features() -> pd.DataFrame:
         r = requests.get(
             f"{URL}/rest/v1/game_features",
             params={
-                "select": "date,blue_team,red_team,blue_elo,red_elo,blue_win",
+                "select": "date,blue_team,red_team,blue_elo,red_elo,blue_win,h2h_wr,game_in_series,draft_advantage",
                 "order":  "date.asc",
                 "limit":  "1000",
                 "offset": str(offset),
@@ -229,6 +229,26 @@ def main() -> None:
             player_gd15_export[p] = [[d, round(v, 2)] for d, v in hist[-KEEP_TAIL:]]
 
     now = datetime.now(timezone.utc).isoformat()
+    # Per-team-pair h2h history (BEFORE-game stored value from feature_engineering).
+    # Key: sorted "min|||max" pair name, value list = [[date_iso, h2h_wr_from_min_perspective], ...]
+    h2h_dated: dict[str, list[list]] = defaultdict(list)
+    for _, row in gf.iterrows():
+        if pd.isna(row.get("h2h_wr")): continue
+        t_blue = row["blue_team"]; t_red = row["red_team"]
+        if not isinstance(t_blue, str) or not isinstance(t_red, str): continue
+        h2h_blue = float(row["h2h_wr"])
+        # Normalize to alphabetical pair key with WR from MIN team's perspective
+        if t_blue <= t_red:
+            key = f"{t_blue}|||{t_red}"
+            wr  = h2h_blue
+        else:
+            key = f"{t_red}|||{t_blue}"
+            wr  = 1 - h2h_blue
+        h2h_dated[key].append([row["date"].isoformat(), round(wr, 6)])
+
+    # Trim to last 30 entries per pair (most recent activity is what matters for date lookup)
+    h2h_export = {k: v[-30:] for k, v in h2h_dated.items()}
+
     out = {
         "generated":          now,
         "as_of":              now,
@@ -237,6 +257,8 @@ def main() -> None:
         "teams":              dict(teams),
         # { player: [[date_iso, gd15], ...] }  — last 15 entries with dates
         "player_gd15_dated":  player_gd15_export,
+        # { "min|||max": [[date_iso, h2h_wr_from_min_perspective], ...] }
+        "team_pair_h2h_dated": h2h_export,
     }
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUT_PATH.write_text(json.dumps(out, separators=(",", ":")))

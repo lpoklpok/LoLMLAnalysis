@@ -31,12 +31,15 @@ interface ModelParams {
 
 interface TeamSnapshot { date: string; elo: number; rwr: number | null; gd15: number | null; roster: string[] }
 interface TeamStateHistory {
-  generated:           string
-  window_days:         number
-  gd15_roll?:          number
-  teams:               Record<string, TeamSnapshot[]>
+  generated:              string
+  window_days:            number
+  gd15_roll?:             number
+  teams:                  Record<string, TeamSnapshot[]>
   // [[date_iso, gd15], ...] per player — filter by chosen date, then rolling mean of last 5
-  player_gd15_dated?:  Record<string, Array<[string, number]>>
+  player_gd15_dated?:     Record<string, Array<[string, number]>>
+  // { "<sorted min|||max team pair>": [[date_iso, h2h_wr_min_perspective], ...] }
+  // — uses BEFORE-game stored h2h_wr from production game_features.
+  team_pair_h2h_dated?:   Record<string, Array<[string, number]>>
 }
 
 // Team gd15 from per-player rolling tails — matches feature_engineering.py:515-519
@@ -75,6 +78,28 @@ function getH2H(params: ModelParams, t1: string, t2: string): number {
   return params.fill.h2h_wr ?? 0.5
 }
 
+// Date-aware h2h lookup: returns the stored BEFORE-game h2h_wr for the matchup
+// closest to the user's chosen as-of date. Matches production game_features exactly.
+// Returns null if no per-pair history exists (caller falls back to getH2H).
+function getH2HAtDate(
+  history: TeamStateHistory | null,
+  t1: string, t2: string, asOfDate: string,
+): number | null {
+  if (!history?.team_pair_h2h_dated) return null
+  const [minT, maxT] = t1 <= t2 ? [t1, t2] : [t2, t1]
+  const entries = history.team_pair_h2h_dated[`${minT}|||${maxT}`]
+  if (!entries?.length) return null
+  // Use BEFORE-game value of the first game on/after asOfDate (= state AT asOfDate).
+  // If no game on/after, use the last available (most recent BEFORE-state).
+  let chosen = entries[entries.length - 1]
+  if (asOfDate) {
+    const after = entries.find(([d]) => d >= asOfDate)
+    if (after) chosen = after
+  }
+  // Stored from MIN team's perspective; convert if t1 is the MAX team
+  return t1 === minT ? chosen[1] : 1 - chosen[1]
+}
+
 // Build raw feature vector for (t1 perspective, vs t2)
 function rawFeatures(
   params: ModelParams,
@@ -82,12 +107,15 @@ function rawFeatures(
   s1: { elo: number | null; rwr: number | null; gd15: number | null; outperf: number | null },
   s2: { elo: number | null; rwr: number | null; gd15: number | null; outperf: number | null },
   playoffs: boolean,
+  history: TeamStateHistory | null,
+  asOfDate: string,
 ): Record<string, number> {
   const f = params.fill
+  const datedH2H = getH2HAtDate(history, t1, t2, asOfDate)
   return {
     elo_diff:     (s1.elo != null && s2.elo != null) ? s1.elo - s2.elo : f.elo_diff,
     rwr_diff:     (s1.rwr != null && s2.rwr != null) ? s1.rwr - s2.rwr : f.rwr_diff,
-    h2h_wr:       getH2H(params, t1, t2),
+    h2h_wr:       datedH2H ?? getH2H(params, t1, t2),
     playoffs:     playoffs ? 1 : 0,
     gd15_diff:    (s1.gd15 != null && s2.gd15 != null) ? s1.gd15 - s2.gd15 : f.gd15_diff,
     outperf_diff: (s1.outperf != null && s2.outperf != null) ? s1.outperf - s2.outperf : f.outperf_diff,
@@ -237,6 +265,9 @@ export default function PredictPage() {
     p_t1:             number
     z_final:          number
     side:             'blue_t1' | 'blue_t2' | 'sym'
+    // Non-model contextual flags (affect G2 shrinkage path)
+    game_in_series:   number          // 1, 2, 3, ...
+    draft_advantage:  number          // +1 if t1 had draft choice this game (lost prev), −1 if t2, 0 for G1
     // Inputs going into the model
     s1:               { elo: number | null; rwr: number | null; gd15: number | null; outperf: number | null }
     s2:               { elo: number | null; rwr: number | null; gd15: number | null; outperf: number | null }
@@ -261,6 +292,7 @@ export default function PredictPage() {
   ): Breakdown {
     const empty: Breakdown = {
       p_t1: 0.5, z_final: 0, side: sideForN,
+      game_in_series: n, draft_advantage: 0,
       s1: { elo: null, rwr: null, gd15: null, outperf: null },
       s2: { elo: null, rwr: null, gd15: null, outperf: null },
       rawFeats: {}, contributions: [],
@@ -298,9 +330,10 @@ export default function PredictPage() {
       prev_blue_won = r.blue_won
     }
 
-    // Build features (t1 perspective)
-    const feats     = rawFeatures(params, team1, team2, s1, s2, playoffs)
-    const feats_rev = rawFeatures(params, team2, team1, s2, s1, playoffs)
+    // Build features (t1 perspective). Date-aware h2h pulls the production-stored
+    // h2h_wr from game_features for the closest matchup.
+    const feats     = rawFeatures(params, team1, team2, s1, s2, playoffs, history, asOfDate)
+    const feats_rev = rawFeatures(params, team2, team1, s2, s1, playoffs, history, asOfDate)
 
     // Per-feature contributions (t1 perspective; sided returns + intercept; sym uses symmetric formula)
     const contributions: Array<{ name: string; raw: number; scaled: number; contribution: number }> = []
@@ -358,19 +391,22 @@ export default function PredictPage() {
 
     const z_after_adj = zT1
 
+    // Derive draft_advantage for the CURRENT game (n) from prior results.
+    // +1 = t1 had draft choice (= lost previous game), −1 = t2 had it, 0 = G1.
+    let draft_advantage = 0
+    if (n >= 2 && resultsBefore.length >= 1 && prev_blue_won != null) {
+      const side_prev = resultsBefore[resultsBefore.length - 1].side
+      const blue_was_t1_prev = side_prev === 'blue_t1' || side_prev === 'sym'
+      const t1_won_prev = blue_was_t1_prev ? prev_blue_won : !prev_blue_won
+      draft_advantage = t1_won_prev ? -1 : 1
+    }
+
     // G2 shrink + draft swap
     let g2_alpha_shrink: number | null = null
     let g2_beta_term:    number | null = null
     if (n === 2 && g2Shrink) {
-      let t1_draft_signed = 0
-      if (resultsBefore.length >= 1 && prev_blue_won != null) {
-        const side1 = resultsBefore[0].side
-        const blue_was_t1_in_g1 = side1 === 'blue_t1' || side1 === 'sym'
-        const t1_won_g1 = blue_was_t1_in_g1 ? prev_blue_won : !prev_blue_won
-        t1_draft_signed = t1_won_g1 ? -1 : 1
-      }
       g2_alpha_shrink = params.alpha_g2
-      g2_beta_term    = params.beta_da * t1_draft_signed
+      g2_beta_term    = params.beta_da * draft_advantage
       zT1 = params.alpha_g2 * zT1 + g2_beta_term
     }
 
@@ -378,6 +414,8 @@ export default function PredictPage() {
       p_t1:             sigmoid(zT1),
       z_final:          zT1,
       side:             sideForN,
+      game_in_series:   n,
+      draft_advantage,
       s1, s2,
       rawFeats:         feats,
       contributions,
@@ -714,6 +752,7 @@ function BreakdownPanel({ n, team1, team2, breakdown, params }: {
   team2:     string
   breakdown: {
     p_t1: number; z_final: number; side: 'blue_t1' | 'blue_t2' | 'sym'
+    game_in_series: number; draft_advantage: number
     s1: { elo: number | null; rwr: number | null; gd15: number | null; outperf: number | null }
     s2: { elo: number | null; rwr: number | null; gd15: number | null; outperf: number | null }
     rawFeats: Record<string, number>
@@ -732,6 +771,21 @@ function BreakdownPanel({ n, team1, team2, breakdown, params }: {
                                    `(${team2} blue · ${team1} red)`
   return (
     <div className="text-xs space-y-3">
+      <div>
+        <div className="text-zinc-500 uppercase tracking-wide mb-1">Context flags</div>
+        <div className="font-mono text-zinc-300 flex gap-4">
+          <span><span className="text-zinc-500">game_in_series:</span> {breakdown.game_in_series}</span>
+          <span><span className="text-zinc-500">draft_advantage:</span>{' '}
+            <span className={breakdown.draft_advantage > 0 ? 'text-emerald-400' : breakdown.draft_advantage < 0 ? 'text-rose-400' : ''}>
+              {breakdown.draft_advantage > 0 ? '+1' : breakdown.draft_advantage < 0 ? '-1' : '0'}
+            </span>
+            <span className="text-zinc-600">
+              {' '}({breakdown.draft_advantage === 0 ? 'G1 / unknown' : breakdown.draft_advantage > 0 ? `${team1} lost prev — picks blue` : `${team2} lost prev — picks blue`})
+            </span>
+          </span>
+        </div>
+      </div>
+
       <div>
         <div className="text-zinc-500 uppercase tracking-wide mb-1">G{n} inputs {sideLabel}</div>
         <div className="grid grid-cols-2 gap-x-4">
