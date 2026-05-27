@@ -751,30 +751,38 @@ export default function PredictPage() {
         </div>
 
         {/* Roster editor */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <RosterPanel
-            color="blue" team={team1}
-            roster={effectiveRoster(team1)} oppRoster={effectiveRoster(team2)}
-            playerOptions={Object.keys(params.player_elos).sort()}
-            playerElos={params.player_elos}
-            params={params}
-            defaultRoster={(asOfDate ? (stateAt(team1, asOfDate)?.roster ?? params.rosters[team1]) : params.rosters[team1]) ?? []}
-            onChange={r => setRosters({ ...rosters, [team1]: r })}
-            cleared={() => { const c = { ...rosters }; delete c[team1]; setRosters(c) }}
-            isOverride={!!rosters[team1]}
-          />
-          <RosterPanel
-            color="red" team={team2}
-            roster={effectiveRoster(team2)} oppRoster={effectiveRoster(team1)}
-            playerOptions={Object.keys(params.player_elos).sort()}
-            playerElos={params.player_elos}
-            params={params}
-            defaultRoster={(asOfDate ? (stateAt(team2, asOfDate)?.roster ?? params.rosters[team2]) : params.rosters[team2]) ?? []}
-            onChange={r => setRosters({ ...rosters, [team2]: r })}
-            cleared={() => { const c = { ...rosters }; delete c[team2]; setRosters(c) }}
-            isOverride={!!rosters[team2]}
-          />
-        </div>
+        {(() => {
+          const s1 = teamState(team1)
+          const s2 = teamState(team2)
+          return (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <RosterPanel
+                color="blue" team={team1}
+                roster={effectiveRoster(team1)} oppRoster={effectiveRoster(team2)}
+                playerOptions={Object.keys(params.player_elos).sort()}
+                playerElos={params.player_elos}
+                params={params}
+                defaultRoster={(asOfDate ? (stateAt(team1, asOfDate)?.roster ?? params.rosters[team1]) : params.rosters[team1]) ?? []}
+                teamRwr={s1.rwr} teamGd15={s1.gd15}
+                onChange={r => setRosters({ ...rosters, [team1]: r })}
+                cleared={() => { const c = { ...rosters }; delete c[team1]; setRosters(c) }}
+                isOverride={!!rosters[team1]}
+              />
+              <RosterPanel
+                color="red" team={team2}
+                roster={effectiveRoster(team2)} oppRoster={effectiveRoster(team1)}
+                playerOptions={Object.keys(params.player_elos).sort()}
+                playerElos={params.player_elos}
+                params={params}
+                defaultRoster={(asOfDate ? (stateAt(team2, asOfDate)?.roster ?? params.rosters[team2]) : params.rosters[team2]) ?? []}
+                teamRwr={s2.rwr} teamGd15={s2.gd15}
+                onChange={r => setRosters({ ...rosters, [team2]: r })}
+                cleared={() => { const c = { ...rosters }; delete c[team2]; setRosters(c) }}
+                isOverride={!!rosters[team2]}
+              />
+            </div>
+          )
+        })()}
 
         {/* Bankroll input */}
         <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-3 flex items-center gap-4 text-sm">
@@ -1155,7 +1163,7 @@ function BreakdownPanel({ n, team1, team2, breakdown, params }: {
 
 function RosterPanel({
   color, team, roster, oppRoster, playerOptions, playerElos, params,
-  defaultRoster, onChange, cleared, isOverride,
+  defaultRoster, teamRwr, teamGd15, onChange, cleared, isOverride,
 }: {
   color:          'blue' | 'red'
   team:           string
@@ -1165,6 +1173,8 @@ function RosterPanel({
   playerElos:     Record<string, number>
   params:         ModelParams
   defaultRoster:  string[]                              // baseline (no overrides applied) — to flag subs
+  teamRwr:        number | null                         // rolling-10 win rate (matches model feature)
+  teamGd15:       number | null                         // rolling-5 per-lane avg (matches model feature)
   onChange:       (r: string[]) => void
   cleared:        () => void
   isOverride:     boolean
@@ -1174,9 +1184,21 @@ function RosterPanel({
   const colorCls = color === 'blue' ? 'text-blue-400' : 'text-rose-400'
   return (
     <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
-      <div className="flex items-baseline justify-between mb-3">
+      <div className="flex items-baseline justify-between mb-2">
         <h3 className={`text-sm font-semibold ${colorCls}`}>{team}</h3>
         {isOverride && <button onClick={cleared} className="text-[10px] text-zinc-500 hover:text-zinc-300">Reset roster</button>}
+      </div>
+      <div className="flex gap-4 mb-3 text-[11px]" title="Team-level features going into the prediction. Rwr = rolling win rate over last 10 games. GD15 = mean of 5 players' rolling-5 per-lane gold diff at 15 min.">
+        <div>
+          <span className="text-zinc-500 uppercase tracking-wide">WR (last 10):</span>{' '}
+          <span className="font-mono text-zinc-200">{teamRwr != null ? `${(teamRwr * 100).toFixed(0)}%` : '—'}</span>
+        </div>
+        <div>
+          <span className="text-zinc-500 uppercase tracking-wide">GD15:</span>{' '}
+          <span className={`font-mono ${teamGd15 == null ? 'text-zinc-200' : teamGd15 > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {teamGd15 != null ? `${teamGd15 >= 0 ? '+' : ''}${teamGd15.toFixed(0)}` : '—'}
+          </span>
+        </div>
       </div>
       <div className="space-y-1.5">
         {POS.map((pos, i) => {
