@@ -729,7 +729,9 @@ export default function PredictPage() {
                   <th className="py-2">P({team1})</th>
                   <th className="py-2">P({team2})</th>
                   <th className="py-2 w-32">Actual result</th>
-                  <th className="py-2 w-32">GD15 (blue−red)</th>
+                  <th className="py-2 w-32" title="Per-lane average gold diff at 15 min (blue − red). For total-team diff, divide by 5. E.g., Gen.G's 5-24 G1 team total was 6352, per-lane avg = 1270.">
+                    Per-lane GD15 (b−r)
+                  </th>
                 </tr>
               </thead>
               <tbody>
