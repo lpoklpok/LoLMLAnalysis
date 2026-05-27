@@ -103,6 +103,13 @@ export default function PredictPage() {
   // Indexed by 1..5 (game number)
   const [gameResults, setGameResults] = useState<Record<number, { blue_won: boolean | null; gd15_diff: number | null }>>({})
 
+  // Per-game side override. If unset for a game, falls back to sideFor() default.
+  // 'sym' / 'blue_t1' / 'blue_t2'  (same alphabet as the internal side type)
+  const [gameSideOverrides, setGameSideOverrides] = useState<Record<number, 'sym' | 'blue_t1' | 'blue_t2'>>({})
+
+  // Per-game UI: which rows have their formula breakdown expanded
+  const [expandedGames, setExpandedGames] = useState<Record<number, boolean>>({})
+
   // Load
   useEffect(() => {
     Promise.all([
@@ -171,19 +178,45 @@ export default function PredictPage() {
     return vals.reduce((a, b) => a + b, 0)
   }
 
-  // ----- Per-game prediction -----
-  // Returns P(team1 wins game N), with G2 adjustments applied if game===2.
-  // resultsBeforeN: list of {blue_won, gd15} for games 1..N-1 (used for rwr/gd15/elo updates)
-  // sideFor(N): which team is blue in game N
+  // ----- Per-game prediction with full breakdown -----
+  interface Breakdown {
+    p_t1:             number
+    z_final:          number
+    side:             'blue_t1' | 'blue_t2' | 'sym'
+    // Inputs going into the model
+    s1:               { elo: number | null; rwr: number | null; gd15: number | null; outperf: number | null }
+    s2:               { elo: number | null; rwr: number | null; gd15: number | null; outperf: number | null }
+    rawFeats:         Record<string, number>
+    // Per-feature contributions to z (in t1 perspective, intercept-free; signs match side)
+    contributions:    Array<{ name: string; raw: number; scaled: number; contribution: number }>
+    // Optional adjustments
+    intercept_used:   number          // 0 if symmetric, else the LR intercept
+    po_adj_net:       number          // applied if playoffs && poAdj
+    coaching_adj_net: number          // applied if coachAdj
+    g2_alpha_shrink:  number | null   // alpha_g2 multiplier applied (if g2 shrink active)
+    g2_beta_term:     number | null   // beta_da × draft_advantage (if g2 shrink active)
+    // Intermediate z values
+    z_before_adj:     number          // z from features (+ intercept if sided), before po/coach/g2
+    z_after_adj:      number          // + po/coach adjustments
+  }
+
   function predictGame(
     n: number,
     sideForN: 'blue_t1' | 'blue_t2' | 'sym',
     resultsBefore: Array<{ blue_won: boolean | null; gd15_diff: number | null; side: 'blue_t1' | 'blue_t2' | 'sym' }>,
-  ): number {
-    if (!params) return 0.5
+  ): Breakdown {
+    const empty: Breakdown = {
+      p_t1: 0.5, z_final: 0, side: sideForN,
+      s1: { elo: null, rwr: null, gd15: null, outperf: null },
+      s2: { elo: null, rwr: null, gd15: null, outperf: null },
+      rawFeats: {}, contributions: [],
+      intercept_used: 0, po_adj_net: 0, coaching_adj_net: 0,
+      g2_alpha_shrink: null, g2_beta_term: null,
+      z_before_adj: 0, z_after_adj: 0,
+    }
+    if (!params) return empty
 
     // Apply roster overrides → recompute team elo via sum of player elos if customized.
-    // Otherwise use historical / snapshot elo (which already reflects the right rosters).
     const r1 = effectiveRoster(team1)
     const r2 = effectiveRoster(team2)
     const baseS1 = teamState(team1)
@@ -193,84 +226,115 @@ export default function PredictPage() {
     let s1 = { ...baseS1, elo: e1Override ?? baseS1.elo }
     let s2 = { ...baseS2, elo: e2Override ?? baseS2.elo }
 
-    // Apply prior-game adjustments (rwr/gd15/draft_advantage will be computed later).
-    // ELO update from prior games: standard logistic K-factor.
+    // ELO update from prior games via K-factor
     const K_FACTOR = 24
-    let draft_advantage = 0
     let prev_blue_won: boolean | null = null
     for (let i = 0; i < resultsBefore.length; i++) {
       const r = resultsBefore[i]
       if (r.blue_won == null) continue
-      // Map prev game's "blue won" to team1/team2 win
       const side = r.side
       let t1_won_prev: boolean
       if      (side === 'blue_t1') t1_won_prev = r.blue_won
       else if (side === 'blue_t2') t1_won_prev = !r.blue_won
-      else                         t1_won_prev = r.blue_won  // symmetric — assume team1 was nominally blue
-      // ELO update
+      else                         t1_won_prev = r.blue_won
       const expected1 = 1 / (1 + Math.pow(10, ((s2.elo ?? 1500) - (s1.elo ?? 1500)) / 400))
-      const score1    = t1_won_prev ? 1 : 0
-      const delta     = K_FACTOR * (score1 - expected1)
+      const delta     = K_FACTOR * ((t1_won_prev ? 1 : 0) - expected1)
       s1 = { ...s1, elo: (s1.elo ?? 1500) + delta }
       s2 = { ...s2, elo: (s2.elo ?? 1500) - delta }
       prev_blue_won = r.blue_won
     }
 
-    // Set draft advantage based on previous game's blue winner (for game 2+)
-    if (resultsBefore.length > 0 && prev_blue_won != null) {
-      // +1 if blue lost prev (blue has draft choice this game), -1 otherwise
-      draft_advantage = prev_blue_won ? -1 : 1
-    }
+    // Build features (t1 perspective)
+    const feats     = rawFeatures(params, team1, team2, s1, s2, playoffs)
+    const feats_rev = rawFeatures(params, team2, team1, s2, s1, playoffs)
 
-    // Build features in t1-perspective
-    const feats = rawFeatures(params, team1, team2, s1, s2, playoffs)
-    let zT1 = zFromFeats(params, feats, true) // include intercept (we'll strip it for symmetric)
+    // Per-feature contributions (t1 perspective; sided returns + intercept; sym uses symmetric formula)
+    const contributions: Array<{ name: string; raw: number; scaled: number; contribution: number }> = []
+    let zT1: number
+    let intercept_used: number
 
-    // Side handling
     if (sideForN === 'sym') {
-      // Symmetric: average forward + reverse, no intercept
-      const feats_rev = rawFeatures(params, team2, team1, s2, s1, playoffs)
-      const zFwd = zFromFeats(params, feats, false)
-      const zRev = zFromFeats(params, feats_rev, false)
+      // Symmetric: zFwd_no_intercept - zRev_no_intercept averaged
+      intercept_used = 0
+      let zFwd = 0, zRev = 0
+      for (let i = 0; i < params.features.length; i++) {
+        const f       = params.features[i]
+        const v       = feats[f]
+        const vr      = feats_rev[f]
+        const scaled  = (v  - params.scaler.mean[i]) / params.scaler.scale[i]
+        const scaledR = (vr - params.scaler.mean[i]) / params.scaler.scale[i]
+        const contrib = ((scaled - scaledR) / 2) * params.coef[i]
+        zFwd += scaled  * params.coef[i]
+        zRev += scaledR * params.coef[i]
+        contributions.push({ name: f, raw: v, scaled, contribution: contrib })
+      }
       zT1 = (zFwd - zRev) / 2
-    } else if (sideForN === 'blue_t2') {
-      // team2 is blue. The model is trained with t1=blue interpretation.
-      // For t2 as blue, we compute as if (team2, team1) order then flip the prob.
-      const feats_rev = rawFeatures(params, team2, team1, s2, s1, playoffs)
-      const zT2 = zFromFeats(params, feats_rev, true)
-      zT1 = -zT2  // P(t1 wins) = 1 - P(t2 wins)
+    } else {
+      // Sided: include intercept; flip sign if team2 is blue
+      const useRev = sideForN === 'blue_t2'
+      const usedFeats = useRev ? feats_rev : feats
+      intercept_used = params.intercept ?? 0
+      let z = 0
+      for (let i = 0; i < params.features.length; i++) {
+        const f       = params.features[i]
+        const v       = usedFeats[f]
+        const scaled  = (v - params.scaler.mean[i]) / params.scaler.scale[i]
+        const contrib = scaled * params.coef[i]
+        z += contrib
+        // Report in t1 perspective (flip sign if t2 was blue)
+        const t1_contrib = useRev ? -contrib : contrib
+        contributions.push({ name: f, raw: useRev ? feats[f] : v, scaled, contribution: t1_contrib })
+      }
+      const zWithIntercept = z + intercept_used
+      zT1 = useRev ? -zWithIntercept : zWithIntercept
     }
-    // else 'blue_t1': use zT1 directly (computed above)
+
+    const z_before_adj = zT1
 
     // Playoff team-PO adjustment + coaching adjustment
-    if (playoffs && poAdj) {
-      const po1 = params.teams[team1]?.po_adj ?? 0
-      const po2 = params.teams[team2]?.po_adj ?? 0
-      zT1 += (po1 - po2)
-    }
-    if (coachAdj) {
-      const co1 = params.teams[team1]?.coaching_adj ?? 0
-      const co2 = params.teams[team2]?.coaching_adj ?? 0
-      zT1 += (co1 - co2)
-    }
+    const po1 = params.teams[team1]?.po_adj ?? 0
+    const po2 = params.teams[team2]?.po_adj ?? 0
+    const po_adj_net = (playoffs && poAdj) ? (po1 - po2) : 0
+    zT1 += po_adj_net
 
-    // G2 shrink + draft swap (for n==2)
+    const co1 = params.teams[team1]?.coaching_adj ?? 0
+    const co2 = params.teams[team2]?.coaching_adj ?? 0
+    const coaching_adj_net = coachAdj ? (co1 - co2) : 0
+    zT1 += coaching_adj_net
+
+    const z_after_adj = zT1
+
+    // G2 shrink + draft swap
+    let g2_alpha_shrink: number | null = null
+    let g2_beta_term:    number | null = null
     if (n === 2 && g2Shrink) {
-      // Map draft_advantage from "blue perspective" to "t1 perspective"
-      // Same logic: BETA_DA term is +1 if blue lost prev game (blue has draft choice).
-      // From t1's perspective: if t1 was blue in game1 and t1 lost, blue lost → +1 (t1 has draft).
-      // We use the side mapping for game 1.
       let t1_draft_signed = 0
       if (resultsBefore.length >= 1 && prev_blue_won != null) {
         const side1 = resultsBefore[0].side
-        const blue_was_t1_in_g1 = side1 === 'blue_t1' || (side1 === 'sym' && true) // sym = treat t1 as blue
+        const blue_was_t1_in_g1 = side1 === 'blue_t1' || side1 === 'sym'
         const t1_won_g1 = blue_was_t1_in_g1 ? prev_blue_won : !prev_blue_won
-        t1_draft_signed = t1_won_g1 ? -1 : 1  // t1 has draft choice if they lost
+        t1_draft_signed = t1_won_g1 ? -1 : 1
       }
-      zT1 = params.alpha_g2 * zT1 + params.beta_da * t1_draft_signed
+      g2_alpha_shrink = params.alpha_g2
+      g2_beta_term    = params.beta_da * t1_draft_signed
+      zT1 = params.alpha_g2 * zT1 + g2_beta_term
     }
 
-    return sigmoid(zT1)
+    return {
+      p_t1:             sigmoid(zT1),
+      z_final:          zT1,
+      side:             sideForN,
+      s1, s2,
+      rawFeats:         feats,
+      contributions,
+      intercept_used,
+      po_adj_net,
+      coaching_adj_net,
+      g2_alpha_shrink,
+      g2_beta_term,
+      z_before_adj,
+      z_after_adj,
+    }
   }
 
   // Determine the side for each game given user's chosen side mode.
@@ -308,17 +372,21 @@ export default function PredictPage() {
     const needed = Math.ceil(bestOf / 2)
     const games: Array<{
       n: number; side: 'blue_t1' | 'blue_t2' | 'sym'
-      p_t1: number; entered: boolean
+      sideDefault: 'blue_t1' | 'blue_t2' | 'sym'
+      sideOverridden: boolean
+      entered: boolean
+      breakdown: ReturnType<typeof predictGame>
     }> = []
 
-    // For each game N, build resultsBefore using actual entered results
     let t1_wins = 0, t2_wins = 0
     for (let n = 1; n <= bestOf; n++) {
       const resultsBefore: Array<{ blue_won: boolean | null; gd15_diff: number | null; side: 'blue_t1' | 'blue_t2' | 'sym' }> = []
       let prevG1Result: boolean | null = null
       for (let k = 1; k < n; k++) {
         const gr = gameResults[k]
-        const side_k = sideFor(k, g1SideRoot, prevG1Result)
+        // Use the actual side that game k WAS predicted with (override if set, else default)
+        const default_k = sideFor(k, g1SideRoot, prevG1Result)
+        const side_k    = gameSideOverrides[k] ?? default_k
         resultsBefore.push({
           blue_won:  gr?.blue_won  ?? null,
           gd15_diff: gr?.gd15_diff ?? null,
@@ -326,47 +394,43 @@ export default function PredictPage() {
         })
         if (k === 1) prevG1Result = gr?.blue_won ?? null
       }
-      const sideN = sideFor(n, g1SideRoot, prevG1Result)
-      const p_t1 = predictGame(n, sideN, resultsBefore)
-      const gr_n = gameResults[n]
-      const entered = gr_n?.blue_won != null
-      games.push({ n, side: sideN, p_t1, entered })
+      const sideDefault = sideFor(n, g1SideRoot, prevG1Result)
+      const sideN       = gameSideOverrides[n] ?? sideDefault
+      const breakdown   = predictGame(n, sideN, resultsBefore)
+      const gr_n        = gameResults[n]
+      const entered     = gr_n?.blue_won != null
+      games.push({
+        n, side: sideN, sideDefault,
+        sideOverridden: !!gameSideOverrides[n],
+        entered, breakdown,
+      })
 
-      // Tally wins if entered
       if (entered) {
         const t1_won = sideN === 'blue_t1' ? gr_n.blue_won! : sideN === 'blue_t2' ? !gr_n.blue_won! : gr_n.blue_won!
         if (t1_won) t1_wins++; else t2_wins++
       }
-
-      if (t1_wins >= needed || t2_wins >= needed) {
-        // Series clinched — remaining games are moot, stop predicting
-        // (still show their predictions but they're hypothetical)
-      }
     }
 
-    // Series probability via tree walk (using each game's per-game prediction
-    // for unentered games, and the entered result for entered games)
+    // Series probability via tree walk
     function seriesProb(): number {
-      // Build per-game P(t1 wins) using the predictions (treating entered games
-      // as resolved)
       function walk(t1w: number, t2w: number, idx: number): number {
         if (t1w >= needed) return 1
         if (t2w >= needed) return 0
-        if (idx >= bestOf) return 0.5  // shouldn't reach
+        if (idx >= bestOf) return 0.5
         const g = games[idx]
         const gr = gameResults[idx + 1]
         if (gr?.blue_won != null) {
           const t1_won = g.side === 'blue_t1' ? gr.blue_won : g.side === 'blue_t2' ? !gr.blue_won : gr.blue_won
           return t1_won ? walk(t1w + 1, t2w, idx + 1) : walk(t1w, t2w + 1, idx + 1)
         }
-        return g.p_t1 * walk(t1w + 1, t2w, idx + 1) + (1 - g.p_t1) * walk(t1w, t2w + 1, idx + 1)
+        return g.breakdown.p_t1 * walk(t1w + 1, t2w, idx + 1) + (1 - g.breakdown.p_t1) * walk(t1w, t2w + 1, idx + 1)
       }
       return walk(0, 0, 0)
     }
-    const p_series_t1 = bestOf === 1 ? games[0].p_t1 : seriesProb()
+    const p_series_t1 = bestOf === 1 ? games[0].breakdown.p_t1 : seriesProb()
 
     return { games, p_series_t1, t1_wins, t2_wins, needed }
-  }, [params, history, team1, team2, bestOf, sideMode, playoffs, g2Shrink, poAdj, coachAdj, asOfDate, gameResults, rosters])
+  }, [params, history, team1, team2, bestOf, sideMode, playoffs, g2Shrink, poAdj, coachAdj, asOfDate, gameResults, rosters, gameSideOverrides])
 
   if (err) return <div className="p-8 text-red-400">{err}</div>
   if (!params || !history) return <div className="p-8 text-zinc-400">Loading…</div>
@@ -457,6 +521,7 @@ export default function PredictPage() {
         {predictions && (
           <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
             <h2 className="text-lg font-semibold mb-3">Predictions</h2>
+            <div className="text-[11px] text-zinc-500 mb-2">Click a game row to see the full formula breakdown. Use the side dropdown to override on a per-game basis.</div>
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-zinc-500 text-left">
@@ -470,15 +535,38 @@ export default function PredictPage() {
               </thead>
               <tbody>
                 {predictions.games.map(g => (
-                  <tr key={g.n} className="border-t border-zinc-800">
-                    <td className="py-2 font-mono">G{g.n}</td>
-                    <td className="py-2 text-zinc-400">
-                      {g.side === 'sym' ? '—' :
-                       g.side === 'blue_t1' ? <><span className="text-blue-400">{team1}</span> · {team2}</> :
-                                              <><span className="text-blue-400">{team2}</span> · {team1}</>}
+                  <>
+                  <tr key={`${g.n}-row`} className="border-t border-zinc-800">
+                    <td className="py-2 font-mono">
+                      <button onClick={() => setExpandedGames({ ...expandedGames, [g.n]: !expandedGames[g.n] })}
+                        className="text-zinc-300 hover:text-zinc-100">
+                        {expandedGames[g.n] ? '▼' : '▶'} G{g.n}
+                      </button>
                     </td>
-                    <td className="py-2 font-mono text-emerald-400">{(g.p_t1 * 100).toFixed(1)}%</td>
-                    <td className="py-2 font-mono text-rose-400">{((1 - g.p_t1) * 100).toFixed(1)}%</td>
+                    <td className="py-2">
+                      <select
+                        value={gameSideOverrides[g.n] ?? g.sideDefault}
+                        onChange={e => {
+                          const v = e.target.value as 'sym' | 'blue_t1' | 'blue_t2'
+                          // If matches default, clear the override
+                          if (v === g.sideDefault) {
+                            const c = { ...gameSideOverrides }
+                            delete c[g.n]
+                            setGameSideOverrides(c)
+                          } else {
+                            setGameSideOverrides({ ...gameSideOverrides, [g.n]: v })
+                          }
+                        }}
+                        className="bg-zinc-950 border border-zinc-700 rounded px-1 py-0.5 text-xs"
+                      >
+                        <option value="sym">Symmetric (no side)</option>
+                        <option value="blue_t1">{team1} is blue</option>
+                        <option value="blue_t2">{team2} is blue</option>
+                      </select>
+                      {g.sideOverridden && <span className="text-[9px] text-amber-400 ml-1">override</span>}
+                    </td>
+                    <td className="py-2 font-mono text-emerald-400">{(g.breakdown.p_t1 * 100).toFixed(1)}%</td>
+                    <td className="py-2 font-mono text-rose-400">{((1 - g.breakdown.p_t1) * 100).toFixed(1)}%</td>
                     <td className="py-2">
                       <select
                         value={gameResults[g.n]?.blue_won == null ? '' :
@@ -517,6 +605,14 @@ export default function PredictPage() {
                         placeholder="—" />
                     </td>
                   </tr>
+                  {expandedGames[g.n] && (
+                    <tr key={`${g.n}-detail`} className="border-t border-zinc-800/50 bg-zinc-950/50">
+                      <td colSpan={6} className="px-4 py-3">
+                        <BreakdownPanel n={g.n} team1={team1} team2={team2} breakdown={g.breakdown} params={params} />
+                      </td>
+                    </tr>
+                  )}
+                  </>
                 ))}
               </tbody>
             </table>
@@ -555,6 +651,130 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
       <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} className="accent-emerald-500" />
       <span className="text-sm text-zinc-300">{label}</span>
     </label>
+  )
+}
+
+function BreakdownPanel({ n, team1, team2, breakdown, params }: {
+  n:         number
+  team1:     string
+  team2:     string
+  breakdown: {
+    p_t1: number; z_final: number; side: 'blue_t1' | 'blue_t2' | 'sym'
+    s1: { elo: number | null; rwr: number | null; gd15: number | null; outperf: number | null }
+    s2: { elo: number | null; rwr: number | null; gd15: number | null; outperf: number | null }
+    rawFeats: Record<string, number>
+    contributions: Array<{ name: string; raw: number; scaled: number; contribution: number }>
+    intercept_used: number; po_adj_net: number; coaching_adj_net: number
+    g2_alpha_shrink: number | null; g2_beta_term: number | null
+    z_before_adj: number; z_after_adj: number
+  }
+  params: ModelParams
+}) {
+  const fmt  = (v: number, d = 4) => v.toFixed(d)
+  const sign = (v: number, d = 4) => (v >= 0 ? '+' : '') + v.toFixed(d)
+  const sideLabel =
+    breakdown.side === 'sym'     ? '(symmetric — no side)' :
+    breakdown.side === 'blue_t1' ? `(${team1} blue · ${team2} red)` :
+                                   `(${team2} blue · ${team1} red)`
+  return (
+    <div className="text-xs space-y-3">
+      <div>
+        <div className="text-zinc-500 uppercase tracking-wide mb-1">G{n} inputs {sideLabel}</div>
+        <div className="grid grid-cols-2 gap-x-4">
+          <div className="border-l-2 border-blue-900/60 pl-2">
+            <div className="text-blue-400 font-semibold">{team1}</div>
+            <div className="font-mono text-zinc-300">
+              elo {breakdown.s1.elo?.toFixed(0) ?? '—'} ·
+              rwr {breakdown.s1.rwr?.toFixed(2) ?? '—'} ·
+              gd15 {breakdown.s1.gd15?.toFixed(0) ?? '—'} ·
+              outperf {breakdown.s1.outperf?.toFixed(3) ?? '—'}
+            </div>
+          </div>
+          <div className="border-l-2 border-rose-900/60 pl-2">
+            <div className="text-rose-400 font-semibold">{team2}</div>
+            <div className="font-mono text-zinc-300">
+              elo {breakdown.s2.elo?.toFixed(0) ?? '—'} ·
+              rwr {breakdown.s2.rwr?.toFixed(2) ?? '—'} ·
+              gd15 {breakdown.s2.gd15?.toFixed(0) ?? '—'} ·
+              outperf {breakdown.s2.outperf?.toFixed(3) ?? '—'}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div className="text-zinc-500 uppercase tracking-wide mb-1">Per-feature contribution to z ({team1} perspective)</div>
+        <table className="font-mono text-zinc-300">
+          <thead>
+            <tr className="text-[10px] text-zinc-500">
+              <th className="text-left pr-3">feature</th>
+              <th className="text-right pr-3">raw diff</th>
+              <th className="text-right pr-3">scaled</th>
+              <th className="text-right pr-3">× coef</th>
+              <th className="text-right pr-3">contribution</th>
+            </tr>
+          </thead>
+          <tbody>
+            {breakdown.contributions.map((c, i) => (
+              <tr key={c.name}>
+                <td className="pr-3 text-zinc-400">{c.name}</td>
+                <td className="text-right pr-3">{sign(c.raw, 3)}</td>
+                <td className="text-right pr-3">{sign(c.scaled, 3)}</td>
+                <td className="text-right pr-3 text-zinc-500">{sign(params.coef[i], 3)}</td>
+                <td className={`text-right pr-3 ${c.contribution >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{sign(c.contribution, 4)}</td>
+              </tr>
+            ))}
+            {breakdown.intercept_used !== 0 && (
+              <tr className="border-t border-zinc-800/60">
+                <td className="pr-3 text-zinc-400">intercept</td>
+                <td className="text-right pr-3">—</td>
+                <td className="text-right pr-3">—</td>
+                <td className="text-right pr-3">—</td>
+                <td className={`text-right pr-3 ${breakdown.intercept_used >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{sign(breakdown.intercept_used, 4)}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="border-t border-zinc-800/60 pt-2 font-mono space-y-0.5">
+        <div className="flex justify-between">
+          <span className="text-zinc-400">z from features {breakdown.intercept_used !== 0 ? '+ intercept' : '(symmetric, no intercept)'}:</span>
+          <span className="text-zinc-200">{sign(breakdown.z_before_adj)}</span>
+        </div>
+        {breakdown.po_adj_net !== 0 && (
+          <div className="flex justify-between">
+            <span className="text-zinc-400">+ playoff team adj ({team1} − {team2}):</span>
+            <span className={breakdown.po_adj_net >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{sign(breakdown.po_adj_net)}</span>
+          </div>
+        )}
+        {breakdown.coaching_adj_net !== 0 && (
+          <div className="flex justify-between">
+            <span className="text-zinc-400">+ coaching adj ({team1} − {team2}):</span>
+            <span className={breakdown.coaching_adj_net >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{sign(breakdown.coaching_adj_net)}</span>
+          </div>
+        )}
+        {(breakdown.po_adj_net !== 0 || breakdown.coaching_adj_net !== 0) && (
+          <div className="flex justify-between">
+            <span className="text-zinc-400">z after team adjustments:</span>
+            <span className="text-zinc-200">{sign(breakdown.z_after_adj)}</span>
+          </div>
+        )}
+        {breakdown.g2_alpha_shrink != null && (
+          <div className="text-zinc-500 italic text-[11px]">
+            G2 shrink: z_G2 = {fmt(breakdown.g2_alpha_shrink, 3)} × z + {sign(breakdown.g2_beta_term ?? 0, 4)} (β·draft_adv)
+          </div>
+        )}
+        <div className="flex justify-between border-t border-zinc-800/60 pt-1 mt-1">
+          <span className="text-zinc-400">Final z:</span>
+          <span className="text-zinc-100">{sign(breakdown.z_final)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-zinc-400">sigmoid(z) = P({team1}):</span>
+          <span className="text-emerald-400">{(breakdown.p_t1 * 100).toFixed(2)}%</span>
+        </div>
+      </div>
+    </div>
   )
 }
 
