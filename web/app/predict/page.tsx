@@ -36,7 +36,9 @@ interface PickStats {
 }
 interface TeamPickTendencies {
   after_loss:     PickStats
+  after_win?:     PickStats
   as_g1_favorite: PickStats
+  as_g1_underdog?: PickStats
 }
 interface PickTendenciesFile {
   generated: string
@@ -1193,7 +1195,13 @@ function TendencyCard({ team, stats, color }: {
     <div className="bg-zinc-950 border border-zinc-800 rounded p-3 text-xs">
       <h3 className={`text-sm font-semibold ${colorCls} mb-2`}>{team}</h3>
       <TendencyBlock title="After a loss (had draft choice)" stats={stats.after_loss} />
+      {stats.after_win && (
+        <TendencyBlock title="After a win (opponent chose)"   stats={stats.after_win} />
+      )}
       <TendencyBlock title="As G1 favorite (ELO advantage)"  stats={stats.as_g1_favorite} />
+      {stats.as_g1_underdog && (
+        <TendencyBlock title="As G1 underdog (ELO disadvantage)" stats={stats.as_g1_underdog} />
+      )}
     </div>
   )
 }

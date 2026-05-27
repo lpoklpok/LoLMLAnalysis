@@ -86,10 +86,11 @@ def main() -> None:
     )
     merged = merged.sort_values("date").reset_index(drop=True)
 
-    # For "after loss" lookup, need previous game in same series for each team
-    # We walk per (day, pair) ordered list of games
-    after_loss: dict[str, list[dict]] = defaultdict(list)
-    as_g1_fav:  dict[str, list[dict]] = defaultdict(list)
+    # For "after loss/win" lookup, need previous game in same series for each team
+    after_loss: dict[str, list[dict]] = defaultdict(list)   # team had draft choice
+    after_win:  dict[str, list[dict]] = defaultdict(list)   # team did NOT have draft choice (opp chose)
+    as_g1_fav:  dict[str, list[dict]] = defaultdict(list)   # G1 ELO favorite
+    as_g1_dog:  dict[str, list[dict]] = defaultdict(list)   # G1 ELO underdog
 
     for (_day, _pair), group in merged.groupby(["_day", "_pair"]):
         group = group.sort_values("date").reset_index(drop=True)
@@ -104,40 +105,35 @@ def main() -> None:
             if pd.isna(blue_first) or pd.isna(blue_won) or pd.isna(game_n): continue
             blue_first = int(blue_first); game_n = int(game_n)
 
-            # ---- (a) After-loss: did EITHER team lose the previous game? ----
+            # Helper to record an outcome for one of the teams in this game
+            def record(bucket: dict[str, list[dict]], team: str) -> None:
+                if team == blue_team:
+                    bucket[team].append({"side": "blue", "first_pick": bool(blue_first)})
+                elif team == red_team:
+                    bucket[team].append({"side": "red",  "first_pick": not bool(blue_first)})
+
+            # ---- (a) After-loss / after-win: which team lost/won previous game in series ----
             if i > 0:
                 prev = group.iloc[i - 1]
                 prev_blue_won = prev["blue_team_result"]
-                # Map prev win to per-team
                 if not pd.isna(prev_blue_won):
                     prev_blue_won = int(prev_blue_won)
-                    # Previous game's loser had draft choice for THIS game
-                    # Previous blue == current blue or red, etc.
                     prev_blue = prev["blue_team_teamname"]
                     prev_red  = prev["red_team_teamname"]
-                    if prev_blue_won == 1:
-                        loser_team = prev_red
-                    else:
-                        loser_team = prev_blue
-                    # Now: where did `loser_team` end up in THIS game?
-                    if loser_team == blue_team:
-                        side       = "blue"
-                        first_pick = bool(blue_first)
-                    elif loser_team == red_team:
-                        side       = "red"
-                        first_pick = not bool(blue_first)
-                    else:
-                        side = None; first_pick = None
-                    if side is not None:
-                        after_loss[loser_team].append({"side": side, "first_pick": first_pick})
+                    loser_team  = prev_red  if prev_blue_won == 1 else prev_blue
+                    winner_team = prev_blue if prev_blue_won == 1 else prev_red
+                    record(after_loss, loser_team)
+                    record(after_win,  winner_team)
 
-            # ---- (b) G1 favorite: was this G1, and which team was favored by ELO? ----
+            # ---- (b) G1 favorite / underdog: which team had ELO advantage at G1? ----
             if game_n == 1 and not pd.isna(row.get("elo_diff")):
                 elo_diff = float(row["elo_diff"])
-                if   elo_diff > 0: fav, side_fav = blue_team, "blue"; first_fav = bool(blue_first)
-                elif elo_diff < 0: fav, side_fav = red_team,  "red";  first_fav = not bool(blue_first)
-                else: continue
-                as_g1_fav[fav].append({"side": side_fav, "first_pick": first_fav})
+                if   elo_diff > 0:
+                    record(as_g1_fav, blue_team)
+                    record(as_g1_dog, red_team)
+                elif elo_diff < 0:
+                    record(as_g1_fav, red_team)
+                    record(as_g1_dog, blue_team)
 
     # Aggregate
     def aggregate(samples: list[dict]) -> dict:
@@ -155,14 +151,16 @@ def main() -> None:
                       "second":{"n": n_secd,  "pct": round(n_secd / n, 4)}},
         }
 
-    teams = set(after_loss.keys()) | set(as_g1_fav.keys())
+    teams = set(after_loss.keys()) | set(after_win.keys()) | set(as_g1_fav.keys()) | set(as_g1_dog.keys())
     out = {
         "generated": datetime.now(timezone.utc).isoformat(),
         "window":    "2026 games only",
         "teams":     {
             t: {
                 "after_loss":     aggregate(after_loss[t]),
+                "after_win":      aggregate(after_win[t]),
                 "as_g1_favorite": aggregate(as_g1_fav[t]),
+                "as_g1_underdog": aggregate(as_g1_dog[t]),
             } for t in sorted(teams)
         },
     }
