@@ -1,13 +1,11 @@
 """
 export_team_state_history.py
-For each team active in the last N days, exports a per-game timeline of
-"team state BEFORE the game" (elo, rwr from features.csv; roster + team-level
-gd15/outperf snapshot derived from games.csv). Powers /predict page's date
-toggle so the user can replay predictions as-of any point in the last 30 days.
+Per-team timeline of "team state BEFORE the game" (elo, rwr, gd15, roster).
+Powers /predict page's date toggle.
 
-The page uses this to look up "team X state immediately before date D"
-by finding the latest snapshot with date >= D (which corresponds to the
-team's next game's BEFORE-state, i.e. their state at D).
+Data sources:
+  - Supabase `game_features` (production-fresh elo, blue_win → rolling rwr)
+  - Local games.csv (rosters + per-position gd15 → team rolling gd15)
 
 Output: web/public/team_state_history.json
 """
@@ -16,77 +14,110 @@ from __future__ import annotations
 
 import json
 import os
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import mean
 
 import pandas as pd
+import requests
+from dotenv import load_dotenv
 
 ROOT       = Path(os.path.dirname(__file__)).parent
-FEATS_CSV  = ROOT / "data" / "processed" / "features.csv"
 GAMES_CSV  = ROOT / "data" / "processed" / "games.csv"
 OUT_PATH   = ROOT / "web" / "public" / "team_state_history.json"
+load_dotenv(ROOT / ".env")
+
 WINDOW_DAYS = 30
-POSITIONS = ["top", "jng", "mid", "bot", "sup"]
-GD15_ROLL  = 5  # matches feature_engineering.GD15_ROLL
+POSITIONS   = ["top", "jng", "mid", "bot", "sup"]
+GD15_ROLL   = 5
+RWR_ROLL    = 10
 
 
-def _rolling_gd15(hist: list[float], n: int = GD15_ROLL) -> float | None:
+def _rolling_mean(hist: deque, n: int) -> float | None:
     if not hist: return None
-    window = hist[-n:]
-    return float(mean(window)) if window else None
+    return float(sum(hist) / len(hist))
+
+
+def _pull_game_features() -> pd.DataFrame:
+    URL = (os.environ["SUPABASE_URL"]).strip('"')
+    KEY = (os.environ["SUPABASE_SERVICE_KEY"]).strip('"')
+    rows = []
+    offset = 0
+    while True:
+        r = requests.get(
+            f"{URL}/rest/v1/game_features",
+            params={
+                "select": "date,blue_team,red_team,blue_elo,red_elo,blue_win",
+                "order":  "date.asc",
+                "limit":  "1000",
+                "offset": str(offset),
+            },
+            headers={"apikey": KEY, "Authorization": f"Bearer {KEY}"},
+            timeout=20,
+        )
+        r.raise_for_status()
+        batch = r.json()
+        if not batch: break
+        rows.extend(batch)
+        if len(batch) < 1000: break
+        offset += 1000
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], utc=True, errors="coerce")
+    return df
 
 
 def main() -> None:
-    feats = pd.read_csv(FEATS_CSV, low_memory=False)
-    feats["date"] = pd.to_datetime(feats["date"], utc=True, errors="coerce")
+    print("Pulling game_features from Supabase…")
+    gf = _pull_game_features()
+    print(f"  {len(gf):,} rows  ({gf['date'].min()} → {gf['date'].max()})")
+
+    # Walk chronologically to build per-team rwr history.
+    # For each game, the BEFORE-rwr = rolling mean of last 10 prior results.
+    team_wins: dict[str, deque] = defaultdict(lambda: deque(maxlen=RWR_ROLL))
+    # team_state_at_game_idx[i] = (blue_rwr, red_rwr) BEFORE game i
+    rwrs_blue: list[float | None] = []
+    rwrs_red:  list[float | None] = []
+    for _, row in gf.iterrows():
+        b = row["blue_team"]; r = row["red_team"]
+        rwrs_blue.append(_rolling_mean(team_wins[b], RWR_ROLL))
+        rwrs_red.append( _rolling_mean(team_wins[r], RWR_ROLL))
+        team_wins[b].append(int(row["blue_win"]))
+        team_wins[r].append(int(1 - row["blue_win"]))
+    gf["blue_rwr"] = rwrs_blue
+    gf["red_rwr"]  = rwrs_red
+
     cutoff = datetime.now(timezone.utc) - timedelta(days=WINDOW_DAYS)
-    feats = feats[feats["date"] >= cutoff].copy().sort_values("date")
-    print(f"features.csv: {len(feats):,} rows in last {WINDOW_DAYS}d")
 
-    # Load ALL games chronologically to rebuild per-player rolling gd15 history.
-    # Per-player rolling gd15 is what feeds the team-level gd15 feature.
-    games_all = pd.read_csv(GAMES_CSV, low_memory=False,
-                            usecols=lambda c: c in {
-                                "date", "blue_team_teamname", "red_team_teamname",
-                                *(f"{s}_{p}_playername"      for s in ("blue", "red") for p in POSITIONS),
-                                *(f"{s}_{p}_golddiffat15"    for s in ("blue", "red") for p in POSITIONS),
-                            })
-    games_all["date"] = pd.to_datetime(games_all["date"], utc=True, errors="coerce")
-    games_all = games_all.sort_values("date")
+    # Per-player gd15 rolling history from games.csv (rebuild from all time)
+    print("Loading games.csv for gd15 + rosters…")
+    games = pd.read_csv(GAMES_CSV, low_memory=False, usecols=lambda c: c in {
+        "date", "blue_team_teamname", "red_team_teamname",
+        *(f"{s}_{p}_playername"   for s in ("blue", "red") for p in POSITIONS),
+        *(f"{s}_{p}_golddiffat15" for s in ("blue", "red") for p in POSITIONS),
+    })
+    games["date"] = pd.to_datetime(games["date"], utc=True, errors="coerce")
+    games = games.sort_values("date")
 
-    # Per-player rolling gd15 history (we'll snapshot team gd15 BEFORE each
-    # game by computing mean of last GD15_ROLL games per player on the roster,
-    # then averaging across the 5 players).
-    player_gd15: dict[str, list[float]] = defaultdict(list)
-
-    # team_gd15_by_ts: (team, ts ISO) -> team gd15 BEFORE that game
-    team_gd15_by_ts: dict[tuple[str, str], float] = {}
+    player_gd15: dict[str, deque] = defaultdict(lambda: deque(maxlen=GD15_ROLL * 3))
+    team_gd15_by_ts:  dict[tuple[str, str], float] = {}
     rosters_by_team_ts: dict[tuple[str, str], list[str]] = {}
-
-    for _, row in games_all.iterrows():
+    for _, row in games.iterrows():
         ts = row["date"].isoformat()
         for side in ("blue", "red"):
             team = row[f"{side}_team_teamname"]
             if not isinstance(team, str): continue
-            roster = []
-            for pos in POSITIONS:
-                p = row.get(f"{side}_{pos}_playername")
-                if isinstance(p, str) and p:
-                    roster.append(p)
+            roster = [row.get(f"{side}_{p}_playername") for p in POSITIONS]
+            roster = [p for p in roster if isinstance(p, str) and p]
             if len(roster) == 5:
                 rosters_by_team_ts[(team, ts)] = roster
-                # Compute team gd15 BEFORE this game using current rolling per-player history
                 lane_means: list[float] = []
                 for p in roster:
-                    r = _rolling_gd15(player_gd15[p])
-                    if r is not None:
-                        lane_means.append(r)
+                    if player_gd15[p]:
+                        lane_means.append(mean(list(player_gd15[p])[-GD15_ROLL:]))
                 if lane_means:
                     team_gd15_by_ts[(team, ts)] = float(mean(lane_means))
-
-        # NOW update player_gd15 history with THIS game's per-position gd15
+        # Then update history
         for side in ("blue", "red"):
             for pos in POSITIONS:
                 p  = row.get(f"{side}_{pos}_playername")
@@ -94,28 +125,25 @@ def main() -> None:
                 if isinstance(p, str) and p and pd.notna(gd):
                     player_gd15[p].append(float(gd))
 
+    # Build per-team snapshots from game_features (recent window only)
     teams: dict[str, list[dict]] = defaultdict(list)
+    recent = gf[gf["date"] >= cutoff]
+    print(f"Building snapshots from {len(recent):,} games in last {WINDOW_DAYS}d…")
+    for _, row in recent.iterrows():
+        ts = row["date"].isoformat()
+        for side, opp in (("blue", "red"), ("red", "blue")):
+            team = row[f"{side}_team"]
+            elo  = row[f"{side}_elo"]
+            rwr  = row[f"{side}_rwr"]
+            if not isinstance(team, str) or pd.isna(elo): continue
+            teams[team].append({
+                "date":   ts,
+                "elo":    float(elo),
+                "rwr":    None if rwr is None or pd.isna(rwr) else float(rwr),
+                "gd15":   team_gd15_by_ts.get((team, ts)),
+                "roster": rosters_by_team_ts.get((team, ts), []),
+            })
 
-    def _push(team: str, side: str, row: pd.Series) -> None:
-        elo = row.get(f"{side}_elo")
-        rwr = row.get(f"{side}_rwr")
-        if pd.isna(elo): return
-        ts  = row["date"].isoformat()
-        gd15 = team_gd15_by_ts.get((team, ts))
-        teams[team].append({
-            "date":    ts,
-            "elo":     float(elo),
-            "rwr":     None if pd.isna(rwr) else float(rwr),
-            "gd15":    gd15,
-            "roster":  rosters_by_team_ts.get((team, ts), []),
-        })
-
-    for _, row in feats.iterrows():
-        b = row.get("blue_team"); r = row.get("red_team")
-        if isinstance(b, str): _push(b, "blue", row)
-        if isinstance(r, str): _push(r, "red",  row)
-
-    # Sort each team's timeline by date asc (already sorted, but safe)
     for team in teams:
         teams[team].sort(key=lambda e: e["date"])
 
@@ -128,8 +156,8 @@ def main() -> None:
     }
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUT_PATH.write_text(json.dumps(out, separators=(",", ":")))
-    n_total = sum(len(v) for v in teams.values())
     size_kb = OUT_PATH.stat().st_size // 1024
+    n_total = sum(len(v) for v in teams.values())
     print(f"Wrote {OUT_PATH}  ({len(teams)} teams, {n_total} snapshots, {size_kb}KB)")
 
 
