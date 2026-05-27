@@ -302,10 +302,59 @@ export default function PreLivePage() {
   const [subs, setSubs] = useState<Record<string, { blue: string[]; red: string[] }>>({})
   const [logitNudge, setLogitNudge] = useState<Record<string, number>>({})
 
-  // Per-market local toggles + sizes (not yet wired to quoter — see notes)
-  const [marketEnabled, setMarketEnabled] = useState<Record<string, boolean>>({}) // key = `${slug}|${market_type}|${outcome_idx}`
+  // Per-market toggles wired to /api/quoter/toggle (writes to Supabase
+  // quoter_active table, which the Fly quoter polls each tick).
+  const [activeQuotes, setActiveQuotes] = useState<Record<string, { enabled: boolean; max_size_usd: number; edge_threshold_pp: number }>>({})
   const [maxSizeUsd, setMaxSizeUsd]       = useState(25)
   const [edgeThreshold, setEdgeThreshold] = useState(3)
+  const [submitting, setSubmitting]       = useState(false)
+  const activeKey = (slug: string, mt: string, idx: number) => `${slug}|${mt}|${idx}`
+
+  async function reloadActive() {
+    if (!selectedSlug) return
+    try {
+      const r = await fetch(`/api/quoter/active?slug=${encodeURIComponent(selectedSlug)}`, { cache: 'no-store' })
+      const j = await r.json()
+      const map: Record<string, { enabled: boolean; max_size_usd: number; edge_threshold_pp: number }> = {}
+      for (const row of j.rows ?? []) {
+        map[activeKey(row.event_slug, row.market_type, row.outcome_idx)] = {
+          enabled: row.enabled, max_size_usd: row.max_size_usd, edge_threshold_pp: row.edge_threshold_pp,
+        }
+      }
+      setActiveQuotes(map)
+    } catch (e) { console.warn('reload active failed', e) }
+  }
+  useEffect(() => { reloadActive() }, [selectedSlug])
+
+  async function toggleQuote(args: {
+    market_type: string; outcome_idx: 0 | 1; enabled: boolean
+    outcome_name?: string; match_question?: string
+    target_fair?: number | null; token_id?: string | null
+  }) {
+    if (!selectedSlug || !selectedEvent) return
+    setSubmitting(true)
+    try {
+      await fetch('/api/quoter/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event_slug: selectedSlug,
+          event_title: selectedEvent.title,
+          market_type: args.market_type,
+          outcome_idx: args.outcome_idx,
+          outcome_name: args.outcome_name,
+          match_question: args.match_question,
+          enabled: args.enabled,
+          max_size_usd: maxSizeUsd,
+          edge_threshold_pp: edgeThreshold,
+          target_fair: args.target_fair,
+          token_id: args.token_id,
+        }),
+      })
+      await reloadActive()
+    } catch (e) { console.warn(e) }
+    setSubmitting(false)
+  }
 
   useEffect(() => {
     Promise.all([
@@ -523,9 +572,14 @@ export default function PreLivePage() {
             {detail && probs && (
               <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
                 <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
-                  <h2 className="text-sm font-semibold text-gray-300">Submarkets — model vs market</h2>
+                  <h2 className="text-sm font-semibold text-gray-300">
+                    Submarkets — model vs market
+                    <span className="text-xs text-gray-500 ml-2">
+                      {Object.values(activeQuotes).filter(q => q.enabled).length} active quote(s)
+                    </span>
+                  </h2>
                   <div className="flex gap-3 items-center text-xs text-gray-500">
-                    <label>Default size: <span className="text-emerald-300 font-mono">${maxSizeUsd}</span></label>
+                    <label>Size: <span className="text-emerald-300 font-mono">${maxSizeUsd}</span></label>
                     <input type="range" min={5} max={500} step={5} value={maxSizeUsd}
                            onChange={e => setMaxSizeUsd(parseInt(e.target.value))} className="accent-emerald-500" />
                     <label>Edge ≥ <span className="text-emerald-300 font-mono">{edgeThreshold}pp</span></label>
@@ -533,6 +587,91 @@ export default function PreLivePage() {
                            onChange={e => setEdgeThreshold(parseFloat(e.target.value))} className="accent-emerald-500" />
                   </div>
                 </div>
+
+                {/* Bulk actions */}
+                {detail && probs && (
+                  <div className="flex gap-2 mb-3 flex-wrap text-xs">
+                    <button
+                      disabled={submitting}
+                      onClick={async () => {
+                        const rows: Array<{ market_type: string; outcome_idx: 0|1; enabled: boolean; outcome_name?: string; match_question?: string; target_fair?: number; token_id?: string }> = []
+                        for (const sm of detail.submarkets) {
+                          // Recompute favIdx + edge for each submarket (duplicates the
+                          // logic from the row render — fine for v0).
+                          const mid1 = sm.outcome_mids[0]; const mid2 = sm.outcome_mids[1]
+                          const o1IsT1 = _norm(sm.outcomes[0]) === _norm(selectedEvent.team1)
+                          const bo = selectedEvent.best_of ?? 5
+                          let fair_o1: number | null = null
+                          const lab = sm.market_type
+                          if (lab === 'match_winner') fair_o1 = o1IsT1 ? probs.series : 1 - probs.series
+                          else if (lab === 'game_handicap') {
+                            const h = parseHandicap(sm.question)
+                            if (h) {
+                              const fIdx = matchOutcome(sm.outcomes, h.favName)
+                              if (fIdx !== null) {
+                                const favIsT1 = (fIdx === 0) === o1IsT1
+                                fair_o1 = fIdx === 0
+                                  ? coverProb(probs, bo, Math.ceil(h.spread), favIsT1 ? 1 : 2)
+                                  : 1 - coverProb(probs, bo, Math.ceil(h.spread), favIsT1 ? 1 : 2)
+                              }
+                            }
+                          } else if (lab.startsWith('game_')) {
+                            fair_o1 = o1IsT1 ? probs.g1 : 1 - probs.g1
+                          }
+                          if (fair_o1 == null) continue
+                          const fair_o2 = 1 - fair_o1
+                          const e1 = fair_o1 - mid1; const e2 = fair_o2 - mid2
+                          const fIdx: 0 | 1 = e1 >= e2 ? 0 : 1
+                          const ePP = Math.abs(fIdx === 0 ? e1 : e2) * 100
+                          if (ePP < edgeThreshold) continue
+                          const tgtFair = fIdx === 0 ? fair_o1 : fair_o2
+                          rows.push({
+                            market_type: sm.market_type, outcome_idx: fIdx, enabled: true,
+                            outcome_name: sm.outcomes[fIdx], match_question: sm.question,
+                            target_fair: tgtFair, token_id: sm.token_ids[fIdx] ?? undefined,
+                          })
+                        }
+                        if (rows.length === 0) { alert('No markets above threshold to enable.'); return }
+                        setSubmitting(true)
+                        await fetch('/api/quoter/toggle', {
+                          method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            rows: rows.map(r => ({
+                              ...r, event_slug: selectedEvent.slug, event_title: selectedEvent.title,
+                              max_size_usd: maxSizeUsd, edge_threshold_pp: edgeThreshold,
+                            })),
+                          }),
+                        })
+                        await reloadActive()
+                        setSubmitting(false)
+                      }}
+                      className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white font-semibold px-3 py-1.5 rounded"
+                    >
+                      ⚡ Quote all eligible (≥{edgeThreshold}pp)
+                    </button>
+                    <button
+                      disabled={submitting}
+                      onClick={async () => {
+                        const active = Object.entries(activeQuotes).filter(([_, v]) => v.enabled)
+                        if (active.length === 0) return
+                        setSubmitting(true)
+                        const rows = active.map(([k]) => {
+                          const [eSlug, mt, idx] = k.split('|')
+                          return { event_slug: eSlug, market_type: mt, outcome_idx: parseInt(idx) as 0|1, enabled: false }
+                        })
+                        await fetch('/api/quoter/toggle', {
+                          method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ rows }),
+                        })
+                        await reloadActive()
+                        setSubmitting(false)
+                      }}
+                      className="bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-200 px-3 py-1.5 rounded"
+                    >
+                      Cancel all quotes
+                    </button>
+                  </div>
+                )}
 
                 <table className="w-full text-xs">
                   <thead>
@@ -603,8 +742,8 @@ export default function PreLivePage() {
                         else { favIdx = 1; edge_pp = edge2 * 100; fairFav = fair_o2; marketFav = mid2 }
                       }
                       const aboveThresh = Math.abs(edge_pp) >= edgeThreshold
-                      const key = `${selectedEvent.slug}|${sm.market_type}|${favIdx}`
-                      const enabled = marketEnabled[key] ?? aboveThresh
+                      const key = activeKey(selectedEvent.slug, sm.market_type, favIdx)
+                      const enabled = activeQuotes[key]?.enabled ?? false
 
                       // Per-outcome edge (signed)
                       const edge1_pp = fair_o1 != null ? (fair_o1 - mid1) * 100 : null
@@ -664,10 +803,18 @@ export default function PreLivePage() {
                                   BUY {favIdx === 0 ? '◀' : '▶'}
                                 </span>
                                 <input
-                                  type="checkbox" checked={enabled}
-                                  onChange={e => setMarketEnabled(s => ({ ...s, [key]: e.target.checked }))}
+                                  type="checkbox" checked={enabled} disabled={submitting}
+                                  onChange={e => toggleQuote({
+                                    market_type: sm.market_type,
+                                    outcome_idx: favIdx as 0 | 1,
+                                    enabled: e.target.checked,
+                                    outcome_name: sm.outcomes[favIdx],
+                                    match_question: sm.question,
+                                    target_fair: fairFav,
+                                    token_id: sm.token_ids[favIdx] ?? undefined,
+                                  })}
                                   className="accent-emerald-500"
-                                  title={aboveThresh ? 'Quoter would post here when wired up' : `Below ${edgeThreshold}pp threshold — toggle to override`}
+                                  title={aboveThresh ? 'Quoter will post a passive BUY at best bid for this side' : `Below ${edgeThreshold}pp — toggle to override`}
                                 />
                               </div>
                             ) : (
