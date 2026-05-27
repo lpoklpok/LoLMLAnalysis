@@ -220,6 +220,10 @@ export default function PredictPage() {
   // Roster overrides (per-team, position-indexed array of 5 player names)
   const [rosters, setRosters] = useState<Record<string, string[]>>({})
 
+  // Per-team manual ELO adjustment (added to whatever the snapshot/computed elo is).
+  // Lets the user say "I think Gen.G is +30 vs what ELO says" and see the impact.
+  const [eloAdjustments, setEloAdjustments] = useState<Record<string, number>>({})
+
   // Result injection: per-game blue_won + gd15_diff (blue minus red, in raw gold value)
   // + market_t1: user-entered market price (probability) for team1 winning that game.
   // Indexed by 1..5 (game number)
@@ -384,8 +388,11 @@ export default function PredictPage() {
     const baseS2 = teamState(team2)
     const e1Override = rosters[team1] ? rosterElo(r1) : null
     const e2Override = rosters[team2] ? rosterElo(r2) : null
-    let s1 = { ...baseS1, elo: e1Override ?? baseS1.elo }
-    let s2 = { ...baseS2, elo: e2Override ?? baseS2.elo }
+    // Apply manual per-team ELO adjustments (additive)
+    const adj1 = eloAdjustments[team1] ?? 0
+    const adj2 = eloAdjustments[team2] ?? 0
+    let s1 = { ...baseS1, elo: (e1Override ?? baseS1.elo ?? 0) + adj1 }
+    let s2 = { ...baseS2, elo: (e2Override ?? baseS2.elo ?? 0) + adj2 }
 
     // Cascade prior game results into ALL features (elo, rwr, gd15, h2h).
     // Each prior game updates the working state for the current game's prediction.
@@ -700,7 +707,7 @@ export default function PredictPage() {
     const p_series_t1 = bestOf === 1 ? games[0].breakdown.p_t1 : seriesProb()
 
     return { games, p_series_t1, t1_wins, t2_wins, needed }
-  }, [params, history, team1, team2, bestOf, sideMode, playoffs, g2Shrink, poAdj, coachAdj, asOfDate, gameResults, rosters, gameSideOverrides])
+  }, [params, history, team1, team2, bestOf, sideMode, playoffs, g2Shrink, poAdj, coachAdj, asOfDate, gameResults, rosters, gameSideOverrides, eloAdjustments])
 
   if (err) return <div className="p-8 text-red-400">{err}</div>
   if (!params || !history) return <div className="p-8 text-zinc-400">Loading…</div>
@@ -781,6 +788,8 @@ export default function PredictPage() {
                 params={params}
                 defaultRoster={(asOfDate ? (stateAt(team1, asOfDate)?.roster ?? params.rosters[team1]) : params.rosters[team1]) ?? []}
                 teamRwr={s1.rwr} teamGd15={s1.gd15}
+                eloAdj={eloAdjustments[team1] ?? 0}
+                onEloAdjChange={v => setEloAdjustments({ ...eloAdjustments, [team1]: v })}
                 onChange={r => setRosters({ ...rosters, [team1]: r })}
                 cleared={() => { const c = { ...rosters }; delete c[team1]; setRosters(c) }}
                 isOverride={!!rosters[team1]}
@@ -793,6 +802,8 @@ export default function PredictPage() {
                 params={params}
                 defaultRoster={(asOfDate ? (stateAt(team2, asOfDate)?.roster ?? params.rosters[team2]) : params.rosters[team2]) ?? []}
                 teamRwr={s2.rwr} teamGd15={s2.gd15}
+                eloAdj={eloAdjustments[team2] ?? 0}
+                onEloAdjChange={v => setEloAdjustments({ ...eloAdjustments, [team2]: v })}
                 onChange={r => setRosters({ ...rosters, [team2]: r })}
                 cleared={() => { const c = { ...rosters }; delete c[team2]; setRosters(c) }}
                 isOverride={!!rosters[team2]}
@@ -1242,7 +1253,7 @@ function BreakdownPanel({ n, team1, team2, breakdown, params }: {
 
 function RosterPanel({
   color, team, roster, oppRoster, playerOptions, playerElos, params,
-  defaultRoster, teamRwr, teamGd15, onChange, cleared, isOverride,
+  defaultRoster, teamRwr, teamGd15, eloAdj, onEloAdjChange, onChange, cleared, isOverride,
 }: {
   color:          'blue' | 'red'
   team:           string
@@ -1254,6 +1265,8 @@ function RosterPanel({
   defaultRoster:  string[]                              // baseline (no overrides applied) — to flag subs
   teamRwr:        number | null                         // rolling-10 win rate (matches model feature)
   teamGd15:       number | null                         // rolling-5 per-lane avg (matches model feature)
+  eloAdj:         number                                // manual ELO adjustment (added to base)
+  onEloAdjChange: (v: number) => void
   onChange:       (r: string[]) => void
   cleared:        () => void
   isOverride:     boolean
@@ -1267,7 +1280,7 @@ function RosterPanel({
         <h3 className={`text-sm font-semibold ${colorCls}`}>{team}</h3>
         {isOverride && <button onClick={cleared} className="text-[10px] text-zinc-500 hover:text-zinc-300">Reset roster</button>}
       </div>
-      <div className="flex gap-4 mb-3 text-[11px]" title="Team-level features going into the prediction. Rwr = rolling win rate over last 10 games. GD15 = mean of 5 players' rolling-5 per-lane gold diff at 15 min.">
+      <div className="flex gap-4 mb-2 text-[11px]" title="Team-level features going into the prediction. Rwr = rolling win rate over last 10 games. GD15 = mean of 5 players' rolling-5 per-lane gold diff at 15 min.">
         <div>
           <span className="text-zinc-500 uppercase tracking-wide">WR (last 10):</span>{' '}
           <span className="font-mono text-zinc-200">{teamRwr != null ? `${(teamRwr * 100).toFixed(0)}%` : '—'}</span>
@@ -1278,6 +1291,20 @@ function RosterPanel({
             {teamGd15 != null ? `${teamGd15 >= 0 ? '+' : ''}${teamGd15.toFixed(0)}` : '—'}
           </span>
         </div>
+      </div>
+      <div className="flex items-center gap-2 mb-3 text-[11px]" title="Manual ad-hoc ELO adjustment for this team. Added to the snapshot/roster ELO. Use to express 'I think this team is X ELO points stronger than the model says'.">
+        <span className="text-zinc-500 uppercase tracking-wide">ELO adj:</span>
+        <input type="range" min={-200} max={200} step={10}
+          value={eloAdj}
+          onChange={e => onEloAdjChange(parseInt(e.target.value))}
+          className="flex-1 accent-emerald-500" />
+        <input type="number" step={5}
+          value={eloAdj}
+          onChange={e => onEloAdjChange(parseInt(e.target.value) || 0)}
+          className="w-16 bg-zinc-950 border border-zinc-800 rounded px-1 py-0.5 font-mono text-right" />
+        {eloAdj !== 0 && (
+          <button onClick={() => onEloAdjChange(0)} className="text-zinc-500 hover:text-zinc-300">↺</button>
+        )}
       </div>
       <div className="space-y-1.5">
         {POS.map((pos, i) => {
