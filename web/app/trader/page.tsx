@@ -64,11 +64,32 @@ interface EventDetail {
 
 // ── Math helpers ────────────────────────────────────────────────────────────
 
-function seriesProb(p: number, bestOf: number): number {
-  if (bestOf <= 1) return p
-  if (bestOf === 3) return p * p * (3 - 2 * p)
-  if (bestOf === 5) return p * p * p * (10 - 15 * p + 6 * p * p)
-  return p
+// Draft-swap aware series probability. The G1 loser picks blue side in G2,
+// which historically carries a small advantage — modeled by alpha_g2 (shrinks
+// the per-game logit slightly) + beta_da (signed blue-side draft advantage).
+// Matches src/predict_upcoming.py and /pre-live's computeProbs.
+const ALPHA_G2 = 0.897
+const BETA_DA  = 0.0929
+
+function seriesProb(pG1: number, bestOf: number): number {
+  if (bestOf <= 1) return pG1
+  const z          = Math.log(pG1 / (1 - pG1))
+  const g1         = pG1
+  const g2_t1won   = 1 / (1 + Math.exp(-(ALPHA_G2 * z - BETA_DA)))
+  const g2_t2won   = 1 / (1 + Math.exp(-(ALPHA_G2 * z + BETA_DA)))
+  const g3plus     = g1
+  const needed     = Math.ceil(bestOf / 2)
+  function r(t1w: number, t2w: number, prev: 't1' | 't2' | null): number {
+    if (t1w === needed) return 1
+    if (t2w === needed) return 0
+    const gnum = t1w + t2w + 1
+    let p: number
+    if      (gnum === 1) p = g1
+    else if (gnum === 2) p = prev === 't1' ? g2_t1won : g2_t2won
+    else                 p = g3plus
+    return p * r(t1w + 1, t2w, 't1') + (1 - p) * r(t1w, t2w + 1, 't2')
+  }
+  return r(0, 0, null)
 }
 
 function fmtPct(p: number | null | undefined, signed = false) {
