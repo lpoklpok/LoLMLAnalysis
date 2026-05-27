@@ -152,6 +152,48 @@ function computeProbs(params: ModelParams, t1: string, t2: string, playoffs: boo
 // ── small UI helpers ───────────────────────────────────────────────────────
 
 function pct(p: number, d = 1): string { return `${(p * 100).toFixed(d)}%` }
+
+/**
+ * P(team wins best-of-{bestOf} series by at least `spread+0.5` games), given
+ * a constant per-game probability `p` for that team. Closed-form negative
+ * binomial: series ends when first team reaches k = ceil(bo/2) wins, so a
+ * cover-by-N occurs when team1 wins AND team2's wins ≤ k - N.
+ */
+function coverProb(p: number, bestOf: number, coverBy: number): number {
+  const k = Math.ceil(bestOf / 2)
+  const maxOppWins = k - coverBy
+  if (maxOppWins < 0) return 0  // can't cover (e.g. -3.5 in Bo3)
+  if (maxOppWins >= k) return 1 // 0 spread = just P(win series)
+  let total = 0
+  function nCr(n: number, r: number): number {
+    if (r < 0 || r > n) return 0
+    let c = 1
+    for (let i = 0; i < r; i++) c = c * (n - i) / (i + 1)
+    return c
+  }
+  for (let j = 0; j <= maxOppWins; j++) {
+    total += nCr(k - 1 + j, j) * Math.pow(p, k) * Math.pow(1 - p, j)
+  }
+  return total
+}
+
+/** Parse 'Game Handicap: <A> (-X.5) vs <B> (+X.5)' → {favName, spread}. */
+function parseHandicap(question: string): { favName: string; spread: number } | null {
+  const m = question.match(/Handicap:\s*(.+?)\s*\(-?(\d+(?:\.\d+)?)\)\s*vs/i)
+  if (!m) return null
+  return { favName: m[1].trim(), spread: parseFloat(m[2]) }
+}
+
+/** Find which outcome index matches a (possibly abbreviated) team name. */
+function matchOutcome(outcomes: [string, string], name: string): 0 | 1 | null {
+  const n = _norm(name)
+  const o0 = _norm(outcomes[0])
+  const o1 = _norm(outcomes[1])
+  if (o0 === n || o0.startsWith(n) || n.startsWith(o0) || o0.includes(n) || n.includes(o0)) return 0
+  if (o1 === n || o1.startsWith(n) || n.startsWith(o1) || o1.includes(n) || n.includes(o1)) return 1
+  return null
+}
+
 function fmtSigned(v: number, d = 1): string {
   const s = v.toFixed(d); return v >= 0 ? `+${s}` : s
 }
@@ -485,25 +527,49 @@ export default function PreLivePage() {
                   </thead>
                   <tbody>
                     {detail.submarkets.map((sm, smi) => {
-                      // Model fair value for THIS submarket from team1's perspective
-                      let fairT1: number | null = null
-                      const label = sm.market_type
-                      if (label === 'match_winner') fairT1 = probs.series
-                      else if (label.startsWith('game_')) fairT1 = probs.g1   // side-agnostic single-game
-                      // Map outcomes → which one is team1?
-                      const o1IsT1 = _norm(sm.outcomes[0]) === _norm(selectedEvent.team1)
+                      const label  = sm.market_type
                       const mid1   = sm.outcome_mids[0]
                       const mid2   = sm.outcome_mids[1]
-                      const fair_o1 = fairT1 != null ? (o1IsT1 ? fairT1 : 1 - fairT1) : null
+                      const o1IsT1 = _norm(sm.outcomes[0]) === _norm(selectedEvent.team1)
+                      const bo     = selectedEvent.best_of ?? 5
+
+                      // Compute fair probability for outcome 0 (fair_o1) and the
+                      // "favored" outcome's fair (fairFav). Differs by market type:
+                      // - match_winner: probs.series for team1, 1-... for team2
+                      // - game_N_winner: side-agnostic single-game prob
+                      // - game_handicap: parse spread from question, compute
+                      //   negative-binomial cover prob using per-game p.
+                      let fair_o1: number | null = null
+
+                      if (label === 'match_winner') {
+                        fair_o1 = o1IsT1 ? probs.series : 1 - probs.series
+                      } else if (label === 'game_handicap') {
+                        const h = parseHandicap(sm.question)
+                        if (h) {
+                          // Favorite per the question
+                          const favIdx = matchOutcome(sm.outcomes, h.favName)
+                          if (favIdx !== null) {
+                            const favIsT1 = (favIdx === 0) === o1IsT1
+                            const pFav    = favIsT1 ? probs.g1 : 1 - probs.g1
+                            const coverBy = Math.ceil(h.spread)   // 1.5 → cover by 2, 2.5 → cover by 3
+                            const favFair = coverProb(pFav, bo, coverBy)
+                            fair_o1 = favIdx === 0 ? favFair : 1 - favFair
+                          }
+                        }
+                      } else if (label.startsWith('game_')) {
+                        const pT1 = probs.g1
+                        fair_o1 = o1IsT1 ? pT1 : 1 - pT1
+                      }
+
                       const fair_o2 = fair_o1 != null ? 1 - fair_o1 : null
 
-                      // Which side has the edge (favored)?
+                      // Which side has the edge (favored by model)?
                       let favIdx = 0; let edge_pp = 0; let fairFav = 0; let marketFav = 0
-                      if (fair_o1 != null) {
+                      if (fair_o1 != null && fair_o2 != null) {
                         const edge1 = fair_o1 - mid1
-                        const edge2 = fair_o2! - mid2
+                        const edge2 = fair_o2 - mid2
                         if (edge1 >= edge2) { favIdx = 0; edge_pp = edge1 * 100; fairFav = fair_o1; marketFav = mid1 }
-                        else { favIdx = 1; edge_pp = edge2 * 100; fairFav = fair_o2!; marketFav = mid2 }
+                        else { favIdx = 1; edge_pp = edge2 * 100; fairFav = fair_o2; marketFav = mid2 }
                       }
                       const aboveThresh = Math.abs(edge_pp) >= edgeThreshold
                       const key = `${selectedEvent.slug}|${sm.market_type}|${favIdx}`
