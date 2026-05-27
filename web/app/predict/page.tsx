@@ -31,9 +31,26 @@ interface ModelParams {
 
 interface TeamSnapshot { date: string; elo: number; rwr: number | null; gd15: number | null; roster: string[] }
 interface TeamStateHistory {
-  generated:   string
-  window_days: number
-  teams:       Record<string, TeamSnapshot[]>
+  generated:        string
+  window_days:      number
+  gd15_roll?:       number
+  teams:            Record<string, TeamSnapshot[]>
+  player_gd15_tail?: Record<string, number[]>
+}
+
+// Team gd15 from per-player rolling tails — matches feature_engineering.py:515-519
+function teamGd15FromRoster(roster: string[], tails: Record<string, number[]> | undefined, n = 5): number | null {
+  if (!tails || roster.length === 0) return null
+  const laneMeans: number[] = []
+  for (const p of roster) {
+    const h = tails[p]
+    if (h && h.length >= 2) {
+      const slice = h.slice(-n)
+      laneMeans.push(slice.reduce((a, b) => a + b, 0) / slice.length)
+    }
+  }
+  if (laneMeans.length === 0) return null
+  return laneMeans.reduce((a, b) => a + b, 0) / laneMeans.length
 }
 
 // ===== Math helpers =====
@@ -161,25 +178,26 @@ export default function PredictPage() {
   // Else: use current model_params team stats.
   function teamState(team: string) {
     const cur = params?.teams[team]
+    const roster = effectiveRoster(team)
+    // Recompute team gd15 from this team's actual roster + per-player gd15 tails
+    // (matches feature_engineering._rolling_gd15 + np.nanmean). If roster
+    // override differs from the snapshot's roster, this picks up the change.
+    const computed_gd15 = teamGd15FromRoster(roster, history?.player_gd15_tail, history?.gd15_roll ?? 5)
+
     if (asOfDate) {
       const snap = stateAt(team, asOfDate)
       if (snap) return {
         elo:     snap.elo,
         rwr:     snap.rwr ?? lastNonNull(team, asOfDate, 'rwr'),
-        // For gd15: walk backwards if today's snap is null (today's games haven't
-        // been ingested yet). Don't fall back to model_params.gd15 — those values
-        // can be stale/wrong (e.g. an outlier dominant game).
-        gd15:    snap.gd15 ?? lastNonNull(team, asOfDate, 'gd15'),
+        gd15:    computed_gd15 ?? snap.gd15 ?? lastNonNull(team, asOfDate, 'gd15'),
         outperf: cur?.outperf ?? null,
       }
     }
-    // Latest (no date): use most-recent snapshot, falling back to model_params for fields
-    // that aren't in history (outperf only).
     const snap = stateAt(team, '')
     return {
       elo:     snap?.elo  ?? cur?.elo  ?? null,
       rwr:     snap?.rwr  ?? cur?.rwr  ?? null,
-      gd15:    snap?.gd15 ?? lastNonNull(team, '', 'gd15') ?? cur?.gd15 ?? null,
+      gd15:    computed_gd15 ?? snap?.gd15 ?? lastNonNull(team, '', 'gd15') ?? cur?.gd15 ?? null,
       outperf: cur?.outperf ?? null,
     }
   }
@@ -194,12 +212,12 @@ export default function PredictPage() {
     return params?.rosters[team] ?? []
   }
 
-  // ----- Team ELO from roster (sum of player_elos) -----
+  // ----- Team ELO from roster (mean of player_elos, matches feature_engineering._team_elo) -----
   function rosterElo(roster: string[]): number | null {
     if (!params || roster.length !== 5) return null
     const vals = roster.map(p => params.player_elos[p]).filter((v): v is number => v != null)
     if (vals.length !== 5) return null
-    return vals.reduce((a, b) => a + b, 0)
+    return vals.reduce((a, b) => a + b, 0) / 5
   }
 
   // ----- Per-game prediction with full breakdown -----
@@ -840,7 +858,7 @@ function RosterPanel({
           )
         })}
       </div>
-      <div className="text-[10px] text-zinc-600 mt-2">Total ELO: {roster.reduce((sum, p) => sum + (playerElos[p] ?? 0), 0).toFixed(0)}</div>
+      <div className="text-[10px] text-zinc-600 mt-2">Team ELO (mean): {(roster.length > 0 ? roster.reduce((sum, p) => sum + (playerElos[p] ?? 0), 0) / roster.length : 0).toFixed(0)}</div>
     </div>
   )
 }

@@ -125,7 +125,8 @@ def main() -> None:
                 if isinstance(p, str) and p and pd.notna(gd):
                     player_gd15[p].append(float(gd))
 
-    # Build per-team snapshots from game_features (recent window only)
+    # Build per-team snapshots from game_features (recent window only).
+    # Each snapshot is the BEFORE-state of that game.
     teams: dict[str, list[dict]] = defaultdict(list)
     recent = gf[gf["date"] >= cutoff]
     print(f"Building snapshots from {len(recent):,} games in last {WINDOW_DAYS}d…")
@@ -144,15 +145,72 @@ def main() -> None:
                 "roster": rosters_by_team_ts.get((team, ts), []),
             })
 
+    # Append a synthetic "as-of-now" snapshot per team so a date AFTER their
+    # most recent game (e.g. "today") reflects the state INCLUDING that game.
+    # Picks up the cumulative rwr (team_wins deque) + post-most-recent-game gd15.
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # Re-derive player gd15 history walking ALL games (which we already did);
+    # team_gd15_by_ts is keyed by past game timestamps. For each team, we want
+    # the value AFTER their most recent game — which equals the team_gd15
+    # computation using the FINAL player_gd15 history (after iterating all games).
+    # Cleanest: compute it once more here.
+    for team in teams:
+        # Find this team's most recent roster (from rosters_by_team_ts)
+        team_rosters = [(ts, roster) for (t, ts), roster in rosters_by_team_ts.items() if t == team]
+        if not team_rosters: continue
+        team_rosters.sort()
+        most_recent_roster = team_rosters[-1][1]
+        # Compute team gd15 using the final player_gd15 history
+        lane_means = []
+        for p in most_recent_roster:
+            if player_gd15[p]:
+                lane_means.append(mean(list(player_gd15[p])[-GD15_ROLL:]))
+        synth_gd15 = float(mean(lane_means)) if lane_means else None
+        # Rwr: use the final team_wins deque
+        synth_rwr = _rolling_mean(team_wins[team], RWR_ROLL)
+        # Elo: use the most recent game's AFTER-state. Since game_features stores
+        # BEFORE-state, we need the BEFORE-state of the NEXT game — but there is
+        # no next game. Approximate: use most recent BEFORE-state elo. Player ELOs
+        # shift slightly after each game but for "today before any games" this is
+        # the closest we have without recomputing ELO from scratch here.
+        last_snap = teams[team][-1] if teams[team] else None
+        synth_elo = last_snap["elo"] if last_snap else None
+        teams[team].append({
+            "date":   now_iso,
+            "elo":    synth_elo,
+            "rwr":    synth_rwr,
+            "gd15":   synth_gd15,
+            "roster": most_recent_roster,
+            "synthetic": True,
+        })
+
     for team in teams:
         teams[team].sort(key=lambda e: e["date"])
 
+    # Per-player gd15 rolling tail (last GD15_ROLL values, in chronological order).
+    # Lets the /predict page recompute team gd15 client-side for ANY roster combo:
+    #   team_gd15 = nanmean(over 5 players: mean(player_gd15_tail[-5:]))
+    # Mirrors src/feature_engineering.py:515-519.
+    # Only include players who appear in any team's most-recent roster (in `teams`).
+    needed_players: set[str] = set()
+    for team_snaps in teams.values():
+        for snap in team_snaps:
+            for p in snap.get("roster", []):
+                needed_players.add(p)
+    player_gd15_export: dict[str, list[float]] = {}
+    for p in needed_players:
+        hist = list(player_gd15.get(p, []))
+        if hist:
+            player_gd15_export[p] = [round(v, 2) for v in hist[-GD15_ROLL:]]
+
     now = datetime.now(timezone.utc).isoformat()
     out = {
-        "generated":   now,
-        "as_of":       now,
-        "window_days": WINDOW_DAYS,
-        "teams":       dict(teams),
+        "generated":         now,
+        "as_of":             now,
+        "window_days":       WINDOW_DAYS,
+        "gd15_roll":         GD15_ROLL,
+        "teams":             dict(teams),
+        "player_gd15_tail":  player_gd15_export,
     }
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUT_PATH.write_text(json.dumps(out, separators=(",", ":")))
