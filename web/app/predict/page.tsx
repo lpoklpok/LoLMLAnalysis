@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 
 // ===== Types =====
@@ -75,6 +75,37 @@ function teamGd15FromRoster(
 // ===== Math helpers =====
 const sigmoid = (z: number): number => 1 / (1 + Math.exp(-z))
 const logit   = (p: number): number => Math.log(Math.max(1e-6, p) / Math.max(1e-6, 1 - p))
+
+// Half-Kelly bet sizing for a binary market.
+// pModel  = your estimate that team1 wins
+// pMarket = market's price for team1 (= probability you must pay per $1 payout)
+// Returns the side with positive edge (or null if no edge), plus fraction-of-bankroll and PnL outcomes.
+interface KellyResult {
+  side:        't1' | 't2'   // which side to bet
+  edge_pp:     number        // edge in percentage points
+  fraction:    number        // half-Kelly fraction of bankroll (0..1)
+  price:       number        // price you're paying on the chosen side
+  payoff_win:  number        // net $ if your side wins (= stake × (1-price)/price)
+  loss_lose:   number        // net $ if you lose (= -stake)
+  stake:       number        // $ at risk
+}
+function halfKelly(pModel: number, pMarket_t1: number, bankroll: number): KellyResult | null {
+  // Edge per side
+  const edge_t1 = pModel - pMarket_t1
+  const edge_t2 = (1 - pModel) - (1 - pMarket_t1)  // = -edge_t1
+  const useT1   = edge_t1 > 0
+  const side: 't1' | 't2' = useT1 ? 't1' : 't2'
+  const edge    = useT1 ? edge_t1 : edge_t2
+  const price   = useT1 ? pMarket_t1 : (1 - pMarket_t1)
+  if (edge <= 0 || price <= 0 || price >= 1) return null
+  // Kelly: f* = edge / (1 - price); half-Kelly = / 2
+  const fraction = (edge / (1 - price)) / 2
+  const stake    = fraction * bankroll
+  // Payoff = stake × (1 / price) − stake = stake × (1 − price)/price
+  const payoff_win = stake * (1 - price) / price
+  const loss_lose  = -stake
+  return { side, edge_pp: edge * 100, fraction, price, payoff_win, loss_lose, stake }
+}
 
 function getH2H(params: ModelParams, t1: string, t2: string): number {
   if (params.h2h[`${t1}|||${t2}`] !== undefined) return params.h2h[`${t1}|||${t2}`]
@@ -161,8 +192,18 @@ export default function PredictPage() {
   const [rosters, setRosters] = useState<Record<string, string[]>>({})
 
   // Result injection: per-game blue_won + gd15_diff (blue minus red, in raw gold value)
+  // + market_t1: user-entered market price (probability) for team1 winning that game.
   // Indexed by 1..5 (game number)
-  const [gameResults, setGameResults] = useState<Record<number, { blue_won: boolean | null; gd15_diff: number | null }>>({})
+  const [gameResults, setGameResults] = useState<Record<number, {
+    blue_won: boolean | null
+    gd15_diff: number | null
+    market_t1: number | null
+  }>>({})
+
+  // Global bankroll for Kelly $ sizing
+  const [bankroll, setBankroll] = useState<number>(1000)
+  // Series-level market price (for match-winner market)
+  const [seriesMarketT1, setSeriesMarketT1] = useState<number | null>(null)
 
   // Per-game side override. If unset for a game, falls back to sideFor() default.
   // 'sym' / 'blue_t1' / 'blue_t2'  (same alphabet as the internal side type)
@@ -716,28 +757,44 @@ export default function PredictPage() {
           />
         </div>
 
+        {/* Bankroll input */}
+        <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-3 flex items-center gap-4 text-sm">
+          <label>
+            <span className="text-[11px] uppercase tracking-wide text-zinc-500 mr-2">Bankroll $</span>
+            <input type="number" step={100} min={0}
+              value={bankroll}
+              onChange={e => setBankroll(parseFloat(e.target.value) || 0)}
+              className="w-24 bg-zinc-950 border border-zinc-700 rounded px-2 py-1 font-mono text-right" />
+          </label>
+          <span className="text-[11px] text-zinc-500">Half-Kelly sizing. Enter per-game market price for {team1} winning; the other side is implied as 1−p.</span>
+        </div>
+
         {/* Per-game predictions + result injection */}
         {predictions && (
-          <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
+          <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4 overflow-x-auto">
             <h2 className="text-lg font-semibold mb-3">Predictions</h2>
-            <div className="text-[11px] text-zinc-500 mb-2">Click a game row to see the full formula breakdown. Use the side dropdown to override on a per-game basis.</div>
-            <table className="w-full text-sm">
+            <div className="text-[11px] text-zinc-500 mb-2">Click a game row to see the full formula breakdown.</div>
+            <table className="w-full text-sm min-w-[1100px]">
               <thead>
                 <tr className="text-zinc-500 text-left">
                   <th className="py-2">Game</th>
                   <th className="py-2">Side</th>
                   <th className="py-2">P({team1})</th>
                   <th className="py-2">P({team2})</th>
-                  <th className="py-2 w-32">Actual result</th>
-                  <th className="py-2 w-32" title="Per-lane average gold diff at 15 min (blue − red). For total-team diff, divide by 5. E.g., Gen.G's 5-24 G1 team total was 6352, per-lane avg = 1270.">
-                    Per-lane GD15 (b−r)
-                  </th>
+                  <th className="py-2 w-24" title="Market price for {team1} winning this game (0–1). The other side is implied 1−p.">Market p({team1})</th>
+                  <th className="py-2 w-40" title="Half-Kelly: bet side + fraction of bankroll. Negative edge → no bet.">½-Kelly bet</th>
+                  <th className="py-2 w-40" title="Net $ outcome if {team1} wins / if {team2} wins, based on the recommended Kelly bet.">PnL ({team1} / {team2})</th>
+                  <th className="py-2 w-28">Actual result</th>
+                  <th className="py-2 w-24" title="Per-lane average gold diff at 15 min (blue − red). For total-team diff, divide by 5.">Per-lane GD15</th>
                 </tr>
               </thead>
               <tbody>
-                {predictions.games.map(g => (
-                  <>
-                  <tr key={`${g.n}-row`} className="border-t border-zinc-800">
+                {predictions.games.map(g => {
+                  const market = gameResults[g.n]?.market_t1 ?? null
+                  const kelly  = (market != null) ? halfKelly(g.breakdown.p_t1, market, bankroll) : null
+                  return (
+                  <React.Fragment key={`g${g.n}`}>
+                  <tr className="border-t border-zinc-800">
                     <td className="py-2 font-mono">
                       <button onClick={() => setExpandedGames({ ...expandedGames, [g.n]: !expandedGames[g.n] })}
                         className="text-zinc-300 hover:text-zinc-100">
@@ -749,7 +806,6 @@ export default function PredictPage() {
                         value={gameSideOverrides[g.n] ?? g.sideDefault}
                         onChange={e => {
                           const v = e.target.value as 'sym' | 'blue_t1' | 'blue_t2'
-                          // If matches default, clear the override
                           if (v === g.sideDefault) {
                             const c = { ...gameSideOverrides }
                             delete c[g.n]
@@ -769,6 +825,47 @@ export default function PredictPage() {
                     <td className="py-2 font-mono text-emerald-400">{(g.breakdown.p_t1 * 100).toFixed(1)}%</td>
                     <td className="py-2 font-mono text-rose-400">{((1 - g.breakdown.p_t1) * 100).toFixed(1)}%</td>
                     <td className="py-2">
+                      <input type="number" step={0.01} min={0} max={1}
+                        value={market ?? ''}
+                        onChange={e => {
+                          const v = e.target.value === '' ? null : parseFloat(e.target.value)
+                          setGameResults({
+                            ...gameResults,
+                            [g.n]: {
+                              ...(gameResults[g.n] ?? { blue_won: null, gd15_diff: null, market_t1: null }),
+                              market_t1: v,
+                            },
+                          })
+                        }}
+                        className="w-20 bg-zinc-950 border border-zinc-700 rounded px-1 py-0.5 text-xs font-mono text-right"
+                        placeholder="0.55" />
+                    </td>
+                    <td className="py-2 font-mono text-xs">
+                      {kelly == null
+                        ? <span className="text-zinc-600">—</span>
+                        : <>
+                            <span className={kelly.side === 't1' ? 'text-blue-400' : 'text-rose-400'}>
+                              {kelly.side === 't1' ? team1 : team2}
+                            </span>{' '}
+                            <span className="text-zinc-300">{(kelly.fraction * 100).toFixed(2)}%</span>{' '}
+                            <span className="text-zinc-500">(${kelly.stake.toFixed(0)})</span>
+                            <div className="text-[10px] text-zinc-500">edge {kelly.edge_pp >= 0 ? '+' : ''}{kelly.edge_pp.toFixed(2)}pp @ ${kelly.price.toFixed(3)}</div>
+                          </>}
+                    </td>
+                    <td className="py-2 font-mono text-xs">
+                      {kelly == null
+                        ? <span className="text-zinc-600">—</span>
+                        : <>
+                            <span className={kelly.side === 't1' ? 'text-emerald-400' : 'text-rose-400'}>
+                              {kelly.side === 't1' ? `+$${kelly.payoff_win.toFixed(2)}` : `-$${(-kelly.loss_lose).toFixed(2)}`}
+                            </span>
+                            {' / '}
+                            <span className={kelly.side === 't2' ? 'text-emerald-400' : 'text-rose-400'}>
+                              {kelly.side === 't2' ? `+$${kelly.payoff_win.toFixed(2)}` : `-$${(-kelly.loss_lose).toFixed(2)}`}
+                            </span>
+                          </>}
+                    </td>
+                    <td className="py-2">
                       <select
                         value={gameResults[g.n]?.blue_won == null ? '' :
                                gameResults[g.n]?.blue_won ? 'blue' : 'red'}
@@ -777,9 +874,9 @@ export default function PredictPage() {
                           setGameResults({
                             ...gameResults,
                             [g.n]: {
-                              ...(gameResults[g.n] ?? { gd15_diff: null }),
+                              ...(gameResults[g.n] ?? { gd15_diff: null, market_t1: null }),
                               blue_won: v === '' ? null : v === 'blue',
-                            } as { blue_won: boolean | null; gd15_diff: number | null },
+                            } as { blue_won: boolean | null; gd15_diff: number | null; market_t1: number | null },
                           })
                         }}
                         className="bg-zinc-950 border border-zinc-700 rounded px-1 py-0.5 text-xs"
@@ -797,38 +894,80 @@ export default function PredictPage() {
                           setGameResults({
                             ...gameResults,
                             [g.n]: {
-                              ...(gameResults[g.n] ?? { blue_won: null }),
+                              ...(gameResults[g.n] ?? { blue_won: null, market_t1: null }),
                               gd15_diff: v,
-                            } as { blue_won: boolean | null; gd15_diff: number | null },
+                            } as { blue_won: boolean | null; gd15_diff: number | null; market_t1: number | null },
                           })
                         }}
-                        className="w-24 bg-zinc-950 border border-zinc-700 rounded px-1 py-0.5 text-xs font-mono text-right"
+                        className="w-20 bg-zinc-950 border border-zinc-700 rounded px-1 py-0.5 text-xs font-mono text-right"
                         placeholder="—" />
                     </td>
                   </tr>
                   {expandedGames[g.n] && (
-                    <tr key={`${g.n}-detail`} className="border-t border-zinc-800/50 bg-zinc-950/50">
-                      <td colSpan={6} className="px-4 py-3">
+                    <tr className="border-t border-zinc-800/50 bg-zinc-950/50">
+                      <td colSpan={9} className="px-4 py-3">
                         <BreakdownPanel n={g.n} team1={team1} team2={team2} breakdown={g.breakdown} params={params} />
                       </td>
                     </tr>
                   )}
-                  </>
-                ))}
+                  </React.Fragment>
+                )})}
               </tbody>
             </table>
 
-            {bestOf > 1 && (
-              <div className="mt-4 pt-4 border-t border-zinc-800">
-                <div className="text-xs uppercase tracking-wide text-zinc-400 mb-1">Series ({predictions.t1_wins}–{predictions.t2_wins})</div>
-                <div className="text-3xl font-mono">
-                  <span className="text-emerald-400">{(predictions.p_series_t1 * 100).toFixed(1)}%</span>
-                  <span className="text-zinc-500 mx-3">·</span>
-                  <span className="text-rose-400">{((1 - predictions.p_series_t1) * 100).toFixed(1)}%</span>
+            {bestOf > 1 && (() => {
+              const sk = (seriesMarketT1 != null)
+                ? halfKelly(predictions.p_series_t1, seriesMarketT1, bankroll)
+                : null
+              return (
+                <div className="mt-4 pt-4 border-t border-zinc-800 space-y-3">
+                  <div className="flex items-baseline gap-6 flex-wrap">
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-zinc-400 mb-1">Series ({predictions.t1_wins}–{predictions.t2_wins})</div>
+                      <div className="text-3xl font-mono">
+                        <span className="text-emerald-400">{(predictions.p_series_t1 * 100).toFixed(1)}%</span>
+                        <span className="text-zinc-500 mx-3">·</span>
+                        <span className="text-rose-400">{((1 - predictions.p_series_t1) * 100).toFixed(1)}%</span>
+                      </div>
+                      <div className="text-xs text-zinc-500 mt-1">{team1} · {team2}</div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] uppercase tracking-wide text-zinc-500 mb-1">Market p({team1}) — series</div>
+                      <input type="number" step={0.01} min={0} max={1}
+                        value={seriesMarketT1 ?? ''}
+                        onChange={e => setSeriesMarketT1(e.target.value === '' ? null : parseFloat(e.target.value))}
+                        className="w-24 bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm font-mono text-right"
+                        placeholder="0.55" />
+                    </div>
+                    {sk && (
+                      <div className="text-xs font-mono">
+                        <div className="text-[11px] uppercase tracking-wide text-zinc-500">½-Kelly bet</div>
+                        <div className="mt-1">
+                          <span className={sk.side === 't1' ? 'text-blue-400' : 'text-rose-400'}>
+                            {sk.side === 't1' ? team1 : team2}
+                          </span>{' '}
+                          <span className="text-zinc-200">{(sk.fraction * 100).toFixed(2)}%</span>{' '}
+                          <span className="text-zinc-500">(${sk.stake.toFixed(0)})</span>
+                        </div>
+                        <div className="text-[10px] text-zinc-500">
+                          edge {sk.edge_pp >= 0 ? '+' : ''}{sk.edge_pp.toFixed(2)}pp @ ${sk.price.toFixed(3)}
+                        </div>
+                        <div className="mt-1">
+                          <span className={sk.side === 't1' ? 'text-emerald-400' : 'text-rose-400'}>
+                            {sk.side === 't1' ? `+$${sk.payoff_win.toFixed(2)}` : `-$${(-sk.loss_lose).toFixed(2)}`}
+                          </span>
+                          {' / '}
+                          <span className={sk.side === 't2' ? 'text-emerald-400' : 'text-rose-400'}>
+                            {sk.side === 't2' ? `+$${sk.payoff_win.toFixed(2)}` : `-$${(-sk.loss_lose).toFixed(2)}`}
+                          </span>
+                          <span className="text-[10px] text-zinc-500 ml-1">({team1} wins / {team2} wins)</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="text-xs text-zinc-500 mt-1">{team1} · {team2}</div>
-              </div>
-            )}
+              )
+            })()}
           </div>
         )}
       </div>
