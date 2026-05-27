@@ -113,6 +113,19 @@ function getH2H(params: ModelParams, t1: string, t2: string): number {
   return params.fill.h2h_wr ?? 0.5
 }
 
+// Per-player H2H WR vs opposing-lane player. Mirrors feature_engineering._player_h2h_wr:
+// key = alphabetically-sorted player pair + position, value.wins = wins for p0.
+function getPlayerH2H(
+  params: ModelParams, ownPlayer: string, oppPlayer: string, pos: string,
+): { wr: number; n: number } | null {
+  if (!ownPlayer || !oppPlayer) return null
+  const [p0, p1] = ownPlayer <= oppPlayer ? [ownPlayer, oppPlayer] : [oppPlayer, ownPlayer]
+  const entry = params.player_h2h[`${p0}|||${p1}|||${pos}`]
+  if (!entry || entry.n === 0) return null
+  const winsForOwn = p0 === ownPlayer ? entry.wins : entry.n - entry.wins
+  return { wr: winsForOwn / entry.n, n: entry.n }
+}
+
 // Date-aware h2h lookup: returns the stored BEFORE-game h2h_wr for the matchup
 // closest to the user's chosen as-of date. Matches production game_features exactly.
 // Returns null if no per-pair history exists (caller falls back to getH2H).
@@ -740,17 +753,23 @@ export default function PredictPage() {
         {/* Roster editor */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <RosterPanel
-            color="blue" team={team1} roster={effectiveRoster(team1)}
+            color="blue" team={team1}
+            roster={effectiveRoster(team1)} oppRoster={effectiveRoster(team2)}
             playerOptions={Object.keys(params.player_elos).sort()}
             playerElos={params.player_elos}
+            params={params}
+            defaultRoster={(asOfDate ? (stateAt(team1, asOfDate)?.roster ?? params.rosters[team1]) : params.rosters[team1]) ?? []}
             onChange={r => setRosters({ ...rosters, [team1]: r })}
             cleared={() => { const c = { ...rosters }; delete c[team1]; setRosters(c) }}
             isOverride={!!rosters[team1]}
           />
           <RosterPanel
-            color="red" team={team2} roster={effectiveRoster(team2)}
+            color="red" team={team2}
+            roster={effectiveRoster(team2)} oppRoster={effectiveRoster(team1)}
             playerOptions={Object.keys(params.player_elos).sort()}
             playerElos={params.player_elos}
+            params={params}
+            defaultRoster={(asOfDate ? (stateAt(team2, asOfDate)?.roster ?? params.rosters[team2]) : params.rosters[team2]) ?? []}
             onChange={r => setRosters({ ...rosters, [team2]: r })}
             cleared={() => { const c = { ...rosters }; delete c[team2]; setRosters(c) }}
             isOverride={!!rosters[team2]}
@@ -1135,18 +1154,23 @@ function BreakdownPanel({ n, team1, team2, breakdown, params }: {
 }
 
 function RosterPanel({
-  color, team, roster, playerOptions, playerElos, onChange, cleared, isOverride,
+  color, team, roster, oppRoster, playerOptions, playerElos, params,
+  defaultRoster, onChange, cleared, isOverride,
 }: {
-  color: 'blue' | 'red'
-  team: string
-  roster: string[]
-  playerOptions: string[]
-  playerElos: Record<string, number>
-  onChange: (r: string[]) => void
-  cleared: () => void
-  isOverride: boolean
+  color:          'blue' | 'red'
+  team:           string
+  roster:         string[]
+  oppRoster:      string[]
+  playerOptions:  string[]
+  playerElos:     Record<string, number>
+  params:         ModelParams
+  defaultRoster:  string[]                              // baseline (no overrides applied) — to flag subs
+  onChange:       (r: string[]) => void
+  cleared:        () => void
+  isOverride:     boolean
 }) {
   const POS = ['Top', 'Jng', 'Mid', 'Bot', 'Sup']
+  const POS_LOWER = ['top', 'jng', 'mid', 'bot', 'sup'] as const
   const colorCls = color === 'blue' ? 'text-blue-400' : 'text-rose-400'
   return (
     <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
@@ -1156,23 +1180,41 @@ function RosterPanel({
       </div>
       <div className="space-y-1.5">
         {POS.map((pos, i) => {
-          const p = roster[i] ?? ''
-          const elo = p ? playerElos[p] : null
+          const p     = roster[i] ?? ''
+          const oppP  = oppRoster[i] ?? ''
+          const elo   = p ? playerElos[p] : null
+          const h2h   = getPlayerH2H(params, p, oppP, POS_LOWER[i])
+          const isSub = p !== '' && defaultRoster[i] !== '' && p !== defaultRoster[i]
+          const h2hCls = h2h == null      ? 'text-zinc-600'
+                       : h2h.n < 5        ? 'text-zinc-500 italic'
+                       : h2h.wr >= 0.55   ? 'text-emerald-400'
+                       : h2h.wr <= 0.45   ? 'text-rose-400'
+                       :                    'text-zinc-300'
           return (
-            <div key={pos} className="grid grid-cols-[40px_1fr_60px] gap-2 items-center text-xs">
+            <div key={pos} className="grid grid-cols-[40px_1fr_auto_60px] gap-2 items-center text-xs">
               <span className="text-zinc-500">{pos}</span>
-              <select value={p}
-                onChange={e => { const r = [...roster]; r[i] = e.target.value; onChange(r) }}
-                className="bg-zinc-950 border border-zinc-800 rounded px-1 py-0.5">
-                <option value="">—</option>
-                {playerOptions.map(o => <option key={o} value={o}>{o}</option>)}
-              </select>
+              <div className="relative">
+                <select value={p}
+                  onChange={e => { const r = [...roster]; r[i] = e.target.value; onChange(r) }}
+                  className={`w-full bg-zinc-950 border border-zinc-800 rounded px-1 py-0.5 ${isSub ? 'text-purple-300' : ''}`}>
+                  <option value="">—</option>
+                  {playerOptions.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+                {isSub && <span className="absolute -top-2 -right-2 text-[8px] text-purple-400 bg-zinc-900 px-1 rounded">SUB</span>}
+              </div>
+              <span className={`font-mono text-[10px] ${h2hCls}`}
+                    title={h2h ? `H2H vs ${oppP}: ${(h2h.wr*100).toFixed(0)}% over ${h2h.n} games` : `No H2H data vs ${oppP || '—'}`}>
+                {h2h ? `${(h2h.wr * 100).toFixed(0)}% (${h2h.n})` : '—'}
+              </span>
               <span className="font-mono text-zinc-400 text-right">{elo != null ? elo.toFixed(0) : '—'}</span>
             </div>
           )
         })}
       </div>
-      <div className="text-[10px] text-zinc-600 mt-2">Team ELO (mean): {(roster.length > 0 ? roster.reduce((sum, p) => sum + (playerElos[p] ?? 0), 0) / roster.length : 0).toFixed(0)}</div>
+      <div className="text-[10px] text-zinc-600 mt-2 flex justify-between">
+        <span>Team ELO (mean): {(roster.length > 0 ? roster.reduce((sum, p) => sum + (playerElos[p] ?? 0), 0) / roster.length : 0).toFixed(0)}</span>
+        <span className="text-zinc-700">role / player / H2H vs opp / ELO</span>
+      </div>
     </div>
   )
 }
