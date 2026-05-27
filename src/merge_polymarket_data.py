@@ -265,13 +265,23 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
             else:
                 if len(sample_miss_no_snap) < 6:
                     sample_miss_no_snap.append((series_key, str(first_game_ts)))
-        # Derive best_of from the series's max game number, NOT from each
-        # row's `best_of` column — OE sometimes has inconsistent per-row
-        # `best_of` for the same physical series (e.g. one row says bo1,
-        # another says bo3, others say bo5), which would cause us to take
-        # different bo branches for sibling games of one match.
-        max_game = int(series_games['game'].max())
-        bo = 1 if max_game <= 1 else (3 if max_game <= 3 else 5)
+        # Derive best_of preferring Polymarket's submarkets (game_N_winner
+        # markets that exist). A 3-0 Bo5 sweep would otherwise be misclassified
+        # as a Bo3 by OE's max(game) alone, and we'd back-solve G3 from series
+        # + G1 + G2 instead of using Polymarket's real game_3_winner market.
+        if 'game_4_winner' in picked or 'game_5_winner' in picked:
+            bo = 5
+        elif 'game_3_winner' in picked:
+            # Polymarket exposes game_3 but not game_4 → Bo3 with derived g3.
+            # But if game_3_winner is present *as a direct market*, we want bo=5
+            # behavior so we use it directly. Heuristic: Bo3s don't carry a
+            # game_3_winner market (no need — series price covers it); Bo5s do.
+            bo = 5
+        elif 'game_2_winner' in picked:
+            bo = 3
+        else:
+            max_game = int(series_games['game'].max())
+            bo = 1 if max_game <= 1 else (3 if max_game <= 3 else 5)
 
         # Convert each picked market to blue-team probability for this series
         # (blue side can swap mid-series so we look up per-game)
