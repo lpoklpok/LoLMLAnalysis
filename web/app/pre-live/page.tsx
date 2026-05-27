@@ -326,6 +326,84 @@ export default function PreLivePage() {
   }
   useEffect(() => { reloadActive() }, [selectedSlug])
 
+  // Compute eligible quote rows for ONE event (used by per-event bulk button
+  // AND the global "quote all events" sweep). Pulls /api/trader-event, walks
+  // every submarket, computes fair via the same logic as the table.
+  async function computeEligibleRowsForEvent(ev: EventListing): Promise<{
+    market_type: string; outcome_idx: 0|1; enabled: boolean;
+    outcome_name?: string; match_question?: string;
+    target_fair?: number; token_id?: string; event_slug: string; event_title: string;
+  }[]> {
+    if (!params) return []
+    const tk1 = findTeamInParams(params, ev.team1)
+    const tk2 = findTeamInParams(params, ev.team2)
+    if (!tk1 || !tk2) return []
+    // Pull this event's overrides so the sweep respects saved subs/nudge
+    let blueRoster: string[] | null = null
+    let redRoster:  string[] | null = null
+    let nudge_ev   = 0
+    try {
+      const or = await fetch(`/api/quoter/event-overrides?slug=${encodeURIComponent(ev.slug)}`, { cache: 'no-store' })
+      const oj = await or.json()
+      if (oj.row) {
+        blueRoster = (oj.row.blue_roster ?? null) as string[] | null
+        redRoster  = (oj.row.red_roster  ?? null) as string[] | null
+        nudge_ev   = typeof oj.row.logit_nudge === 'number' ? oj.row.logit_nudge : 0
+      }
+    } catch { /* fine, use base */ }
+    const elo1 = blueRoster && blueRoster.length === 5
+      ? Math.round(blueRoster.map(p => params.player_elos[p] ?? (params.teams[tk1]?.elo ?? 1500)).reduce((a,b)=>a+b,0) / 5 * 10)/10
+      : undefined
+    const elo2 = redRoster && redRoster.length === 5
+      ? Math.round(redRoster.map(p => params.player_elos[p] ?? (params.teams[tk2]?.elo ?? 1500)).reduce((a,b)=>a+b,0) / 5 * 10)/10
+      : undefined
+    const bo = ev.best_of ?? 5
+    const evProbs = computeProbs(params, tk1, tk2, false, elo1, elo2, nudge_ev, bo)
+
+    let evDetail: EventDetail | null = null
+    try {
+      const dr = await fetch(`/api/trader-event?slug=${encodeURIComponent(ev.slug)}`, { cache: 'no-store' })
+      if (dr.ok) evDetail = await dr.json()
+    } catch { /* skip event */ }
+    if (!evDetail) return []
+
+    const out: Awaited<ReturnType<typeof computeEligibleRowsForEvent>> = []
+    for (const sm of evDetail.submarkets) {
+      const mid1 = sm.outcome_mids[0]; const mid2 = sm.outcome_mids[1]
+      const o1IsT1 = _norm(sm.outcomes[0]) === _norm(ev.team1)
+      const lab = sm.market_type
+      let fair_o1: number | null = null
+      if (lab === 'match_winner') fair_o1 = o1IsT1 ? evProbs.series : 1 - evProbs.series
+      else if (lab === 'game_handicap') {
+        const h = parseHandicap(sm.question)
+        if (h) {
+          const fIdx = matchOutcome(sm.outcomes, h.favName)
+          if (fIdx !== null) {
+            const favIsT1 = (fIdx === 0) === o1IsT1
+            const cv = coverProb(evProbs, bo, Math.ceil(h.spread), favIsT1 ? 1 : 2)
+            fair_o1 = fIdx === 0 ? cv : 1 - cv
+          }
+        }
+      } else if (lab.startsWith('game_')) {
+        fair_o1 = o1IsT1 ? evProbs.g1 : 1 - evProbs.g1
+      }
+      if (fair_o1 == null) continue
+      const fair_o2 = 1 - fair_o1
+      const e1 = fair_o1 - mid1; const e2 = fair_o2 - mid2
+      const fIdx: 0 | 1 = e1 >= e2 ? 0 : 1
+      const ePP = Math.abs(fIdx === 0 ? e1 : e2) * 100
+      if (ePP < edgeThreshold) continue
+      const tgt = fIdx === 0 ? fair_o1 : fair_o2
+      out.push({
+        event_slug: ev.slug, event_title: ev.title,
+        market_type: sm.market_type, outcome_idx: fIdx, enabled: true,
+        outcome_name: sm.outcomes[fIdx], match_question: sm.question,
+        target_fair: tgt, token_id: sm.token_ids[fIdx] ?? undefined,
+      })
+    }
+    return out
+  }
+
   async function toggleQuote(args: {
     market_type: string; outcome_idx: 0 | 1; enabled: boolean
     outcome_name?: string; match_question?: string
@@ -376,7 +454,41 @@ export default function PreLivePage() {
       .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
       .then(setDetail)
       .catch(e => setError(`trader-event: ${e}`))
+    // Load saved overrides for this event (roster subs + logit nudge)
+    fetch(`/api/quoter/event-overrides?slug=${encodeURIComponent(selectedSlug)}`)
+      .then(r => r.ok ? r.json() : { row: null })
+      .then(j => {
+        if (!j.row) return
+        const o = j.row
+        if (o.blue_roster || o.red_roster) {
+          setSubs(s => ({ ...s, [selectedSlug]: {
+            blue: (o.blue_roster ?? []) as string[],
+            red:  (o.red_roster  ?? []) as string[],
+          }}))
+        }
+        if (typeof o.logit_nudge === 'number') {
+          setLogitNudge(s => ({ ...s, [selectedSlug]: o.logit_nudge }))
+        }
+      })
+      .catch(() => { /* no-op */ })
   }, [selectedSlug])
+
+  // Debounced save of overrides whenever subs or nudge change for the selected event
+  useEffect(() => {
+    if (!selectedSlug) return
+    const t = setTimeout(() => {
+      fetch('/api/quoter/event-overrides', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event_slug:  selectedSlug,
+          blue_roster: subs[selectedSlug]?.blue ?? null,
+          red_roster:  subs[selectedSlug]?.red  ?? null,
+          logit_nudge: logitNudge[selectedSlug] ?? 0,
+        }),
+      }).catch(() => { /* no-op */ })
+    }, 600)
+    return () => clearTimeout(t)
+  }, [selectedSlug, subs, logitNudge])
 
   const selectedEvent = useMemo(
     () => events.find(e => e.slug === selectedSlug) ?? null,
@@ -443,7 +555,7 @@ export default function PreLivePage() {
         {error && <p className="text-red-400 text-sm">{error}</p>}
         {!params && <p className="text-gray-400 text-sm">Loading model params…</p>}
 
-        {/* Event picker */}
+        {/* Event picker + global sweep */}
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-4">
           <label className="block text-xs text-gray-500 mb-2">Pre-game events (sorted by start time)</label>
           <select
@@ -458,7 +570,39 @@ export default function PreLivePage() {
               </option>
             ))}
           </select>
-          <p className="text-[11px] text-gray-600 mt-2">{events.filter(e=>e.has_pregame).length} upcoming · {events.length - events.filter(e=>e.has_pregame).length} live or settled</p>
+          <div className="flex items-center justify-between mt-3 flex-wrap gap-2">
+            <p className="text-[11px] text-gray-600">{events.filter(e=>e.has_pregame).length} upcoming · {events.length - events.filter(e=>e.has_pregame).length} live or settled</p>
+            <button
+              disabled={submitting || events.filter(e=>e.has_pregame).length === 0}
+              onClick={async () => {
+                if (!params) return
+                if (!confirm(`Sweep ALL ${events.filter(e=>e.has_pregame).length} upcoming events and enable every market with edge ≥ ${edgeThreshold}pp at $${maxSizeUsd} size?`)) return
+                setSubmitting(true)
+                try {
+                  const all: Awaited<ReturnType<typeof computeEligibleRowsForEvent>> = []
+                  for (const ev of events.filter(e=>e.has_pregame)) {
+                    const rs = await computeEligibleRowsForEvent(ev)
+                    all.push(...rs)
+                  }
+                  if (all.length === 0) { alert('No eligible markets found across all events.'); setSubmitting(false); return }
+                  await fetch('/api/quoter/toggle', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      rows: all.map(r => ({ ...r, max_size_usd: maxSizeUsd, edge_threshold_pp: edgeThreshold })),
+                    }),
+                  })
+                  alert(`Enabled ${all.length} quotes across ${new Set(all.map(r=>r.event_slug)).size} events.`)
+                  await reloadActive()
+                } catch (e) {
+                  alert(`Sweep failed: ${e}`)
+                }
+                setSubmitting(false)
+              }}
+              className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white text-xs font-semibold px-3 py-1.5 rounded"
+            >
+              ⚡⚡ Quote ALL events (≥{edgeThreshold}pp · ${maxSizeUsd}/quote)
+            </button>
+          </div>
         </div>
 
         {params && selectedEvent && (
@@ -594,52 +738,14 @@ export default function PreLivePage() {
                     <button
                       disabled={submitting}
                       onClick={async () => {
-                        const rows: Array<{ market_type: string; outcome_idx: 0|1; enabled: boolean; outcome_name?: string; match_question?: string; target_fair?: number; token_id?: string }> = []
-                        for (const sm of detail.submarkets) {
-                          // Recompute favIdx + edge for each submarket (duplicates the
-                          // logic from the row render — fine for v0).
-                          const mid1 = sm.outcome_mids[0]; const mid2 = sm.outcome_mids[1]
-                          const o1IsT1 = _norm(sm.outcomes[0]) === _norm(selectedEvent.team1)
-                          const bo = selectedEvent.best_of ?? 5
-                          let fair_o1: number | null = null
-                          const lab = sm.market_type
-                          if (lab === 'match_winner') fair_o1 = o1IsT1 ? probs.series : 1 - probs.series
-                          else if (lab === 'game_handicap') {
-                            const h = parseHandicap(sm.question)
-                            if (h) {
-                              const fIdx = matchOutcome(sm.outcomes, h.favName)
-                              if (fIdx !== null) {
-                                const favIsT1 = (fIdx === 0) === o1IsT1
-                                fair_o1 = fIdx === 0
-                                  ? coverProb(probs, bo, Math.ceil(h.spread), favIsT1 ? 1 : 2)
-                                  : 1 - coverProb(probs, bo, Math.ceil(h.spread), favIsT1 ? 1 : 2)
-                              }
-                            }
-                          } else if (lab.startsWith('game_')) {
-                            fair_o1 = o1IsT1 ? probs.g1 : 1 - probs.g1
-                          }
-                          if (fair_o1 == null) continue
-                          const fair_o2 = 1 - fair_o1
-                          const e1 = fair_o1 - mid1; const e2 = fair_o2 - mid2
-                          const fIdx: 0 | 1 = e1 >= e2 ? 0 : 1
-                          const ePP = Math.abs(fIdx === 0 ? e1 : e2) * 100
-                          if (ePP < edgeThreshold) continue
-                          const tgtFair = fIdx === 0 ? fair_o1 : fair_o2
-                          rows.push({
-                            market_type: sm.market_type, outcome_idx: fIdx, enabled: true,
-                            outcome_name: sm.outcomes[fIdx], match_question: sm.question,
-                            target_fair: tgtFair, token_id: sm.token_ids[fIdx] ?? undefined,
-                          })
-                        }
-                        if (rows.length === 0) { alert('No markets above threshold to enable.'); return }
+                        if (!selectedEvent) return
                         setSubmitting(true)
+                        const rows = await computeEligibleRowsForEvent(selectedEvent)
+                        if (rows.length === 0) { alert('No markets above threshold to enable.'); setSubmitting(false); return }
                         await fetch('/api/quoter/toggle', {
                           method: 'POST', headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({
-                            rows: rows.map(r => ({
-                              ...r, event_slug: selectedEvent.slug, event_title: selectedEvent.title,
-                              max_size_usd: maxSizeUsd, edge_threshold_pp: edgeThreshold,
-                            })),
+                            rows: rows.map(r => ({ ...r, max_size_usd: maxSizeUsd, edge_threshold_pp: edgeThreshold })),
                           }),
                         })
                         await reloadActive()
@@ -647,7 +753,7 @@ export default function PreLivePage() {
                       }}
                       className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white font-semibold px-3 py-1.5 rounded"
                     >
-                      ⚡ Quote all eligible (≥{edgeThreshold}pp)
+                      ⚡ Quote all eligible (this event, ≥{edgeThreshold}pp)
                     </button>
                     <button
                       disabled={submitting}
