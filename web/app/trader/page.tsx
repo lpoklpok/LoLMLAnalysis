@@ -1199,7 +1199,7 @@ export default function TraderPage() {
         // Pull every Polymarket-tracked event so Challengers / Prime / CBLOL etc.
         // surface here even though the model doesn't predict them.
         supabase.from('poly_market_balance')
-          .select('event_slug,event_title,tournament,team1,team2,best_of,market_type,total_volume_usd'),
+          .select('event_slug,event_title,tournament,team1,team2,best_of,market_type,total_volume_usd,last_trade_price,last_trade_ts'),
       ])
       if (cancelled) return
       if (preds.error) { setError(preds.error.message); setLoadingList(false); return }
@@ -1208,13 +1208,31 @@ export default function TraderPage() {
       const predRows = ((preds.data ?? []) as Prediction[]).filter(p => p.poly_event_slug)
       const haveSlug = new Set(predRows.map(p => p.poly_event_slug))
 
-      // 2) Polymarket-only events (group balance rows by event_slug, dedupe)
-      const pmbBySlug = new Map<string, Prediction>()
-      for (const r of (pmb.data ?? []) as Array<{
+      // Settled-event detection: a match is "stale" if its match_winner submarket's
+      // last trade is pinned to 0/1 (resolved) AND the event has already started.
+      // Polymarket-resolved markets don't always tag at exactly 1.00 — they sit
+      // at ~0.96-0.98 since there's no incentive to trade after resolution.
+      type PmbRow = {
         event_slug: string; event_title: string | null; tournament: string | null;
         team1: string | null; team2: string | null; best_of: number | null;
         market_type: string; total_volume_usd: number | null;
-      }>) {
+        last_trade_price: number | null; last_trade_ts: number | null;
+      }
+      const settledSlugs = new Set<string>()
+      const nowSec = Date.now() / 1000
+      for (const r of (pmb.data ?? []) as PmbRow[]) {
+        if (r.market_type !== 'match_winner') continue
+        const p = r.last_trade_price
+        const ts = r.last_trade_ts
+        // Extreme price + last trade >1h ago = resolved (live games still trade frequently)
+        if (p != null && (p >= 0.95 || p <= 0.05) && ts != null && nowSec - ts > 3600) {
+          settledSlugs.add(r.event_slug)
+        }
+      }
+
+      // 2) Polymarket-only events (group balance rows by event_slug, dedupe)
+      const pmbBySlug = new Map<string, Prediction>()
+      for (const r of (pmb.data ?? []) as PmbRow[]) {
         if (!r.event_slug || haveSlug.has(r.event_slug)) continue
         const existing = pmbBySlug.get(r.event_slug)
         const vol = (existing?.poly_volume ?? 0) + (r.market_type === 'match_winner' ? (r.total_volume_usd ?? 0) : 0)
@@ -1262,6 +1280,7 @@ export default function TraderPage() {
         if (existing) existing.poly_volume = vol
       }
       const merged: Prediction[] = [...predRows, ...pmbBySlug.values()]
+        .filter(e => !e.poly_event_slug || !settledSlugs.has(e.poly_event_slug))
         .sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''))
 
       setEvents(merged)
