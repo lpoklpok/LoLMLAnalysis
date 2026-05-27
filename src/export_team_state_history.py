@@ -229,25 +229,41 @@ def main() -> None:
             player_gd15_export[p] = [[d, round(v, 2)] for d, v in hist[-KEEP_TAIL:]]
 
     now = datetime.now(timezone.utc).isoformat()
-    # Per-team-pair h2h history (BEFORE-game stored value from feature_engineering).
-    # Key: sorted "min|||max" pair name, value list = [[date_iso, h2h_wr_from_min_perspective], ...]
-    h2h_dated: dict[str, list[list]] = defaultdict(list)
+    # Per-team-pair h2h history (BEFORE-game stored value) + matchup game count
+    # (used for Bayesian-shrunk h2h updates when user injects future results).
+    h2h_dated:    dict[str, list[list]] = defaultdict(list)
+    h2h_n_games:  dict[str, int]        = defaultdict(int)
     for _, row in gf.iterrows():
-        if pd.isna(row.get("h2h_wr")): continue
         t_blue = row["blue_team"]; t_red = row["red_team"]
         if not isinstance(t_blue, str) or not isinstance(t_red, str): continue
-        h2h_blue = float(row["h2h_wr"])
-        # Normalize to alphabetical pair key with WR from MIN team's perspective
+        # Pair key (sorted alphabetically)
         if t_blue <= t_red:
             key = f"{t_blue}|||{t_red}"
-            wr  = h2h_blue
         else:
             key = f"{t_red}|||{t_blue}"
-            wr  = 1 - h2h_blue
+        # Tally game count (every Gen.G vs HLE counts toward both directions)
+        h2h_n_games[key] += 1
+        if pd.isna(row.get("h2h_wr")): continue
+        h2h_blue = float(row["h2h_wr"])
+        wr = h2h_blue if t_blue <= t_red else 1 - h2h_blue
         h2h_dated[key].append([row["date"].isoformat(), round(wr, 6)])
 
-    # Trim to last 30 entries per pair (most recent activity is what matters for date lookup)
+    # Trim to last 30 entries per pair
     h2h_export = {k: v[-30:] for k, v in h2h_dated.items()}
+    n_games_export = dict(h2h_n_games)
+
+    # Per-team win history (last 15 dated W/L entries so we can extend the
+    # rolling-10 rwr when user injects future game results).
+    team_wins_dated: dict[str, list[list]] = defaultdict(list)
+    for _, row in gf.iterrows():
+        t_blue = row["blue_team"]; t_red = row["red_team"]
+        if not isinstance(t_blue, str) or not isinstance(t_red, str): continue
+        if pd.isna(row.get("blue_win")): continue
+        bw = int(row["blue_win"])
+        ts = row["date"].isoformat()
+        team_wins_dated[t_blue].append([ts, bw])
+        team_wins_dated[t_red].append([ts, 1 - bw])
+    team_wins_export = {k: v[-15:] for k, v in team_wins_dated.items()}
 
     out = {
         "generated":          now,
@@ -259,6 +275,10 @@ def main() -> None:
         "player_gd15_dated":  player_gd15_export,
         # { "min|||max": [[date_iso, h2h_wr_from_min_perspective], ...] }
         "team_pair_h2h_dated": h2h_export,
+        # { "min|||max": total_game_count } — for Bayesian h2h updates
+        "team_pair_n_games":   n_games_export,
+        # { team: [[date_iso, 0_or_1], ...] } — last 15 W/L per team for rwr cascade
+        "team_wins_dated":     team_wins_export,
     }
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUT_PATH.write_text(json.dumps(out, separators=(",", ":")))

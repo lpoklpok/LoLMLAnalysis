@@ -40,6 +40,10 @@ interface TeamStateHistory {
   // { "<sorted min|||max team pair>": [[date_iso, h2h_wr_min_perspective], ...] }
   // — uses BEFORE-game stored h2h_wr from production game_features.
   team_pair_h2h_dated?:   Record<string, Array<[string, number]>>
+  // { "<sorted min|||max>": N } — total historical game count (for Bayesian h2h updates)
+  team_pair_n_games?:     Record<string, number>
+  // { team: [[date_iso, 0_or_1], ...] } — last 15 win/loss per team for rwr cascade
+  team_wins_dated?:       Record<string, Array<[string, number]>>
 }
 
 // Team gd15 from per-player rolling tails — matches feature_engineering.py:515-519
@@ -312,9 +316,51 @@ export default function PredictPage() {
     let s1 = { ...baseS1, elo: e1Override ?? baseS1.elo }
     let s2 = { ...baseS2, elo: e2Override ?? baseS2.elo }
 
-    // ELO update from prior games via K-factor
+    // Cascade prior game results into ALL features (elo, rwr, gd15, h2h).
+    // Each prior game updates the working state for the current game's prediction.
     const K_FACTOR = 24
+    const ROLL_RWR = 10
+    const ROLL_GD15 = history?.gd15_roll ?? 5
     let prev_blue_won: boolean | null = null
+
+    // Filter past entries by asOfDate (only games BEFORE the chosen "as-of" date)
+    const filterDated = <T,>(arr: Array<[string, T]> | undefined): T[] =>
+      (arr ?? []).filter(([d]) => !asOfDate || d < asOfDate).map(([, v]) => v)
+    const t1_wins_past = filterDated<number>(history?.team_wins_dated?.[team1])
+    const t2_wins_past = filterDated<number>(history?.team_wins_dated?.[team2])
+    const t1_wins_synth: number[] = []
+    const t2_wins_synth: number[] = []
+
+    const player_gd15_synth: Record<string, number[]> = {}
+    const addPlayerGd15 = (p: string, v: number) => {
+      if (!player_gd15_synth[p]) player_gd15_synth[p] = []
+      player_gd15_synth[p].push(v)
+    }
+
+    // Bayesian-shrunk h2h: start from current snapshot value + total game count
+    const [minT, maxT] = team1 <= team2 ? [team1, team2] : [team2, team1]
+    const pairKey = `${minT}|||${maxT}`
+    const h2h_n_base = history?.team_pair_n_games?.[pairKey] ?? 0
+    // Back-out wins from current h2h: h2h = (wins + 2.5) / (n + 5)  → wins = h2h*(n+5) - 2.5
+    const h2h_min_perspective_base = (() => {
+      const entries = history?.team_pair_h2h_dated?.[pairKey] ?? []
+      if (entries.length === 0) return 0.5
+      // Use BEFORE-state of first game on/after asOfDate, fall back to most recent
+      if (asOfDate) {
+        const after = entries.find(([d]) => d >= asOfDate)
+        if (after) return after[1]
+      }
+      return entries[entries.length - 1][1]
+    })()
+    // wins from MIN team's perspective in historical record
+    let h2h_min_wins = h2h_min_perspective_base * (h2h_n_base + 5) - 2.5
+    let h2h_n = h2h_n_base
+    // Filter to count past games only (date-aware)
+    if (asOfDate) {
+      const filtered_entries = (history?.team_pair_h2h_dated?.[pairKey] ?? []).filter(([d]) => d < asOfDate)
+      h2h_n = filtered_entries.length > 0 ? Math.max(h2h_n_base - ((history?.team_pair_h2h_dated?.[pairKey] ?? []).length - filtered_entries.length), 0) : h2h_n_base
+    }
+
     for (let i = 0; i < resultsBefore.length; i++) {
       const r = resultsBefore[i]
       if (r.blue_won == null) continue
@@ -323,17 +369,78 @@ export default function PredictPage() {
       if      (side === 'blue_t1') t1_won_prev = r.blue_won
       else if (side === 'blue_t2') t1_won_prev = !r.blue_won
       else                         t1_won_prev = r.blue_won
+
+      // 1) ELO update
       const expected1 = 1 / (1 + Math.pow(10, ((s2.elo ?? 1500) - (s1.elo ?? 1500)) / 400))
       const delta     = K_FACTOR * ((t1_won_prev ? 1 : 0) - expected1)
       s1 = { ...s1, elo: (s1.elo ?? 1500) + delta }
       s2 = { ...s2, elo: (s2.elo ?? 1500) - delta }
+
+      // 2) rwr update: append 1/0 to each team's win history
+      t1_wins_synth.push(t1_won_prev ? 1 : 0)
+      t2_wins_synth.push(t1_won_prev ? 0 : 1)
+
+      // 3) gd15 update: distribute team's gd15_diff to each roster player's history
+      // (uniform across lanes — approximation; real per-position gd15 differs by lane
+      //  but model only sees team mean so this is sufficient)
+      if (r.gd15_diff != null) {
+        const t1_gd15 = side === 'blue_t1' ? r.gd15_diff :
+                        side === 'blue_t2' ? -r.gd15_diff :
+                        r.gd15_diff  // sym: assume t1 was blue
+        for (const p of r1) addPlayerGd15(p, t1_gd15)
+        for (const p of r2) addPlayerGd15(p, -t1_gd15)
+      }
+
+      // 4) h2h update (Bayesian-shrunk)
+      // From MIN team's perspective: did min team win?
+      const min_won = team1 === minT ? t1_won_prev : !t1_won_prev
+      h2h_min_wins += min_won ? 1 : 0
+      h2h_n += 1
+
       prev_blue_won = r.blue_won
     }
 
-    // Build features (t1 perspective). Date-aware h2h pulls the production-stored
-    // h2h_wr from game_features for the closest matchup.
-    const feats     = rawFeatures(params, team1, team2, s1, s2, playoffs, history, asOfDate)
-    const feats_rev = rawFeatures(params, team2, team1, s2, s1, playoffs, history, asOfDate)
+    // Compute augmented rwr (rolling-10 over past + synthetic results)
+    const rwrFromHist = (past: number[], synth: number[]): number | null => {
+      const all = [...past, ...synth]
+      if (all.length < 3) return null
+      const window = all.slice(-ROLL_RWR)
+      return window.reduce((a, b) => a + b, 0) / window.length
+    }
+    const s1_rwr_aug = rwrFromHist(t1_wins_past, t1_wins_synth) ?? s1.rwr
+    const s2_rwr_aug = rwrFromHist(t2_wins_past, t2_wins_synth) ?? s2.rwr
+    s1 = { ...s1, rwr: s1_rwr_aug }
+    s2 = { ...s2, rwr: s2_rwr_aug }
+
+    // Compute augmented team gd15 (rolling-5 per player, including synthetic entries)
+    const teamGd15Aug = (roster: string[], asOf: string): number | null => {
+      const laneMeans: number[] = []
+      for (const p of roster) {
+        const past = filterDated<number>(history?.player_gd15_dated?.[p])
+        const synth = player_gd15_synth[p] ?? []
+        const all = [...past, ...synth]
+        if (all.length >= 2) {
+          const slice = all.slice(-ROLL_GD15)
+          laneMeans.push(slice.reduce((a, b) => a + b, 0) / slice.length)
+        }
+      }
+      if (laneMeans.length === 0) return null
+      return laneMeans.reduce((a, b) => a + b, 0) / laneMeans.length
+    }
+    s1 = { ...s1, gd15: teamGd15Aug(r1, asOfDate) ?? s1.gd15 }
+    s2 = { ...s2, gd15: teamGd15Aug(r2, asOfDate) ?? s2.gd15 }
+
+    // Augmented h2h: convert min-perspective wins back to (t1, t2) frame
+    const h2h_min = (h2h_min_wins + 2.5) / (h2h_n + 5)
+    const h2h_t1  = team1 === minT ? h2h_min : 1 - h2h_min
+
+    // Build features using AUGMENTED state. Override h2h with our cascade value
+    // (rawFeatures' built-in date lookup would return only the pre-G1 h2h,
+    //  missing updates from injected results).
+    const rawFeatsT1: Record<string, number> = rawFeatures(params, team1, team2, s1, s2, playoffs, history, asOfDate)
+    const rawFeatsT2: Record<string, number> = rawFeatures(params, team2, team1, s2, s1, playoffs, history, asOfDate)
+    const feats: Record<string, number>     = { ...rawFeatsT1, h2h_wr: h2h_t1 }
+    const feats_rev: Record<string, number> = { ...rawFeatsT2, h2h_wr: 1 - h2h_t1 }
 
     // Per-feature contributions (t1 perspective; sided returns + intercept; sym uses symmetric formula)
     const contributions: Array<{ name: string; raw: number; scaled: number; contribution: number }> = []
