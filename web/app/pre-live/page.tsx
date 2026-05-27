@@ -302,29 +302,54 @@ export default function PreLivePage() {
   const [subs, setSubs] = useState<Record<string, { blue: string[]; red: string[] }>>({})
   const [logitNudge, setLogitNudge] = useState<Record<string, number>>({})
 
-  // Per-market toggles wired to /api/quoter/toggle (writes to Supabase
-  // quoter_active table, which the Fly quoter polls each tick).
-  const [activeQuotes, setActiveQuotes] = useState<Record<string, { enabled: boolean; max_size_usd: number; edge_threshold_pp: number }>>({})
+  // Active quotes across ALL events. Rendered as the primary view at the top
+  // of the page; event-detail panels become a drill-down.
+  interface ActiveRow {
+    event_slug: string; event_title: string | null; match_question: string | null
+    market_type: string; outcome_idx: number; outcome_name: string | null
+    enabled: boolean; max_size_usd: number; edge_threshold_pp: number
+    target_fair: number | null; token_id: string | null
+    updated_at: string
+  }
+  const [activeRows, setActiveRows] = useState<ActiveRow[]>([])
+  const [liveOrders, setLiveOrders] = useState<Record<string, unknown>[]>([])  // from relay /orders
   const [maxSizeUsd, setMaxSizeUsd]       = useState(25)
   const [edgeThreshold, setEdgeThreshold] = useState(3)
   const [submitting, setSubmitting]       = useState(false)
   const activeKey = (slug: string, mt: string, idx: number) => `${slug}|${mt}|${idx}`
 
-  async function reloadActive() {
-    if (!selectedSlug) return
-    try {
-      const r = await fetch(`/api/quoter/active?slug=${encodeURIComponent(selectedSlug)}`, { cache: 'no-store' })
-      const j = await r.json()
-      const map: Record<string, { enabled: boolean; max_size_usd: number; edge_threshold_pp: number }> = {}
-      for (const row of j.rows ?? []) {
-        map[activeKey(row.event_slug, row.market_type, row.outcome_idx)] = {
-          enabled: row.enabled, max_size_usd: row.max_size_usd, edge_threshold_pp: row.edge_threshold_pp,
-        }
+  // Map keyed by composite key for fast lookup from the per-event detail table.
+  const activeQuotes = useMemo(() => {
+    const m: Record<string, { enabled: boolean; max_size_usd: number; edge_threshold_pp: number }> = {}
+    for (const r of activeRows) {
+      m[activeKey(r.event_slug, r.market_type, r.outcome_idx)] = {
+        enabled: r.enabled, max_size_usd: r.max_size_usd, edge_threshold_pp: r.edge_threshold_pp,
       }
-      setActiveQuotes(map)
+    }
+    return m
+  }, [activeRows])
+
+  async function reloadActive() {
+    try {
+      // No slug filter → all rows across all events
+      const r = await fetch(`/api/quoter/active`, { cache: 'no-store' })
+      const j = await r.json()
+      setActiveRows((j.rows ?? []) as ActiveRow[])
     } catch (e) { console.warn('reload active failed', e) }
+    // Also refresh live order state
+    try {
+      const r = await fetch(`/api/quoter/orders`, { cache: 'no-store' })
+      const j = await r.json()
+      setLiveOrders(((j.orders ?? []) as Record<string, unknown>[]))
+    } catch { /* relay might be unavailable; soft-fail */ }
   }
+  // Initial + on event change (the toggle handlers also call reload)
   useEffect(() => { reloadActive() }, [selectedSlug])
+  // Periodic refresh while page is open
+  useEffect(() => {
+    const t = setInterval(() => reloadActive(), 15_000)
+    return () => clearInterval(t)
+  }, [])
 
   // Compute eligible quote rows for ONE event (used by per-event bulk button
   // AND the global "quote all events" sweep). Pulls /api/trader-event, walks
@@ -586,6 +611,126 @@ export default function PreLivePage() {
       <div className="max-w-7xl mx-auto px-6 py-6 space-y-5">
         {error && <p className="text-red-400 text-sm">{error}</p>}
         {!params && <p className="text-gray-400 text-sm">Loading model params…</p>}
+
+        {/* MAIN: active quotes across all events */}
+        <div className="bg-gray-900 rounded-xl border-2 border-emerald-900/50 p-4">
+          <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
+            <h2 className="text-lg font-bold text-emerald-300">
+              Active Quotes
+              <span className="text-sm text-gray-500 ml-3 font-normal">
+                {activeRows.filter(r => r.enabled).length} enabled · {liveOrders.length} live on Polymarket
+              </span>
+            </h2>
+            <div className="flex gap-2 text-xs">
+              <button
+                disabled={submitting || activeRows.filter(r => r.enabled).length === 0}
+                onClick={async () => {
+                  if (!confirm(`Disable all ${activeRows.filter(r => r.enabled).length} active quoter rows? (Won't kill resting orders — the quoter will cancel them on its next tick)`)) return
+                  setSubmitting(true)
+                  const rows = activeRows.filter(r => r.enabled).map(r => ({
+                    event_slug: r.event_slug, market_type: r.market_type,
+                    outcome_idx: r.outcome_idx as 0|1, enabled: false,
+                  }))
+                  await fetch('/api/quoter/toggle', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rows }),
+                  })
+                  await reloadActive()
+                  setSubmitting(false)
+                }}
+                className="bg-gray-700 hover:bg-gray-600 disabled:opacity-30 text-gray-200 px-3 py-1.5 rounded"
+              >Disable all</button>
+              <button
+                onClick={reloadActive}
+                className="bg-gray-800 hover:bg-gray-700 text-gray-400 px-3 py-1.5 rounded"
+              >↻ Refresh</button>
+            </div>
+          </div>
+
+          {activeRows.filter(r => r.enabled).length === 0 ? (
+            <p className="text-sm text-gray-500 py-4 text-center">
+              No active quotes. Use the event picker below + toggle markets, or click <span className="text-emerald-400">⚡⚡ Quote ALL events</span> for a sweep.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-[10px] text-gray-500 uppercase border-b border-gray-800">
+                    <th className="text-left px-2 py-2">Event</th>
+                    <th className="text-left px-2 py-2">Market</th>
+                    <th className="text-left px-2 py-2">Buy outcome</th>
+                    <th className="text-right px-2 py-2">Target fair</th>
+                    <th className="text-right px-2 py-2">Size</th>
+                    <th className="text-right px-2 py-2">Edge ≥</th>
+                    <th className="text-center px-2 py-2">Live order</th>
+                    <th className="text-center px-2 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeRows.filter(r => r.enabled).map(r => {
+                    // Match against live orders from the relay by token_id
+                    const live = liveOrders.find(o =>
+                      String((o as Record<string, unknown>).asset_id ?? (o as Record<string, unknown>).asset ?? '') === String(r.token_id ?? '')
+                    ) as Record<string, unknown> | undefined
+                    const k = activeKey(r.event_slug, r.market_type, r.outcome_idx)
+                    return (
+                      <tr key={k} className="border-b border-gray-800/40 hover:bg-gray-800/30">
+                        <td className="px-2 py-2">
+                          <button onClick={() => setSlug(r.event_slug)}
+                                  className="text-emerald-300 hover:text-emerald-200 hover:underline text-left">
+                            {r.event_title ?? r.event_slug}
+                          </button>
+                        </td>
+                        <td className="px-2 py-2 font-mono text-gray-400">{r.market_type}</td>
+                        <td className="px-2 py-2">{r.outcome_name ?? `outcome ${r.outcome_idx}`}</td>
+                        <td className="px-2 py-2 text-right font-mono text-blue-300">
+                          {r.target_fair != null ? pct(r.target_fair) : '—'}
+                        </td>
+                        <td className="px-2 py-2 text-right font-mono">${r.max_size_usd}</td>
+                        <td className="px-2 py-2 text-right font-mono text-gray-400">{r.edge_threshold_pp}pp</td>
+                        <td className="px-2 py-2 text-center text-[11px]">
+                          {live ? (
+                            <span className="bg-emerald-900/60 text-emerald-300 px-2 py-0.5 rounded">
+                              ${(Number(live.price ?? 0)).toFixed(3)} × {Number(live.size_remaining ?? live.original_size ?? 0).toFixed(1)}
+                            </span>
+                          ) : (
+                            <span className="text-gray-600">queued</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-2 text-center">
+                          <button
+                            disabled={submitting}
+                            onClick={async () => {
+                              setSubmitting(true)
+                              await fetch('/api/quoter/toggle', {
+                                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  event_slug: r.event_slug, market_type: r.market_type,
+                                  outcome_idx: r.outcome_idx, enabled: false,
+                                }),
+                              })
+                              await reloadActive()
+                              setSubmitting(false)
+                            }}
+                            className="text-xs text-red-400 hover:text-red-300 disabled:opacity-30"
+                          >✕</button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Drilldown header */}
+        <details className="bg-gray-900 rounded-xl border border-gray-800 open:bg-gray-900" open>
+          <summary className="cursor-pointer text-sm text-gray-300 font-medium px-4 py-3 hover:text-gray-100">
+            🔍 Inspect / change an event — pick event, view stats, edit rosters, see per-market edges
+          </summary>
+          <div className="px-4 pb-4 pt-2 space-y-5">
+        {/* (drilldown content nests below — closed at end of selectedEvent block) */}
 
         {/* Event picker + global sweep */}
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-4">
@@ -980,6 +1125,8 @@ export default function PreLivePage() {
         {!selectedEvent && events.length > 0 && (
           <p className="text-gray-500 text-sm">Pick a series above to see fair values + market edges.</p>
         )}
+          </div>
+        </details>
       </div>
     </div>
   )
