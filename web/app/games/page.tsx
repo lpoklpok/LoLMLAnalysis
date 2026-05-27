@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '../../lib/supabase'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 
 interface Game {
   id: number
@@ -123,6 +124,7 @@ function pivotCellColor(key: PivotSortKey, val: number | null): string {
 }
 
 export default function GamesPage() {
+  const router = useRouter()
   const [games, setGames]       = useState<Game[]>([])
   const [loading, setLoading]   = useState(true)
   const [mode, setMode]         = useState<Mode>('games')
@@ -414,7 +416,10 @@ export default function GamesPage() {
                 {paged.map(row => (
                   <tr
                     key={row.id}
-                    className={`border-b border-gray-800/30 hover:bg-gray-900/50 ${
+                    onClick={() => router.push(
+                      `/games/detail?d=${encodeURIComponent(row.date)}&b=${encodeURIComponent(row.blue_team)}&r=${encodeURIComponent(row.red_team)}`
+                    )}
+                    className={`border-b border-gray-800/30 hover:bg-gray-900/50 cursor-pointer ${
                       row.blue_win === 1 ? 'bg-blue-950/10' : 'bg-red-950/10'
                     }`}
                   >
