@@ -1208,10 +1208,13 @@ export default function TraderPage() {
       const predRows = ((preds.data ?? []) as Prediction[]).filter(p => p.poly_event_slug)
       const haveSlug = new Set(predRows.map(p => p.poly_event_slug))
 
-      // Settled-event detection: a match is "stale" if its match_winner submarket's
-      // last trade is pinned to 0/1 (resolved) AND the event has already started.
-      // Polymarket-resolved markets don't always tag at exactly 1.00 — they sit
-      // at ~0.96-0.98 since there's no incentive to trade after resolution.
+      // Settled-event detection: a match is "stale" if either
+      //  (a) the event date is already >18h in the past (LoL Bo5 maxes ~5h), OR
+      //  (b) its match_winner submarket's last trade is pinned near 0/1 AND the
+      //      last trade is >1h old (resolved markets stop trading).
+      // Polymarket-resolved markets don't always pin at 1.00 — they often sit
+      // at ~0.93-0.98 since there's no incentive to trade once resolved, so
+      // 0.90 is a more reliable threshold than 0.95 or 0.99.
       type PmbRow = {
         event_slug: string; event_title: string | null; tournament: string | null;
         team1: string | null; team2: string | null; best_of: number | null;
@@ -1224,8 +1227,7 @@ export default function TraderPage() {
         if (r.market_type !== 'match_winner') continue
         const p = r.last_trade_price
         const ts = r.last_trade_ts
-        // Extreme price + last trade >1h ago = resolved (live games still trade frequently)
-        if (p != null && (p >= 0.95 || p <= 0.05) && ts != null && nowSec - ts > 3600) {
+        if (p != null && (p >= 0.90 || p <= 0.10) && ts != null && nowSec - ts > 3600) {
           settledSlugs.add(r.event_slug)
         }
       }
@@ -1279,8 +1281,18 @@ export default function TraderPage() {
         })
         if (existing) existing.poly_volume = vol
       }
+      const STALE_AGE_HOURS = 18
       const merged: Prediction[] = [...predRows, ...pmbBySlug.values()]
-        .filter(e => !e.poly_event_slug || !settledSlugs.has(e.poly_event_slug))
+        .filter(e => {
+          // Drop if match_winner is resolved (price pinned + last trade > 1h ago)
+          if (e.poly_event_slug && settledSlugs.has(e.poly_event_slug)) return false
+          // Drop if event started > 18h ago — safe upper bound on Bo5 duration
+          if (e.date) {
+            const ageH = (Date.now() - new Date(e.date).getTime()) / 3600_000
+            if (ageH > STALE_AGE_HOURS) return false
+          }
+          return true
+        })
         .sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''))
 
       setEvents(merged)
