@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server'
 
 // Server-side env (NOT NEXT_PUBLIC) so the service-role key never reaches the browser.
-const SB_URL = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
-const SB_KEY = process.env.SUPABASE_SERVICE_KEY ?? ''
+const SB_URL       = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
+const SB_KEY       = process.env.SUPABASE_SERVICE_KEY ?? ''
+const QUOTER_URL   = process.env.QUOTER_URL    ?? 'https://kw-polymarket-quoter.fly.dev'
+const RELAY_SECRET = process.env.RELAY_SECRET  ?? ''
 
 interface ToggleBody {
   event_slug:        string
@@ -60,5 +62,13 @@ export async function POST(req: Request) {
   if (!r.ok) {
     return NextResponse.json({ error: `supabase ${r.status}`, body: await r.text() }, { status: 502 })
   }
-  return NextResponse.json({ ok: true, updated: upsertRows.length, rows: await r.json() })
+  const rowsBack = await r.json()
+  // Fire-and-forget poke to the quoter so it reconciles immediately (vs.
+  // waiting for its next periodic poll). Don't block the user response.
+  if (QUOTER_URL && RELAY_SECRET) {
+    fetch(`${QUOTER_URL.replace(/\/+$/, '')}/poke`, {
+      method: 'POST', headers: { 'X-Relay-Auth': RELAY_SECRET },
+    }).catch(() => { /* quoter might be restarting — fine, next poll will pick it up */ })
+  }
+  return NextResponse.json({ ok: true, updated: upsertRows.length, rows: rowsBack })
 }
