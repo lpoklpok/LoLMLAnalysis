@@ -219,16 +219,28 @@ def main():
         if players:
             rosters[team] = players
 
-    # Precompute pairwise h2h records for all 2026 team pairs
+    # Precompute pairwise h2h records — single pass over features instead of
+    # O(N²) DataFrame scans (used to take ~6 min for ~600 teams).
     print("Computing team h2h records…")
-    h2h = {}
-    team_list = list(teams_2026)
-    for i, t1 in enumerate(team_list):
-        for t2 in team_list[i+1:]:
-            wr = _matchup_h2h_wr(t1, t2, features)
-            if wr is not None:
-                key = f"{t1}|||{t2}"
-                h2h[key] = wr
+    h2h: dict[str, float] = {}
+    teams_2026_set = set(teams_2026)
+    f = features.dropna(subset=['h2h_wr']).copy()
+    # Restrict to matchups where BOTH teams are in the 2026 universe
+    f = f[f['blue_team'].isin(teams_2026_set) & f['red_team'].isin(teams_2026_set)]
+    # Last row per unordered team-pair → that's the most recent h2h snapshot
+    # for that matchup. The h2h_wr stored on a row is from the BLUE team's
+    # perspective; we always key the dict on (t1, t2) where t1 < t2, with
+    # h2h_wr re-oriented to t1's perspective.
+    f['_t1'] = f[['blue_team', 'red_team']].min(axis=1)
+    f['_t2'] = f[['blue_team', 'red_team']].max(axis=1)
+    last_per_pair = f.groupby(['_t1', '_t2'], sort=False).tail(1)
+    for _, row in last_per_pair.iterrows():
+        t1, t2 = row['_t1'], row['_t2']
+        wr = float(row['h2h_wr'])
+        # Re-orient: stored wr is from blue's perspective; we want it from t1's
+        if row['blue_team'] != t1:
+            wr = 1.0 - wr
+        h2h[f"{t1}|||{t2}"] = round(wr, 4)
 
     # Player H2H — filtered to only current roster players
     print("Filtering player h2h to 2026 roster players…")
