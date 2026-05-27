@@ -347,7 +347,7 @@ export default function PreLivePage() {
   useEffect(() => { reloadActive() }, [selectedSlug])
   // Periodic refresh while page is open
   useEffect(() => {
-    const t = setInterval(() => reloadActive(), 15_000)
+    const t = setInterval(() => reloadActive(), 3_000)
     return () => clearInterval(t)
   }, [])
 
