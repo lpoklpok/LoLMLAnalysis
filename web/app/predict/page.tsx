@@ -29,7 +29,7 @@ interface ModelParams {
   player_elos:   Record<string, number>
 }
 
-interface TeamSnapshot { date: string; elo: number; rwr: number | null; roster: string[] }
+interface TeamSnapshot { date: string; elo: number; rwr: number | null; gd15: number | null; roster: string[] }
 interface TeamStateHistory {
   generated:   string
   window_days: number
@@ -129,8 +129,8 @@ export default function PredictPage() {
   }
 
   // ----- Resolve team state for prediction -----
-  // If asOfDate is set: use snapshot (elo/rwr from history) + current model_params for gd15/outperf
-  //                      (gd15/outperf are slow-moving snapshots, not in history file)
+  // If asOfDate is set: use snapshot (elo/rwr/gd15 from history) + current model_params for outperf
+  //                      (outperf rebuild is more involved; gd15 is now in history)
   // Else: use current model_params team stats.
   function teamState(team: string) {
     const cur = params?.teams[team]
@@ -139,7 +139,7 @@ export default function PredictPage() {
       if (snap) return {
         elo:     snap.elo,
         rwr:     snap.rwr,
-        gd15:    cur?.gd15 ?? null,
+        gd15:    snap.gd15 ?? cur?.gd15 ?? null,
         outperf: cur?.outperf ?? null,
       }
     }
