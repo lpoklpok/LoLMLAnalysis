@@ -5,53 +5,43 @@ import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '../../../lib/supabase'
 
-interface Game {
-  gameid:    string
-  date:      string
-  league:    string
-  split:     string | null
-  patch:     string | null
-  playoffs:  number
-  game:      number
-  gamelength: number | null
+type Side = 'blue' | 'red'
+type Pos  = 'top' | 'jng' | 'mid' | 'bot' | 'sup'
 
-  blue_team_teamname: string
-  red_team_teamname:  string
-  blue_team_result:   number
-
-  blue_top_champion: string | null; blue_top_playername: string | null
-  blue_jng_champion: string | null; blue_jng_playername: string | null
-  blue_mid_champion: string | null; blue_mid_playername: string | null
-  blue_bot_champion: string | null; blue_bot_playername: string | null
-  blue_sup_champion: string | null; blue_sup_playername: string | null
-  red_top_champion:  string | null; red_top_playername:  string | null
-  red_jng_champion:  string | null; red_jng_playername:  string | null
-  red_mid_champion:  string | null; red_mid_playername:  string | null
-  red_bot_champion:  string | null; red_bot_playername:  string | null
-  red_sup_champion:  string | null; red_sup_playername:  string | null
-
-  blue_team_kills:   number | null; red_team_kills:   number | null
-  blue_team_dragons: number | null; red_team_dragons: number | null
-  blue_team_barons:  number | null; red_team_barons:  number | null
-  blue_team_towers:  number | null; red_team_towers:  number | null
-  blue_team_firstblood: number | null
-  blue_team_golddiffat15: number | null
-
-  q_blue_win: number | null
+// Untyped wide row — we just index into game[`blue_top_champion`] etc.
+type Game = Record<string, unknown> & {
+  gameid: string; date: string; league: string
+  blue_team_teamname: string; red_team_teamname: string
+  blue_team_result: number
 }
 
-const POSITIONS = ['top', 'jng', 'mid', 'bot', 'sup'] as const
-const POS_LABEL: Record<string, string> = { top: 'TOP', jng: 'JNG', mid: 'MID', bot: 'BOT', sup: 'SUP' }
+const POSITIONS: Pos[] = ['top', 'jng', 'mid', 'bot', 'sup']
+const POS_LABEL: Record<Pos, string> = { top: 'TOP', jng: 'JNG', mid: 'MID', bot: 'BOT', sup: 'SUP' }
 
+function num(g: Game, key: string): number | null {
+  const v = g[key]
+  return (typeof v === 'number') ? v
+       : (v == null || v === '') ? null
+       : Number.isFinite(Number(v)) ? Number(v) : null
+}
+function str(g: Game, key: string): string | null {
+  const v = g[key]
+  return (typeof v === 'string' && v !== '') ? v : null
+}
 function fmtGameLength(secs: number | null): string {
-  if (!secs) return '—'
-  const m = Math.floor(secs / 60)
-  const s = secs % 60
+  if (!secs) return '—'; const m = Math.floor(secs / 60); const s = secs % 60
   return `${m}:${s.toString().padStart(2, '0')}`
 }
-
 function fmtPct(p: number | null, dec = 1): string {
   return p == null ? '—' : `${(p * 100).toFixed(dec)}%`
+}
+function fmtNum(v: number | null, dec = 0): string {
+  return v == null ? '—' : v.toLocaleString('en-US', { maximumFractionDigits: dec, minimumFractionDigits: dec })
+}
+function fmtSigned(v: number | null, dec = 0): string {
+  if (v == null) return '—'
+  const s = v.toLocaleString('en-US', { maximumFractionDigits: dec, minimumFractionDigits: dec })
+  return v > 0 ? `+${s}` : s
 }
 
 function StatRow({ label, blue, red, fmt }: {
@@ -63,14 +53,144 @@ function StatRow({ label, blue, red, fmt }: {
   const redLed  = blue != null && red != null && red > blue
   return (
     <div className="grid grid-cols-[1fr_auto_1fr] gap-4 items-center py-1.5 border-b border-gray-800/40">
-      <div className={`text-right font-mono text-sm ${blueLed ? 'text-blue-400 font-bold' : 'text-gray-300'}`}>
-        {f(blue)}
+      <div className={`text-right font-mono text-sm ${blueLed ? 'text-blue-400 font-bold' : 'text-gray-300'}`}>{f(blue)}</div>
+      <div className="text-center text-xs text-gray-500 px-3 min-w-[140px]">{label}</div>
+      <div className={`text-left font-mono text-sm ${redLed ? 'text-red-400 font-bold' : 'text-gray-300'}`}>{f(red)}</div>
+    </div>
+  )
+}
+
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
+      <h2 className="text-sm font-semibold text-gray-300 mb-3">{title}</h2>
+      {children}
+    </div>
+  )
+}
+
+function Draft({ game }: { game: Game }) {
+  const blueOrderFirst = num(game, 'blue_team_firstPick') === 1
+  const renderSide = (side: Side, color: string) => (
+    <div>
+      <div className="grid grid-cols-[40px_1fr] gap-2 mb-3">
+        <div className="text-xs text-gray-500 pt-1">Bans</div>
+        <div className="flex flex-wrap gap-1.5">
+          {[1,2,3,4,5].map(i => {
+            const b = str(game, `${side}_team_ban${i}`)
+            return b ? (
+              <span key={i} className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded line-through">{b}</span>
+            ) : null
+          })}
+        </div>
       </div>
-      <div className="text-center text-xs text-gray-500 px-3 min-w-[120px]">{label}</div>
-      <div className={`text-left font-mono text-sm ${redLed ? 'text-red-400 font-bold' : 'text-gray-300'}`}>
-        {f(red)}
+      <div className="grid grid-cols-[40px_1fr] gap-2">
+        <div className="text-xs text-gray-500 pt-1">Picks</div>
+        <div className="flex flex-wrap gap-1.5">
+          {[1,2,3,4,5].map(i => {
+            const p = str(game, `${side}_team_pick${i}`)
+            return p ? (
+              <span key={i} className={`text-xs px-2 py-0.5 rounded font-medium ${color}`}>
+                {i}. {p}
+              </span>
+            ) : null
+          })}
+        </div>
       </div>
     </div>
+  )
+  return (
+    <Panel title={`Draft${blueOrderFirst === true ? ' (Blue first pick)' : ''}`}>
+      <div className="grid md:grid-cols-2 gap-6">
+        <div>
+          <h3 className="text-xs text-blue-300 font-semibold mb-2">{str(game, 'blue_team_teamname')}</h3>
+          {renderSide('blue', 'bg-blue-900/40 text-blue-200')}
+        </div>
+        <div>
+          <h3 className="text-xs text-red-300 font-semibold mb-2">{str(game, 'red_team_teamname')}</h3>
+          {renderSide('red', 'bg-red-900/40 text-red-200')}
+        </div>
+      </div>
+    </Panel>
+  )
+}
+
+function AtTimeTable({ game, stat, label, fmt = fmtNum }: {
+  game: Game; stat: string; label: string; fmt?: (v: number | null, d?: number) => string
+}) {
+  const TIMES = [10, 15, 20, 25]
+  return (
+    <div className="mb-4">
+      <h4 className="text-xs text-gray-500 mb-1">{label}</h4>
+      <table className="w-full text-xs font-mono">
+        <thead>
+          <tr className="text-gray-600">
+            <th className="text-left w-32"></th>
+            {TIMES.map(t => <th key={t} className="text-right pr-3">@{t}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {(['blue', 'red'] as Side[]).map(side => (
+            <tr key={side}>
+              <td className={`py-0.5 ${side === 'blue' ? 'text-blue-300' : 'text-red-300'}`}>{str(game, `${side}_team_teamname`)?.slice(0, 18)}</td>
+              {TIMES.map(t => {
+                const b = num(game, `blue_team_${stat}${t}`)
+                const r = num(game, `red_team_${stat}${t}`)
+                const v = side === 'blue' ? b : r
+                const leading = b != null && r != null && (side === 'blue' ? b > r : r > b)
+                return (
+                  <td key={t} className={`text-right pr-3 ${leading ? 'text-gray-100 font-semibold' : 'text-gray-400'}`}>
+                    {fmt(v)}
+                  </td>
+                )
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function PerPosGoldDiff({ game }: { game: Game }) {
+  const TIMES = [10, 15, 20, 25]
+  return (
+    <table className="w-full text-xs font-mono">
+      <thead>
+        <tr className="text-gray-600 border-b border-gray-800">
+          <th className="text-left pb-1 w-20">Lane</th>
+          <th className="text-left pb-1">Matchup</th>
+          {TIMES.map(t => <th key={t} className="text-right pr-3 pb-1">GD@{t}</th>)}
+        </tr>
+      </thead>
+      <tbody>
+        {POSITIONS.map(pos => {
+          const bPlayer = str(game, `blue_${pos}_playername`)
+          const rPlayer = str(game, `red_${pos}_playername`)
+          const bChamp  = str(game, `blue_${pos}_champion`)
+          const rChamp  = str(game, `red_${pos}_champion`)
+          return (
+            <tr key={pos} className="border-b border-gray-800/40">
+              <td className="py-1 text-gray-500">{POS_LABEL[pos]}</td>
+              <td className="py-1 text-gray-300">
+                <span className="text-blue-400">{bPlayer ?? '—'}</span>
+                <span className="text-gray-600 italic ml-1">{bChamp ?? ''}</span>
+                <span className="text-gray-600 mx-2">vs</span>
+                <span className="text-red-400">{rPlayer ?? '—'}</span>
+                <span className="text-gray-600 italic ml-1">{rChamp ?? ''}</span>
+              </td>
+              {TIMES.map(t => {
+                // gold diff is blue-perspective in OE — show from blue side
+                const v = num(game, `blue_${pos}_golddiffat${t}`)
+                const color = v == null ? 'text-gray-600'
+                            : v > 0 ? 'text-blue-400' : v < 0 ? 'text-red-400' : 'text-gray-400'
+                return <td key={t} className={`text-right pr-3 py-1 ${color}`}>{fmtSigned(v)}</td>
+              })}
+            </tr>
+          )
+        })}
+      </tbody>
+    </table>
   )
 }
 
@@ -86,24 +206,17 @@ function GameDetail() {
 
   useEffect(() => {
     if (!date || !blue || !red) {
-      setError('Missing query parameters (d, b, r)')
-      setLoading(false)
-      return
+      setError('Missing query parameters (d, b, r)'); setLoading(false); return
     }
-    // Match games table by date + teams. Try BOTH orientations because the same
-    // physical match exists as one row only (whichever was blue side).
     const isoDay = date.slice(0, 10)
     const filter = `and(date.gte.${isoDay}T00:00:00,date.lt.${isoDay}T23:59:59)`
     supabase.from('games').select('*').or(filter).then(({ data, error }) => {
       if (error) { setError(error.message); setLoading(false); return }
       const exact = (data ?? []).find(g =>
         g.blue_team_teamname === blue && g.red_team_teamname === red
-      )
-      if (!exact) {
-        setError(`No matching game in 'games' table for ${blue} vs ${red} on ${isoDay}`)
-      } else {
-        setGame(exact as Game)
-      }
+      ) as Game | undefined
+      if (!exact) setError(`No matching game in 'games' table for ${blue} vs ${red} on ${isoDay}`)
+      else setGame(exact)
       setLoading(false)
     })
   }, [date, blue, red])
@@ -116,8 +229,10 @@ function GameDetail() {
     </div>
   )
 
-  const blueWon = game.blue_team_result === 1
-  const d = new Date(game.date)
+  const blueWon  = num(game, 'blue_team_result') === 1
+  const d        = new Date(game.date)
+  const qBlue    = num(game, 'q_blue_win')
+  const hasDraft = !!str(game, 'blue_team_pick1') || !!str(game, 'blue_team_ban1')
 
   return (
     <>
@@ -134,75 +249,68 @@ function GameDetail() {
           </span>
         </div>
         <p className="text-xs text-gray-500 mt-1">
-          {game.league}
-          {game.split && <span> · {game.split}</span>}
-          {game.playoffs ? <span className="text-yellow-400 ml-1">· Playoffs</span> : null}
-          <span> · Patch {game.patch ?? '—'}</span>
-          <span> · Game {game.game}</span>
+          {game.league}{str(game, 'split') && <span> · {str(game, 'split')}</span>}
+          {num(game, 'playoffs') ? <span className="text-yellow-400 ml-1">· Playoffs</span> : null}
+          <span> · Patch {str(game, 'patch') ?? '—'}</span>
+          <span> · Game {num(game, 'game') ?? '?'}</span>
           <span> · {d.toLocaleString()}</span>
-          <span> · {fmtGameLength(game.gamelength)}</span>
+          <span> · {fmtGameLength(num(game, 'gamelength'))}</span>
         </p>
       </header>
 
-      <div className="max-w-5xl mx-auto px-6 py-8 space-y-8">
-        {game.q_blue_win != null && (
-          <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
-            <h2 className="text-sm font-semibold text-gray-300 mb-3">Pre-game market</h2>
+      <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+        {qBlue != null && (
+          <Panel title="Pre-game market">
             <div className="flex rounded overflow-hidden h-7 text-sm font-semibold">
-              <div className="flex items-center justify-end pr-2 bg-blue-600" style={{ width: `${game.q_blue_win * 100}%` }}>
-                <span className="text-white text-xs">{fmtPct(game.q_blue_win)}</span>
+              <div className="flex items-center justify-end pr-2 bg-blue-600" style={{ width: `${qBlue * 100}%` }}>
+                <span className="text-white text-xs">{fmtPct(qBlue)}</span>
               </div>
-              <div className="flex items-center justify-start pl-2 bg-red-600" style={{ width: `${(1 - game.q_blue_win) * 100}%` }}>
-                <span className="text-white text-xs">{fmtPct(1 - game.q_blue_win)}</span>
+              <div className="flex items-center justify-start pl-2 bg-red-600" style={{ width: `${(1 - qBlue) * 100}%` }}>
+                <span className="text-white text-xs">{fmtPct(1 - qBlue)}</span>
               </div>
             </div>
-          </div>
+          </Panel>
         )}
 
-        <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
-          <h2 className="text-sm font-semibold text-gray-300 mb-4">Lineup</h2>
-          <div className="grid grid-cols-[1fr_auto_1fr] gap-x-4 gap-y-2 items-center">
-            <div className="text-right text-xs text-blue-300 font-semibold">{game.blue_team_teamname}</div>
-            <div className="text-center text-xs text-gray-500 font-mono w-12"></div>
-            <div className="text-left text-xs text-red-300 font-semibold">{game.red_team_teamname}</div>
+        {hasDraft && <Draft game={game} />}
 
-            {POSITIONS.map(pos => {
-              const bChamp  = (game as unknown as Record<string, string | null>)[`blue_${pos}_champion`]
-              const bPlayer = (game as unknown as Record<string, string | null>)[`blue_${pos}_playername`]
-              const rChamp  = (game as unknown as Record<string, string | null>)[`red_${pos}_champion`]
-              const rPlayer = (game as unknown as Record<string, string | null>)[`red_${pos}_playername`]
-              return (
-                <div key={pos} className="contents">
-                  <div className="text-right">
-                    <span className="text-gray-200 font-medium">{bPlayer ?? '—'}</span>{' '}
-                    <span className="text-gray-500 text-xs italic">{bChamp ?? ''}</span>
-                  </div>
-                  <div className="text-center text-xs font-mono text-gray-500 bg-gray-800 px-2 py-0.5 rounded">
-                    {POS_LABEL[pos]}
-                  </div>
-                  <div className="text-left">
-                    <span className="text-gray-200 font-medium">{rPlayer ?? '—'}</span>{' '}
-                    <span className="text-gray-500 text-xs italic">{rChamp ?? ''}</span>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
+        <Panel title="Per-lane gold diff (blue perspective)">
+          <PerPosGoldDiff game={game} />
+        </Panel>
 
-        <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
-          <h2 className="text-sm font-semibold text-gray-300 mb-3">Game stats</h2>
-          <StatRow label="Kills"        blue={game.blue_team_kills}   red={game.red_team_kills}   />
-          <StatRow label="Dragons"      blue={game.blue_team_dragons} red={game.red_team_dragons} />
-          <StatRow label="Barons"       blue={game.blue_team_barons}  red={game.red_team_barons}  />
-          <StatRow label="Towers"       blue={game.blue_team_towers}  red={game.red_team_towers}  />
-          <StatRow label="First Blood"  blue={game.blue_team_firstblood ?? 0} red={(game.blue_team_firstblood ?? 0) === 1 ? 0 : 1}
-                   fmt={v => v ? '✓' : '—'} />
-          {game.blue_team_golddiffat15 != null && (
-            <StatRow label="Gold @ 15 (diff)" blue={game.blue_team_golddiffat15} red={-game.blue_team_golddiffat15}
-                     fmt={v => v == null ? '—' : (v > 0 ? '+' : '') + v.toLocaleString()} />
-          )}
-        </div>
+        <Panel title="Team stats — outcomes">
+          <StatRow label="Kills"       blue={num(game, 'blue_team_kills')}   red={num(game, 'red_team_kills')}   />
+          <StatRow label="Dragons"     blue={num(game, 'blue_team_dragons')} red={num(game, 'red_team_dragons')} />
+          <StatRow label="Barons"      blue={num(game, 'blue_team_barons')}  red={num(game, 'red_team_barons')}  />
+          <StatRow label="Towers"      blue={num(game, 'blue_team_towers')}  red={num(game, 'red_team_towers')}  />
+          <StatRow label="First Blood" blue={num(game, 'blue_team_firstblood') ?? 0} red={(num(game, 'blue_team_firstblood') ?? 0) === 1 ? 0 : 1} fmt={v => v ? '✓' : '—'} />
+          <StatRow label="First Dragon"  blue={num(game, 'blue_team_firstdragon')} red={num(game, 'red_team_firstdragon')} fmt={v => v === 1 ? '✓' : v === 0 ? '—' : '—'} />
+          <StatRow label="First Herald"  blue={num(game, 'blue_team_firstherald')} red={num(game, 'red_team_firstherald')} fmt={v => v === 1 ? '✓' : v === 0 ? '—' : '—'} />
+          <StatRow label="First Baron"   blue={num(game, 'blue_team_firstbaron')}  red={num(game, 'red_team_firstbaron')}  fmt={v => v === 1 ? '✓' : v === 0 ? '—' : '—'} />
+          <StatRow label="First Tower"   blue={num(game, 'blue_team_firsttower')}  red={num(game, 'red_team_firsttower')}  fmt={v => v === 1 ? '✓' : v === 0 ? '—' : '—'} />
+        </Panel>
+
+        <Panel title="Team stats — totals">
+          <StatRow label="Total gold"       blue={num(game, 'blue_team_totalgold')}          red={num(game, 'red_team_totalgold')}          fmt={v => fmtNum(v, 0)} />
+          <StatRow label="Earned gold"      blue={num(game, 'blue_team_earnedgold')}         red={num(game, 'red_team_earnedgold')}         fmt={v => fmtNum(v, 0)} />
+          <StatRow label="Damage to champs" blue={num(game, 'blue_team_damagetochampions')}  red={num(game, 'red_team_damagetochampions')}  fmt={v => fmtNum(v, 0)} />
+          <StatRow label="Minion kills"     blue={num(game, 'blue_team_minionkills')}        red={num(game, 'red_team_minionkills')}        />
+          <StatRow label="Monster kills"    blue={num(game, 'blue_team_monsterkills')}       red={num(game, 'red_team_monsterkills')}       />
+          <StatRow label="Vision score"     blue={num(game, 'blue_team_visionscore')}        red={num(game, 'red_team_visionscore')}        />
+          <StatRow label="Wards placed"     blue={num(game, 'blue_team_wardsplaced')}        red={num(game, 'red_team_wardsplaced')}        />
+          <StatRow label="Wards killed"     blue={num(game, 'blue_team_wardskilled')}        red={num(game, 'red_team_wardskilled')}        />
+          <StatRow label="Control wards"    blue={num(game, 'blue_team_controlwardsbought')} red={num(game, 'red_team_controlwardsbought')} />
+        </Panel>
+
+        <Panel title="Team @ time benchmarks">
+          <AtTimeTable game={game} stat="gold"     label="Gold"      fmt={v => fmtNum(v, 0)} />
+          <AtTimeTable game={game} stat="golddiff" label="Gold diff" fmt={v => fmtSigned(v)} />
+          <AtTimeTable game={game} stat="xp"       label="XP"        fmt={v => fmtNum(v, 0)} />
+          <AtTimeTable game={game} stat="cs"       label="CS"        fmt={v => fmtNum(v, 0)} />
+          <AtTimeTable game={game} stat="kills"    label="Kills"     />
+          <AtTimeTable game={game} stat="assists"  label="Assists"   />
+          <AtTimeTable game={game} stat="deaths"   label="Deaths"    />
+        </Panel>
 
         <p className="text-xs text-gray-600 text-center">
           gameid: <code className="text-gray-500">{game.gameid}</code>

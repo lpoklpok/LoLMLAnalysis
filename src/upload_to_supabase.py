@@ -41,13 +41,35 @@ KEEP_COLS = [
     'red_top_champion',  'red_jng_champion',  'red_mid_champion',
     'red_bot_champion',  'red_sup_champion',
 
+    # Per-position gold diff @ time
+    *[f'{side}_{pos}_golddiffat{t}'
+      for side in ('blue','red') for pos in ('top','jng','mid','bot','sup') for t in (10,15,20,25)],
+
     # Key team stats
     'blue_team_kills', 'red_team_kills',
     'blue_team_dragons', 'red_team_dragons',
     'blue_team_barons', 'red_team_barons',
     'blue_team_towers', 'red_team_towers',
     'blue_team_firstblood',
-    'blue_team_golddiffat15',
+
+    # Team aggregates
+    *[f'{side}_team_{stat}'
+      for side in ('blue','red')
+      for stat in ('totalgold','earnedgold','damagetochampions','visionscore',
+                    'wardsplaced','wardskilled','controlwardsbought',
+                    'minionkills','monsterkills',
+                    'firstdragon','firstherald','firstbaron','firsttower')],
+
+    # Team @ time benchmarks
+    *[f'{side}_team_{stat}{t}'
+      for side in ('blue','red')
+      for stat in ('goldat','csat','xpat','killsat','assistsat','deathsat','golddiffat')
+      for t in (10, 15, 20, 25)],
+
+    # Draft: pick order + bans
+    *[f'{side}_team_{kind}{slot}'
+      for side in ('blue','red') for kind in ('pick','ban') for slot in (1,2,3,4,5)],
+    'blue_team_firstPick',
 
     # Odds
     'odd1_decimal', 'odd2_decimal',
@@ -61,6 +83,8 @@ INT_COLS = [
     'blue_team_result', 'blue_team_kills', 'red_team_kills',
     'blue_team_dragons', 'red_team_dragons', 'blue_team_barons', 'red_team_barons',
     'blue_team_towers', 'red_team_towers', 'blue_team_firstblood',
+    'blue_team_firstPick',
+    *[f'{side}_team_first{obj}' for side in ('blue','red') for obj in ('dragon','herald','baron','tower')],
 ]
 
 
