@@ -706,7 +706,39 @@ export default function PredictPage() {
     }
     const p_series_t1 = bestOf === 1 ? games[0].breakdown.p_t1 : seriesProb()
 
-    return { games, p_series_t1, t1_wins, t2_wins, needed }
+    // Series outcome distribution — probability of each terminal (t1_wins, t2_wins) state
+    const outcome_dist: Record<string, number> = {}
+    function distWalk(t1w: number, t2w: number, idx: number, pathProb: number): void {
+      if (t1w >= needed || t2w >= needed) {
+        const key = `${t1w}-${t2w}`
+        outcome_dist[key] = (outcome_dist[key] ?? 0) + pathProb
+        return
+      }
+      if (idx >= bestOf) return
+      const g = games[idx]
+      const gr = gameResults[idx + 1]
+      if (gr?.blue_won != null) {
+        const t1_won = g.side === 'blue_t1' ? gr.blue_won : g.side === 'blue_t2' ? !gr.blue_won : gr.blue_won
+        if (t1_won) distWalk(t1w + 1, t2w, idx + 1, pathProb)
+        else        distWalk(t1w, t2w + 1, idx + 1, pathProb)
+      } else {
+        distWalk(t1w + 1, t2w, idx + 1, pathProb * g.breakdown.p_t1)
+        distWalk(t1w, t2w + 1, idx + 1, pathProb * (1 - g.breakdown.p_t1))
+      }
+    }
+    distWalk(0, 0, 0, 1)
+    const distribution = Object.entries(outcome_dist).map(([k, prob]) => {
+      const [t1w, t2w] = k.split('-').map(Number)
+      return { t1_wins: t1w, t2_wins: t2w, prob }
+    }).sort((a, b) => {
+      // Order: t1 wins first (most lopsided first), then t2 wins
+      if ((a.t1_wins >= needed) !== (b.t1_wins >= needed)) return a.t1_wins >= needed ? -1 : 1
+      // Within same winner, fewer opponent wins first (e.g. 2-0 before 2-1)
+      if (a.t1_wins >= needed) return a.t2_wins - b.t2_wins
+      return a.t1_wins - b.t1_wins
+    })
+
+    return { games, p_series_t1, t1_wins, t2_wins, needed, distribution }
   }, [params, history, team1, team2, bestOf, sideMode, playoffs, g2Shrink, poAdj, coachAdj, asOfDate, gameResults, rosters, gameSideOverrides, eloAdjustments])
 
   if (err) return <div className="p-8 text-red-400">{err}</div>
@@ -1020,6 +1052,45 @@ export default function PredictPage() {
                       </div>
                     )}
                   </div>
+
+                  {/* Outcome distribution */}
+                  {bestOf > 1 && predictions.distribution.length > 0 && (
+                    <div className="mt-4">
+                      <div className="text-[11px] uppercase tracking-wide text-zinc-500 mb-2">Outcome distribution</div>
+                      <table className="text-xs">
+                        <thead>
+                          <tr className="text-zinc-500">
+                            <th className="text-left pr-4 pb-1">outcome</th>
+                            <th className="text-right pr-4 pb-1 w-24">probability</th>
+                            <th className="pb-1 w-48">visual</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {predictions.distribution.map(d => {
+                            const t1Won = d.t1_wins >= predictions.needed
+                            const winner = t1Won ? team1 : team2
+                            const winnerColor = t1Won ? 'text-blue-400' : 'text-rose-400'
+                            const score = t1Won ? `${d.t1_wins}-${d.t2_wins}` : `${d.t2_wins}-${d.t1_wins}`
+                            return (
+                              <tr key={`${d.t1_wins}-${d.t2_wins}`} className="border-t border-zinc-800/40">
+                                <td className="py-1 pr-4 font-mono">
+                                  <span className={`${winnerColor} font-semibold`}>{winner}</span>
+                                  <span className="text-zinc-500"> wins {score}</span>
+                                </td>
+                                <td className="py-1 pr-4 font-mono text-right">{(d.prob * 100).toFixed(1)}%</td>
+                                <td className="py-1">
+                                  <div className="h-2 bg-zinc-800 rounded-sm overflow-hidden w-48">
+                                    <div className={`h-full ${t1Won ? 'bg-blue-500/60' : 'bg-rose-500/60'}`}
+                                         style={{ width: `${Math.min(100, d.prob * 100)}%` }} />
+                                  </div>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               )
             })()}
