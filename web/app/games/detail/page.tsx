@@ -227,11 +227,21 @@ function GameDetail() {
     const filter = `and(date.gte.${isoDay}T00:00:00,date.lt.${isoDay}T23:59:59)`
     supabase.from('games').select('*').or(filter).then(({ data, error }) => {
       if (error) { setError(error.message); setLoading(false); return }
+      // Match the EXACT game by full timestamp + teams. A series can have G1/G2/G3
+      // with the same blue/red sides on the same day, so date-only match returns
+      // the wrong game (always the first).
       const exact = (data ?? []).find(g =>
+        g.date === date && g.blue_team_teamname === blue && g.red_team_teamname === red
+      ) as Game | undefined
+      // Fallback: if exact timestamp doesn't match (e.g. minor format diff), use
+      // first matching pair (old behavior — but warn in console)
+      const fallback = (data ?? []).find(g =>
         g.blue_team_teamname === blue && g.red_team_teamname === red
       ) as Game | undefined
-      if (!exact) setError(`No matching game in 'games' table for ${blue} vs ${red} on ${isoDay}`)
-      else setGame(exact)
+      const chosen = exact ?? fallback
+      if (!exact && fallback) console.warn(`Exact timestamp ${date} not matched; using first ${blue} vs ${red} of day`)
+      if (!chosen) setError(`No matching game in 'games' table for ${blue} vs ${red} on ${isoDay}`)
+      else setGame(chosen)
       setLoading(false)
     })
   }, [date, blue, red])
