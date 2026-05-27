@@ -153,7 +153,18 @@ def _truncate(table: str) -> bool:
     return False
 
 
-def _upload_table(client, table: str, df: pd.DataFrame):
+def _latest_date_in_table(client, table: str) -> str | None:
+    """Return the max date in the table, or None if empty/error."""
+    try:
+        r = client.table(table).select('date').order('date', desc=True).limit(1).execute()
+        if r.data:
+            return str(r.data[0]['date'])
+    except Exception as e:
+        print(f"  Couldn't read max(date): {e!r}")
+    return None
+
+
+def _upload_table(client, table: str, df: pd.DataFrame, *, full_refresh: bool = False):
     existing_cols = _existing_columns(client, table)
     if existing_cols:
         skipped = [c for c in df.columns if c not in existing_cols]
@@ -162,12 +173,41 @@ def _upload_table(client, table: str, df: pd.DataFrame):
                   f"(run the SQL migration to unlock): {skipped[:5]}{' ...' if len(skipped) > 5 else ''}")
             df = df[[c for c in df.columns if c in existing_cols]]
 
+    incremental = not full_refresh and os.environ.get('SKIP_DELETE') != '1'
+    if incremental:
+        latest = _latest_date_in_table(client, table)
+        if latest:
+            # Both sides tz-naive to allow comparison: Supabase returns ISO with
+            # +00:00, our df['date'] was already normalized to tz-naive ISO in _clean.
+            # df['date'] is tz-naive ISO from _clean(); Supabase returns tz-aware
+            # ISO. Strip tz from latest (tz_convert(None) for aware, tz_localize(None)
+            # would crash on aware ts), keep df side as-is.
+            df_dates = pd.to_datetime(df['date'])
+            latest_ts = pd.to_datetime(latest)
+            if latest_ts.tzinfo is not None:
+                latest_ts = latest_ts.tz_convert(None)
+            cutoff = latest_ts - pd.Timedelta(hours=1)
+            df = df[df_dates >= cutoff]
+            print(f"Incremental: {len(df):,} rows newer than {latest} (use FULL_REFRESH=1 to re-upload everything)")
+            if df.empty:
+                print("  Nothing new to upload.")
+                return
+            # Delete only the overlap window so we can re-insert without duplicate-key errors.
+            # Use Management API if available.
+            cutoff_iso = cutoff.strftime('%Y-%m-%dT%H:%M:%S')
+            if not _delete_after(table, cutoff_iso):
+                client.table(table).delete().gte('date', cutoff_iso).execute()
+        else:
+            print(f"Table '{table}' empty — doing initial full upload")
+            full_refresh = True
+            incremental = False
+
+    if full_refresh:
+        print(f"Full refresh: truncating '{table}'")
+        if not _truncate(table):
+            client.table(table).delete().neq('gameid', '').execute()
+
     print(f"Uploading {len(df):,} rows × {len(df.columns)} cols to '{table}'...")
-
-    # Truncate existing data — prefer Management API (fast), fall back to REST DELETE.
-    if os.environ.get('SKIP_DELETE') != '1' and not _truncate(table):
-        client.table(table).delete().neq('gameid', '').execute()
-
     records = [_sanitize_record(r) for r in df.to_dict(orient='records')]
     total_batches = math.ceil(len(records) / BATCH_SIZE)
 
@@ -178,6 +218,24 @@ def _upload_table(client, table: str, df: pd.DataFrame):
         client.table(table).insert(batch).execute()
 
     print(f"\nDone — '{table}' uploaded.")
+
+
+def _delete_after(table: str, cutoff_iso: str) -> bool:
+    """Delete rows with date >= cutoff via Management API. Returns True on success."""
+    pat = os.environ.get('SUPABASE_PAT', '').strip()
+    if not pat and Path(os.path.expanduser('~/.supabase_pat')).exists():
+        pat = Path(os.path.expanduser('~/.supabase_pat')).read_text().strip()
+    if not pat:
+        return False
+    ref = SUPABASE_URL.split('//')[-1].split('.')[0]
+    import requests
+    r = requests.post(
+        f'https://api.supabase.com/v1/projects/{ref}/database/query',
+        headers={'Authorization': f'Bearer {pat}', 'Content-Type': 'application/json'},
+        json={'query': f"DELETE FROM {table} WHERE date >= '{cutoff_iso}'"},
+        timeout=30,
+    )
+    return r.status_code in (200, 201)
 
 
 def run():
@@ -197,8 +255,14 @@ def run():
 
     print(f"Rows: {len(df):,}  Columns: {len(df.columns)}")
 
+    # Full refresh: weekly (Sunday UTC) or when FULL_REFRESH=1 is set.
+    # Catches retroactive odds/score corrections on historical games.
+    import datetime
+    full = (os.environ.get('FULL_REFRESH') == '1'
+            or datetime.datetime.now(datetime.timezone.utc).weekday() == 6)  # Sunday
+
     client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    _upload_table(client, 'games', df)
+    _upload_table(client, 'games', df, full_refresh=full)
 
 
 if __name__ == '__main__':
