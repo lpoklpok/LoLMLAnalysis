@@ -206,11 +206,24 @@ export default function GamesPage() {
     load()
   }, [])
 
+  // Leagues that have ever produced a market price (oddsportal or Polymarket)
+  // since snapshots started. Computed once from the loaded games — used by the
+  // "Leagues w/ Odds" filter to hide leagues we have no market data for.
+  const leaguesWithOdds = useMemo(() => {
+    const s = new Set<string>()
+    for (const g of games) {
+      if (g.q_blue_win != null || g.poly_blue_win_prob != null) s.add(g.league)
+    }
+    return s
+  }, [games])
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
     return games.filter(g => {
       if (league === 'Major Leagues') {
         if (!MAJOR_LEAGUES.includes(g.league)) return false
+      } else if (league === 'Leagues w/ Odds') {
+        if (!leaguesWithOdds.has(g.league)) return false
       } else if (league !== 'All' && g.league !== league) {
         return false
       }
@@ -220,7 +233,7 @@ export default function GamesPage() {
       if (q && !g.blue_team.toLowerCase().includes(q) && !g.red_team.toLowerCase().includes(q)) return false
       return true
     })
-  }, [games, league, year, playoffs, search])
+  }, [games, league, year, playoffs, search, leaguesWithOdds])
 
   const sorted = useMemo(() => {
     return [...filtered].sort((a, b) => {
@@ -292,7 +305,7 @@ export default function GamesPage() {
   function handleFilter() { setPage(0) }
 
   const leagues = useMemo(
-    () => ['All', 'Major Leagues', ...Array.from(new Set(games.map(g => g.league))).sort()],
+    () => ['All', 'Major Leagues', 'Leagues w/ Odds', ...Array.from(new Set(games.map(g => g.league))).sort()],
     [games]
   )
   const years   = useMemo(() => ['All', ...Array.from(new Set(games.map(g => String(g.year)))).sort().reverse()], [games])
