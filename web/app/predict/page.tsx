@@ -245,7 +245,7 @@ export default function PredictPage() {
   // Per-game UI: which rows have their formula breakdown expanded
   const [expandedGames, setExpandedGames] = useState<Record<number, boolean>>({})
 
-  // Load
+  // Load static data files
   useEffect(() => {
     Promise.all([
       fetch('/model_params.json').then(r => r.json()),
@@ -254,6 +254,54 @@ export default function PredictPage() {
     ]).then(([p, h, pk]) => { setParams(p); setHistory(h); setPicks(pk) })
     .catch(e => setErr(String(e)))
   }, [])
+
+  // Hydrate UI state from localStorage on first mount.
+  // Use a sentinel to skip saving until the load has completed (otherwise the
+  // empty initial state would overwrite the saved values on first render).
+  const STORAGE_KEY = 'predict_v1'
+  const [hydrated, setHydrated] = useState(false)
+  useEffect(() => {
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEY) : null
+      if (raw) {
+        const s = JSON.parse(raw)
+        if (typeof s.team1     === 'string') setTeam1(s.team1)
+        if (typeof s.team2     === 'string') setTeam2(s.team2)
+        if ([1, 3, 5].includes(s.bestOf))    setBestOf(s.bestOf)
+        if (['symmetric', 'blue_t1', 'blue_t2'].includes(s.sideMode)) setSideMode(s.sideMode)
+        if (typeof s.playoffs  === 'boolean') setPlayoffs(s.playoffs)
+        if (typeof s.g2Shrink  === 'boolean') setG2Shrink(s.g2Shrink)
+        if (typeof s.poAdj     === 'boolean') setPoAdj(s.poAdj)
+        if (typeof s.coachAdj  === 'boolean') setCoachAdj(s.coachAdj)
+        if (typeof s.asOfDate  === 'string')  setAsOfDate(s.asOfDate)
+        if (s.rosters           && typeof s.rosters === 'object')           setRosters(s.rosters)
+        if (s.eloAdjustments    && typeof s.eloAdjustments === 'object')    setEloAdjustments(s.eloAdjustments)
+        if (s.gameResults       && typeof s.gameResults === 'object')       setGameResults(s.gameResults)
+        if (typeof s.bankroll  === 'number') setBankroll(s.bankroll)
+        if (typeof s.seriesMarketT1 === 'number' || s.seriesMarketT1 === null) setSeriesMarketT1(s.seriesMarketT1)
+        if (s.gameSideOverrides && typeof s.gameSideOverrides === 'object') setGameSideOverrides(s.gameSideOverrides)
+        if (s.expandedGames     && typeof s.expandedGames === 'object')     setExpandedGames(s.expandedGames)
+      }
+    } catch { /* corrupt JSON — ignore */ }
+    setHydrated(true)
+  }, [])
+
+  // Persist UI state to localStorage on any change (after hydration completes)
+  useEffect(() => {
+    if (!hydrated) return
+    try {
+      const s = {
+        team1, team2, bestOf, sideMode, playoffs, g2Shrink, poAdj, coachAdj,
+        asOfDate, rosters, eloAdjustments, gameResults, bankroll,
+        seriesMarketT1, gameSideOverrides, expandedGames,
+      }
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(s))
+    } catch { /* quota / private mode — ignore */ }
+  }, [
+    hydrated, team1, team2, bestOf, sideMode, playoffs, g2Shrink, poAdj, coachAdj,
+    asOfDate, rosters, eloAdjustments, gameResults, bankroll,
+    seriesMarketT1, gameSideOverrides, expandedGames,
+  ])
 
   // ----- Team list (sorted) -----
   const teamOptions = useMemo<string[]>(() => {
@@ -763,9 +811,21 @@ export default function PredictPage() {
       <header className="max-w-6xl mx-auto mb-6 flex items-baseline justify-between">
         <div>
           <h1 className="text-3xl font-semibold">Predict (manual)</h1>
-          <p className="text-sm text-zinc-400 mt-1">Replay or forecast any matchup with full control over inputs.</p>
+          <p className="text-sm text-zinc-400 mt-1">Replay or forecast any matchup with full control over inputs. Settings persist across reloads.</p>
         </div>
-        <Link href="/" className="text-sm text-zinc-400 hover:text-zinc-100">← back</Link>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => {
+              if (!confirm('Reset all controls + result inputs to defaults?')) return
+              try { window.localStorage.removeItem(STORAGE_KEY) } catch {}
+              window.location.reload()
+            }}
+            className="text-xs text-zinc-500 hover:text-rose-400 transition-colors"
+            title="Clear saved settings and reload the page with defaults">
+            Reset all
+          </button>
+          <Link href="/" className="text-sm text-zinc-400 hover:text-zinc-100">← back</Link>
+        </div>
       </header>
 
       <div className="max-w-6xl mx-auto space-y-4">
