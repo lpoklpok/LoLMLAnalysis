@@ -129,6 +129,30 @@ def _existing_columns(client, table: str) -> set[str]:
     return set()
 
 
+def _truncate(table: str) -> bool:
+    """Use the Management API to TRUNCATE — far faster than DELETE on 25k rows
+    (which times out at the default 8s statement_timeout). Falls back to DELETE
+    if SUPABASE_PAT isn't set."""
+    pat = os.environ.get('SUPABASE_PAT', '').strip()
+    if not pat and Path(os.path.expanduser('~/.supabase_pat')).exists():
+        pat = Path(os.path.expanduser('~/.supabase_pat')).read_text().strip()
+    if not pat:
+        return False
+    ref = SUPABASE_URL.split('//')[-1].split('.')[0]
+    import requests
+    r = requests.post(
+        f'https://api.supabase.com/v1/projects/{ref}/database/query',
+        headers={'Authorization': f'Bearer {pat}', 'Content-Type': 'application/json'},
+        json={'query': f'TRUNCATE TABLE {table}'},
+        timeout=30,
+    )
+    if r.status_code == 201 or r.status_code == 200:
+        print(f"  TRUNCATE'd via Management API")
+        return True
+    print(f"  TRUNCATE via Management API failed ({r.status_code}): {r.text[:200]}")
+    return False
+
+
 def _upload_table(client, table: str, df: pd.DataFrame):
     existing_cols = _existing_columns(client, table)
     if existing_cols:
@@ -140,8 +164,9 @@ def _upload_table(client, table: str, df: pd.DataFrame):
 
     print(f"Uploading {len(df):,} rows × {len(df.columns)} cols to '{table}'...")
 
-    # Truncate existing data
-    client.table(table).delete().neq('gameid', '').execute()
+    # Truncate existing data — prefer Management API (fast), fall back to REST DELETE.
+    if os.environ.get('SKIP_DELETE') != '1' and not _truncate(table):
+        client.table(table).delete().neq('gameid', '').execute()
 
     records = [_sanitize_record(r) for r in df.to_dict(orient='records')]
     total_batches = math.ceil(len(records) / BATCH_SIZE)
