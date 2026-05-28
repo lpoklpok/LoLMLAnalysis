@@ -1391,10 +1391,29 @@ function LadderModal({
             </div>
           </div>
 
-          {/* Kalshi (display-only for now) — aligned to same price band as Polymarket */}
+          {/* Kalshi — combined book across team1 + team2 tickers in team1-YES price space.
+              Team1 and team2 tickers are economically identical (1v1 binary), but Kalshi tracks
+              them as separate orderbooks. Here we merge:
+                BID at $p:  team1.yes_dollars[$p]   + team2.no_dollars[$p]      (people buying team1)
+                ASK at $p:  team1.no_dollars[$(1−p)] + team2.yes_dollars[$(1−p)] (people selling team1)
+              Both kalshiThis and kalshiOpp come from /api/kalshi-book which has already inverted
+              no_dollars → asks at (1−p) in each ticker's YES space. So we map team2-YES space → team1-YES
+              by swapping bids/asks and inverting the price (p → 1−p). */}
           {kalshiSide && (() => {
-            const k = kalshiThis ?? { bids: new Map(), asks: new Map(), updated: 0 }
-            // Kalshi's own best bid/ask within its book
+            const t1 = kalshiThis ?? { bids: new Map<number, number>(), asks: new Map<number, number>(), updated: 0 }
+            const t2 = kalshiOpp  ?? { bids: new Map<number, number>(), asks: new Map<number, number>(), updated: 0 }
+            const bids = new Map<number, number>()
+            const asks = new Map<number, number>()
+            // Helper: round to 2 decimals to align across both books
+            const r2 = (p: number) => Math.round(p * 100) / 100
+            // Direct team1 bids and asks
+            for (const [p, sz] of t1.bids) { const k = r2(p); bids.set(k, (bids.get(k) ?? 0) + sz) }
+            for (const [p, sz] of t1.asks) { const k = r2(p); asks.set(k, (asks.get(k) ?? 0) + sz) }
+            // team2 inverts: team2 asks at $q → team1 bids at $(1−q); team2 bids at $q → team1 asks at $(1−q)
+            for (const [q, sz] of t2.asks) { const k = r2(1 - q); bids.set(k, (bids.get(k) ?? 0) + sz) }
+            for (const [q, sz] of t2.bids) { const k = r2(1 - q); asks.set(k, (asks.get(k) ?? 0) + sz) }
+            const k = { bids, asks, updated: Math.max(t1.updated ?? 0, t2.updated ?? 0) }
+            // Best bid = highest BID price; best ask = lowest ASK price
             const kBest = (() => {
               let bb = -Infinity, ba = Infinity
               for (const p of k.bids.keys()) if (p > bb) bb = p
