@@ -176,38 +176,69 @@ function edgeColor(edge: number | null) {
   return 'text-gray-400'
 }
 
-// Poll the live-model worker; returns the snapshot matching the given team
-// names (fuzzy normalised). Returns null if no live game matches.
+// SSE-driven live-model snapshot. The Fly worker pushes one snapshot per
+// frame on /stream; we maintain a local map keyed by game_id and pick the
+// freshest match by team-name fuzzy compare.
+//
+// Was polling /api/lol/live-state every 1s — meant 86,400 round-trips/day
+// per open tab + 1s worst-case staleness + Vercel cold-start on every poll.
+// SSE drops latency to ~10-50ms and traffic to "only when state changes."
+// Safety-net /state pull every 30s in case SSE silently disconnects.
 function useLiveSnapshot(blueTeam: string | null, redTeam: string | null): LiveSnapshot | null {
   const [snap, setSnap] = useState<LiveSnapshot | null>(null)
   useEffect(() => {
     if (!blueTeam || !redTeam) { setSnap(null); return }
     const a_n = blueTeam.toLowerCase().replace(/[^a-z0-9]/g, '')
     const b_n = redTeam.toLowerCase().replace(/[^a-z0-9]/g, '')
+
+    const matches = (g: LiveSnapshot): boolean => {
+      const ga = (g.team_a_name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+      const gb = (g.team_b_name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+      return (a_n.includes(ga) || ga.includes(a_n)) && (b_n.includes(gb) || gb.includes(b_n))
+          || (a_n.includes(gb) || gb.includes(a_n)) && (b_n.includes(ga) || ga.includes(b_n))
+    }
+
+    // Local games map (keyed by game_id) — built up from SSE pushes + seed.
+    const games = new Map<string, LiveSnapshot>()
+    const recompute = () => {
+      let best: LiveSnapshot | null = null
+      for (const g of games.values()) {
+        if (!matches(g)) continue
+        if (!best || g.updated_ts > best.updated_ts) best = g
+      }
+      setSnap(best)
+    }
+
+    // Initial state pull so the first paint isn't empty.
     let cancelled = false
-    const pull = async () => {
+    const seed = async () => {
       try {
         const r = await fetch('/api/lol/live-state', { cache: 'no-store' })
-        if (!r.ok) return
+        if (!r.ok || cancelled) return
         const d = await r.json() as { games?: Record<string, LiveSnapshot> }
-        if (cancelled) return
-        const games = Object.values(d.games ?? {})
-        const matches = games.filter(g => {
-          const ga = (g.team_a_name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
-          const gb = (g.team_b_name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
-          return (a_n.includes(ga) || ga.includes(a_n)) && (b_n.includes(gb) || gb.includes(b_n))
-              || (a_n.includes(gb) || gb.includes(a_n)) && (b_n.includes(ga) || ga.includes(b_n))
-        })
-        // Multiple games per matchup possible (e.g. G1 finished + G2 live, both
-        // still in worker cache). Pick the freshest by updated_ts.
-        const match = matches.length === 0 ? null
-          : matches.reduce((a, b) => (b.updated_ts > a.updated_ts ? b : a))
-        setSnap(match)
+        for (const g of Object.values(d.games ?? {})) games.set(g.game_id, g)
+        recompute()
       } catch { /* ignore */ }
     }
-    pull()
-    const id = setInterval(pull, 1000)
-    return () => { cancelled = true; clearInterval(id) }
+    seed()
+
+    // SSE: each `data: <json>` is one snapshot.
+    const es = new EventSource('/api/lol/live-stream')
+    es.onmessage = (ev) => {
+      try {
+        const g = JSON.parse(ev.data) as LiveSnapshot
+        if (g.game_id) {
+          games.set(g.game_id, g)
+          recompute()
+        }
+      } catch { /* ignore */ }
+    }
+    es.onerror = () => { /* EventSource auto-reconnects */ }
+
+    // Safety-net /state re-pull every 30s in case SSE silently dies.
+    const safety = setInterval(seed, 30_000)
+
+    return () => { cancelled = true; es.close(); clearInterval(safety) }
   }, [blueTeam, redTeam])
   return snap
 }
