@@ -141,7 +141,11 @@ jobs:
         run: python src/export_draft_lookups.py
 
       - name: Export team-state history JSON (for /predict date toggle)
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python src/export_team_state_history.py
+        continue-on-error: true
 
       - name: Export pick tendencies JSON (for /predict)
         env:
@@ -167,7 +171,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add web/public/model_params.json web/public/champion_findings.json web/public/pnl_daily.json web/public/team_name_drift.json
+          git add web/public/model_params.json web/public/champion_findings.json web/public/pnl_daily.json web/public/team_name_drift.json web/public/champ_stats.json web/public/closing_rate.json
           git diff --cached --quiet && exit 0
           git commit -m "chore: update model_params + champion_findings [skip ci]"
           git pull --rebase --autostash origin main
