@@ -43,16 +43,6 @@ jobs:
           restore-keys: |
             processed-v2-
 
-      # The cache above restores data/processed from previous runs, which
-      # silently overwrites the snapshot CSV freshly committed by the Fly
-      # snapshot worker. Force-refresh those specific files from git so we
-      # pick up the latest hourly snapshots before the merge step runs.
-      - name: Refresh worker-committed files from git (snapshot + trades)
-        run: |
-          git fetch --quiet origin main
-          git checkout origin/main -- \
-            data/processed/polymarket_submarket_snapshots.csv 2>/dev/null || true
-
       - name: Refresh OE mirror (copy Tim's CSV to your Drive folder)
         env:
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
@@ -75,10 +65,6 @@ jobs:
 
       - name: Merge game + odds data
         run: python src/merge_data.py
-
-      - name: Merge Polymarket per-game implied odds (no-op if snapshot CSV missing)
-        run: python src/merge_polymarket_data.py
-        continue-on-error: true
 
       - name: Build features + ELO state
         run: python src/feature_engineering.py
@@ -161,17 +147,11 @@ jobs:
         run: python src/export_pnl_daily.py
         continue-on-error: true
 
-      - name: Check for team-name drift (Polymarket ↔ OE)
-        env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-        run: python src/check_team_name_drift.py
-        continue-on-error: true
-
       - name: Commit updated JSON files
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add web/public/model_params.json web/public/champion_findings.json web/public/pnl_daily.json web/public/team_name_drift.json web/public/champ_stats.json web/public/closing_rate.json
+          git add web/public/model_params.json web/public/champion_findings.json web/public/pnl_daily.json web/public/champ_stats.json web/public/closing_rate.json
           git diff --cached --quiet && exit 0
           git commit -m "chore: update model_params + champion_findings [skip ci]"
           git pull --rebase --autostash origin main

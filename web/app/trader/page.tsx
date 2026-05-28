@@ -325,26 +325,24 @@ function buildRows(pred: Prediction, detail: EventDetail | null, liveSnap: LiveS
   // When this matchup has an in-progress game, replace the static per-game
   // prior with the live `p_adj` for that game number. Match Winner gets
   // recomputed via seriesProbLive accounting for any settled games.
+  //
+  // IMPORTANT: Supabase's `pred.blue_team` (the row's "blue_team" column) does
+  // NOT always match lolesports' team_a (first-listed team). They can diverge
+  // when the schedule lists teams in a different order. So we derive the
+  // actual in-game blue side name directly from the worker fields, then match
+  // each market's outcome[0] against THAT name (not via pred.blue_team).
   let liveGameNum: number | null = null
-  let pTeam1Live:  number | null = null
-  // Current series score in (team1Wins, team2Wins) from Polymarket pinned mids
+  let ingameBlueNameNorm: string | null = null
   let t1Wins = 0, t2Wins = 0
   if (liveSnap && hasModel) {
     liveGameNum = liveSnap.game_number
-    // Map live in-game blue → team1
-    // `pred.blue_team` is team1 in our DB (= team A in the worker).
-    // `liveSnap.blue_team_id === liveSnap.team_a_id` ⇒ in-game blue is team A = pred.blue_team.
-    const predBlueIsIngameBlue = liveSnap.blue_team_id !== null
+    const ingameBlueIsWorkerA = liveSnap.blue_team_id !== null
       ? liveSnap.blue_team_id === liveSnap.team_a_id
       : true
-    // Polymarket outcome[0] (= team1 in the market) may or may not match pred.blue_team
-    const team1IsPredBlue = detail.submarkets[0]?.outcomes
-      ? _normTeam(detail.submarkets[0].outcomes[0]) === _normTeam(pred.blue_team)
-      : true
-    const team1IsIngameBlue = team1IsPredBlue === predBlueIsIngameBlue
-    pTeam1Live = team1IsIngameBlue ? liveSnap.p_adj : 1 - liveSnap.p_adj
+    const ingameBlueName = ingameBlueIsWorkerA ? liveSnap.team_a_name : liveSnap.team_b_name
+    ingameBlueNameNorm = _normTeam(ingameBlueName)
 
-    // Detect settled prior games from pinned game_N_winner mids
+    // Detect settled prior games from pinned game_N_winner mids (relative to team1)
     for (const sm of detail.submarkets) {
       if (!sm.market_type.startsWith('game_') || !sm.market_type.endsWith('_winner')) continue
       const n = parseInt(sm.market_type.replace('game_','').replace('_winner',''), 10)
@@ -355,6 +353,15 @@ function buildRows(pred: Prediction, detail: EventDetail | null, liveSnap: LiveS
       if (t1Pin != null && t1Pin >= 0.98) t1Wins++
       else if (t1Pin != null && t1Pin <= 0.02) t2Wins++
     }
+  }
+  // Per-market resolver: P(market.outcome[0] wins the live game) from p_adj.
+  // Computed per submarket because outcome ordering varies across markets.
+  function pTeam1LiveFor(o1: string): number | null {
+    if (!liveSnap || ingameBlueNameNorm == null) return null
+    const t1 = _normTeam(o1)
+    const isBlue = t1 === ingameBlueNameNorm
+      || t1.includes(ingameBlueNameNorm) || ingameBlueNameNorm.includes(t1)
+    return isBlue ? liveSnap.p_adj : 1 - liveSnap.p_adj
   }
 
   // For each polymarket submarket, compute model fair value for outcomes[0] and outcomes[1].
@@ -372,9 +379,8 @@ function buildRows(pred: Prediction, detail: EventDetail | null, liveSnap: LiveS
       if (hasModel) {
         const team1IsBlue = _normTeam(o1) === _normTeam(pred.blue_team)
         const pTeam1Game = team1IsBlue ? (pBlue as number) : 1 - (pBlue as number)
-        if (liveGameNum != null && pTeam1Live != null) {
-          // Map team1 in this market to team1 in our reference frame
-          const pT1Live = team1IsBlue ? pTeam1Live : 1 - pTeam1Live
+        const pT1Live = liveGameNum != null ? pTeam1LiveFor(o1) : null
+        if (liveGameNum != null && pT1Live != null) {
           fv1 = seriesProbLive(pTeam1Game, bo, t1Wins, t2Wins, liveGameNum, pT1Live)
           fv_is_live = true
         } else {
@@ -387,10 +393,14 @@ function buildRows(pred: Prediction, detail: EventDetail | null, liveSnap: LiveS
       market_label = `Game ${gnum} Winner`
       if (hasModel) {
         const team1IsBlue = _normTeam(o1) === _normTeam(pred.blue_team)
-        if (liveGameNum != null && pTeam1Live != null && gnum === liveGameNum) {
-          // Live override for this specific game
-          fv1 = team1IsBlue ? pTeam1Live : 1 - pTeam1Live
-          fv_is_live = true
+        if (liveGameNum != null && gnum === liveGameNum) {
+          const pT1Live = pTeam1LiveFor(o1)
+          if (pT1Live != null) {
+            fv1 = pT1Live
+            fv_is_live = true
+          } else {
+            fv1 = team1IsBlue ? (pBlue as number) : 1 - (pBlue as number)
+          }
         } else {
           fv1 = team1IsBlue ? (pBlue as number) : 1 - (pBlue as number)
         }
@@ -798,31 +808,31 @@ function MainPanel({
 
       {/* Live model — only renders when this matchup has an in-progress game */}
       {liveSnap && (() => {
-        // Match team-A in live snapshot to in-game blue
-        const t1IsBlue = _normTeam(liveSnap.team_a_name) === _normTeam(pred.blue_team)
-        const pBlueModel = t1IsBlue || liveSnap.blue_team_id === null
-          ? liveSnap.p_model
-          : 1 - liveSnap.p_model
-        const pBlueAdj   = t1IsBlue || liveSnap.blue_team_id === null
-          ? liveSnap.p_adj
-          : 1 - liveSnap.p_adj
+        // Resolve the actual in-game blue side directly from the worker.
+        // `liveSnap.blue_team_id` matches one of (team_a_id, team_b_id).
+        const ingameBlueIsWorkerA = liveSnap.blue_team_id !== null
+          ? liveSnap.blue_team_id === liveSnap.team_a_id
+          : true
+        const liveBlueLabel = ingameBlueIsWorkerA ? liveSnap.team_a_name : liveSnap.team_b_name
+        // p_model / p_adj from the worker are ALREADY P(in-game blue wins).
+        // No conditional flip needed.
+        const pBlueModel = liveSnap.p_model
+        const pBlueAdj   = liveSnap.p_adj
         const mins = Math.floor(liveSnap.clock_s / 60)
         const secs = Math.floor(liveSnap.clock_s % 60)
         const clockStr = `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`
-        // Side-of-pred-blue label (which team is on in-game blue is independent
-        // of which team we call "blue_team" in our DB)
-        const liveBlueLabel  = t1IsBlue ? pred.blue_team : pred.red_team
         // FV for series, using live p_blue for the CURRENT live game only.
-        // Uses seriesProbLive accounting for any settled previous games.
-        const team1IsPredBlue = detail?.submarkets?.[0]?.outcomes
-          ? _normTeam(detail.submarkets[0].outcomes[0]) === _normTeam(pred.blue_team)
-          : true
-        const pStaticT1 = team1IsPredBlue ? (pred.pred_blue_win ?? 0.5) : 1 - (pred.pred_blue_win ?? 0.5)
-        // Map live blue-side p → team1 side
-        const pTeam1LiveForSeries = team1IsPredBlue
-          ? (liveSnap.blue_team_id === liveSnap.team_a_id ? pBlueAdj : 1 - pBlueAdj)
-          : (liveSnap.blue_team_id === liveSnap.team_a_id ? 1 - pBlueAdj : pBlueAdj)
-        // Detect settled prior games same way as buildRows
+        // Map team1 (= pred.blue_team, our DB's reference frame) to the live
+        // game's blue side via name. pred.blue_team may or may not match the
+        // in-game blue side name.
+        const liveBlueNorm  = _normTeam(liveBlueLabel)
+        const predBlueNorm  = _normTeam(pred.blue_team)
+        const predBlueIsIngameBlue =
+          predBlueNorm === liveBlueNorm
+          || predBlueNorm.includes(liveBlueNorm) || liveBlueNorm.includes(predBlueNorm)
+        const pStaticT1 = pred.pred_blue_win ?? 0.5  // already team1 = pred.blue_team
+        const pTeam1LiveForSeries = predBlueIsIngameBlue ? pBlueAdj : 1 - pBlueAdj
+        // Detect settled prior games (team1 = pred.blue_team perspective)
         let t1W = 0, t2W = 0
         for (const sm of detail?.submarkets ?? []) {
           if (!sm.market_type.startsWith('game_') || !sm.market_type.endsWith('_winner')) continue
@@ -1432,11 +1442,13 @@ function LadderModal({
     }
     const t0 = Date.now()
     // Honor the IOC/GTD toggle from the top of the modal:
-    //   FAK (IOC): expiration_ts = now → Kalshi treats any expiry ≤ now+59s as IOC
-    //              (match immediately, cancel any unfilled remainder)
+    //   FAK (IOC): expiration_ts = now+5s → Kalshi treats any expiry ≤ now+59s as IOC
+    //              (match immediately, cancel any unfilled remainder). The +5s buffer
+    //              avoids "expiration in the past" rejections from clock skew or
+    //              network/proxy latency between browser → Vercel → Kalshi.
     //   GTD     : expiration_ts 5min from now → rests on the book
     const nowSec     = Math.floor(Date.now() / 1000)
-    const expiration = mode === 'FAK' ? nowSec : nowSec + 300
+    const expiration = mode === 'FAK' ? nowSec + 5 : nowSec + 300
     const modeTag    = mode === 'FAK' ? 'IOC' : 'GTD'
     log(true, `→ ${args.label} ${args.count} @ ${args.px_cents}¢ (kalshi · ${modeTag})`)
     try {
