@@ -133,12 +133,7 @@ export default function Dashboard() {
         <Link href="/chart" className="text-sm text-purple-400 hover:text-purple-300 transition-colors">
           Model vs Market →
         </Link>
-        <Link href="/flow" className="text-sm text-rose-400 hover:text-rose-300 transition-colors">
-          Order Flow →
-        </Link>
-        <Link href="/mm" className="text-sm text-fuchsia-400 hover:text-fuchsia-300 transition-colors">
-          Market Maker →
-        </Link>
+        {/* /flow and /mm temporarily disabled — Supabase egress. Re-enable when needed. */}
         <Link href="/backtest" className="text-sm text-emerald-400 hover:text-emerald-300 transition-colors">
           Kelly Backtest →
         </Link>
