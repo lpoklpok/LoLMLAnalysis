@@ -334,6 +334,29 @@ function MainPanel({
     .map(t => ({ ...t, pos: positionByToken.get(t.token_id) }))
     .filter(t => t.pos && Math.abs(num(t.pos.size)) > 0.0001)
 
+  // Kalshi positions per ticker — for delta calc on Kalshi side
+  const [kalshiPositions, setKalshiPositions] = useState<Record<string, number>>({})
+  useEffect(() => {
+    // Only fetch if event has any Kalshi tickers
+    const hasKalshi = detail?.submarkets?.some(s => s.kalshi_sides?.some(k => k?.ticker))
+    if (!hasKalshi) { setKalshiPositions({}); return }
+    let cancelled = false
+    const pull = async () => {
+      try {
+        const r = await fetch('/api/kalshi/positions', { cache: 'no-store' })
+        if (!r.ok) return
+        const d = await r.json() as { market_positions?: Array<{ ticker: string; position: number }> }
+        if (cancelled) return
+        const m: Record<string, number> = {}
+        for (const p of d.market_positions ?? []) m[p.ticker] = p.position
+        setKalshiPositions(m)
+      } catch { /* ignore */ }
+    }
+    pull()
+    const id = setInterval(pull, 5000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [detail])
+
   // ── Game-level delta tracker ────────────────────────────────────────────
   // For each game in the series, compute net delta to team1 winning that game.
   // Delta sources for a position on team1 outcome of market M:
@@ -351,9 +374,9 @@ function MainPanel({
     const bo  = pred.best_of
     const needed = Math.ceil(bo / 2)
 
-    // Tally completed games from submarket prices (game_N_winner mid pinned ≥0.97 or ≤0.03 = settled)
-    // We need to map outcome[0] of each game_N market to team1 (blue).
     const norm = (s: string) => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+    // Game considered done when its game_N_winner submarket mid pins at ≥0.98 or ≤0.02.
+    // (Polymarket resolved markets stop trading and pin near the outcome.)
     let t1Wins = 0, t2Wins = 0
     const settledGames: number[] = []
     for (const sm of detail.submarkets) {
@@ -362,10 +385,9 @@ function MainPanel({
       if (!Number.isFinite(n)) continue
       const t1IsBlue = norm(sm.outcomes[0]) === norm(pred.blue_team)
       const [m1, m2] = sm.outcome_mids
-      const settled = (m1 != null && (m1 >= 0.97 || m1 <= 0.03)) ||
-                       (m2 != null && (m2 >= 0.97 || m2 <= 0.03))
+      const settled = (m1 != null && (m1 >= 0.98 || m1 <= 0.02)) ||
+                       (m2 != null && (m2 >= 0.98 || m2 <= 0.02))
       if (!settled) continue
-      // Whichever side is at ~1 won
       const t1Won = (t1IsBlue && (m1 ?? 0) > 0.5) || (!t1IsBlue && (m2 ?? 0) > 0.5)
       if (t1Won) t1Wins++; else t2Wins++
       settledGames.push(n)
@@ -408,36 +430,53 @@ function MainPanel({
       return wReach - lReach
     }
 
-    // Aggregate positions: for each game N, sum
-    //   match_winner_pos × deltaPerShare(N) + game_N_winner_pos × 1
-    // Sign convention: positive = long team1 in that game; negative = long team2.
-    const mwSm = detail.submarkets.find(s => s.market_type === 'match_winner')
-    const mwT1Idx = mwSm && norm(mwSm.outcomes[0]) === norm(pred.blue_team) ? 0 : 1
-    const mwT1Token = mwSm?.token_ids[mwT1Idx] ?? null
-    const mwT2Token = mwSm?.token_ids[1 - mwT1Idx] ?? null
-    const mwT1Pos = mwT1Token ? num(positionByToken.get(mwT1Token)?.size) : 0
-    const mwT2Pos = mwT2Token ? num(positionByToken.get(mwT2Token)?.size) : 0
-    const mwNetT1 = mwT1Pos - mwT2Pos   // net long team1 (in match_winner)
+    // Helper to compute "net long team1" for a submarket, combining PM + Kalshi.
+    // Kalshi position is signed (positive = YES contracts, negative = NO contracts).
+    // YES on team1's ticker = long team1; YES on team2's ticker = long team2 (= short team1).
+    const norm2 = norm
+    function netT1(sm: { outcomes: [string, string]; token_ids: [string | null, string | null]; kalshi_sides: Array<{ ticker: string } | null> }): number {
+      const t1Idx = norm2(sm.outcomes[0]) === norm2(pred.blue_team) ? 0 : 1
+      // Polymarket
+      const t1Tok = sm.token_ids[t1Idx]
+      const t2Tok = sm.token_ids[1 - t1Idx]
+      const pmT1 = t1Tok ? num(positionByToken.get(t1Tok)?.size) : 0
+      const pmT2 = t2Tok ? num(positionByToken.get(t2Tok)?.size) : 0
+      // Kalshi: position is signed per ticker (+ = YES contracts, - = NO contracts)
+      const kT1Ticker = sm.kalshi_sides[t1Idx]?.ticker
+      const kT2Ticker = sm.kalshi_sides[1 - t1Idx]?.ticker
+      // Long team1 = +YES on t1 ticker, -NO on t1 ticker, -YES on t2 ticker, +NO on t2 ticker
+      // Equivalent to: kT1Pos - kT2Pos  (where pos = yes count - no count)
+      const kT1 = kT1Ticker ? (kalshiPositions[kT1Ticker] ?? 0) : 0
+      const kT2 = kT2Ticker ? (kalshiPositions[kT2Ticker] ?? 0) : 0
+      return (pmT1 - pmT2) + (kT1 - kT2)
+    }
 
-    const rows: Array<{ n: number; settled: boolean; delta_per_share: number; direct_t1: number; direct_t2: number; mw_contrib: number; total_t1: number }> = []
+    // Aggregate positions: for each game N, sum
+    //   match_winner_net × deltaPerShare(N) + game_N_winner_net × 1
+    const mwSm = detail.submarkets.find(s => s.market_type === 'match_winner')
+    const mwNetT1 = mwSm ? netT1(mwSm) : 0
+
+    const rows: Array<{ n: number; settled: boolean; delta_per_share: number; direct_pm: number; direct_kalshi: number; mw_contrib: number; total_t1: number }> = []
     for (let n = 1; n <= bo; n++) {
       const isSettled = settledGames.includes(n)
       const deltaPS = isSettled ? 0 : deltaForGame(n)
-      const gw = detail.submarkets.find(s => s.market_type === `game_${n}_winner`)
-      let direct_t1 = 0, direct_t2 = 0
+      const gw: Submarket | undefined = detail.submarkets.find(s => s.market_type === `game_${n}_winner`)
+      let direct_pm = 0, direct_kalshi = 0
       if (gw) {
         const t1Idx = norm(gw.outcomes[0]) === norm(pred.blue_team) ? 0 : 1
         const t1Tok = gw.token_ids[t1Idx]
         const t2Tok = gw.token_ids[1 - t1Idx]
-        direct_t1 = t1Tok ? num(positionByToken.get(t1Tok)?.size) : 0
-        direct_t2 = t2Tok ? num(positionByToken.get(t2Tok)?.size) : 0
+        direct_pm = (t1Tok ? num(positionByToken.get(t1Tok)?.size) : 0) - (t2Tok ? num(positionByToken.get(t2Tok)?.size) : 0)
+        const kT1 = gw.kalshi_sides[t1Idx]?.ticker
+        const kT2 = gw.kalshi_sides[1 - t1Idx]?.ticker
+        direct_kalshi = (kT1 ? (kalshiPositions[kT1] ?? 0) : 0) - (kT2 ? (kalshiPositions[kT2] ?? 0) : 0)
       }
       const mw_contrib = mwNetT1 * deltaPS
-      const total_t1 = mw_contrib + direct_t1 - direct_t2
-      rows.push({ n, settled: isSettled, delta_per_share: deltaPS, direct_t1, direct_t2, mw_contrib, total_t1 })
+      const total_t1 = mw_contrib + direct_pm + direct_kalshi
+      rows.push({ n, settled: isSettled, delta_per_share: deltaPS, direct_pm, direct_kalshi, mw_contrib, total_t1 })
     }
     return { rows, t1Wins, t2Wins, needed, mwNetT1, p }
-  }, [detail, pred, positionByToken])
+  }, [detail, pred, positionByToken, kalshiPositions])
 
   return (
     <div className="p-3 md:p-6 space-y-4 md:space-y-6">
@@ -523,7 +562,7 @@ function MainPanel({
       )}
 
       {/* Game-level delta tracker */}
-      {gameDeltas && (gameDeltas.mwNetT1 !== 0 || gameDeltas.rows.some(r => r.direct_t1 !== 0 || r.direct_t2 !== 0)) && (
+      {gameDeltas && (gameDeltas.mwNetT1 !== 0 || gameDeltas.rows.some(r => r.direct_pm !== 0 || r.direct_kalshi !== 0)) && (
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
           <div className="flex items-baseline justify-between mb-3">
             <h3 className="text-sm font-semibold text-gray-300">Per-game delta</h3>
@@ -538,11 +577,11 @@ function MainPanel({
             <thead className="text-gray-500">
               <tr>
                 <th className="text-left py-1 pr-2">Game</th>
-                <th className="text-right py-1 pr-2" title="Delta-per-share for that game: how much owning 1 match_winner share moves with this game's outcome">δ/share</th>
-                <th className="text-right py-1 pr-2" title="Match-winner delta contribution to this game">from MW</th>
-                <th className="text-right py-1 pr-2" title="Direct position on game_N_winner market for {pred.blue_team}">direct {pred.blue_team.slice(0,8)}</th>
-                <th className="text-right py-1 pr-2" title="Direct position on game_N_winner market for {pred.red_team}">direct {pred.red_team.slice(0,8)}</th>
-                <th className="text-right py-1" title="Net delta = MW contribution + direct {pred.blue_team} − direct {pred.red_team}">Net δ ({pred.blue_team.slice(0,8)})</th>
+                <th className="text-right py-1 pr-2" title="Delta-per-share: how much owning 1 match_winner share moves with this game's outcome">δ/share</th>
+                <th className="text-right py-1 pr-2" title="Match-winner delta contribution to this game (PM + Kalshi)">from MW</th>
+                <th className="text-right py-1 pr-2" title="Net Polymarket position on game_N_winner market (long t1 − long t2)">PM g_N</th>
+                <th className="text-right py-1 pr-2" title="Net Kalshi position on game_N market (yes_t1 − yes_t2, signed)">Kalshi g_N</th>
+                <th className="text-right py-1" title="Net delta = MW contribution + direct PM + direct Kalshi">Net δ ({pred.blue_team.slice(0,8)})</th>
               </tr>
             </thead>
             <tbody>
@@ -553,8 +592,8 @@ function MainPanel({
                   </td>
                   <td className="py-1 pr-2 text-right font-mono text-gray-400">{r.settled ? '—' : r.delta_per_share.toFixed(3)}</td>
                   <td className="py-1 pr-2 text-right font-mono text-gray-400">{r.mw_contrib === 0 ? '—' : (r.mw_contrib > 0 ? '+' : '') + r.mw_contrib.toFixed(1)}</td>
-                  <td className="py-1 pr-2 text-right font-mono">{r.direct_t1 === 0 ? '—' : <span className="text-emerald-400">+{r.direct_t1.toFixed(0)}</span>}</td>
-                  <td className="py-1 pr-2 text-right font-mono">{r.direct_t2 === 0 ? '—' : <span className="text-rose-400">+{r.direct_t2.toFixed(0)}</span>}</td>
+                  <td className={`py-1 pr-2 text-right font-mono ${r.direct_pm > 0 ? 'text-emerald-400' : r.direct_pm < 0 ? 'text-rose-400' : 'text-gray-700'}`}>{r.direct_pm === 0 ? '—' : (r.direct_pm > 0 ? '+' : '') + r.direct_pm.toFixed(0)}</td>
+                  <td className={`py-1 pr-2 text-right font-mono ${r.direct_kalshi > 0 ? 'text-emerald-400' : r.direct_kalshi < 0 ? 'text-rose-400' : 'text-gray-700'}`}>{r.direct_kalshi === 0 ? '—' : (r.direct_kalshi > 0 ? '+' : '') + r.direct_kalshi.toFixed(0)}</td>
                   <td className={`py-1 text-right font-mono font-semibold ${r.total_t1 > 0 ? 'text-emerald-400' : r.total_t1 < 0 ? 'text-rose-400' : 'text-gray-500'}`}>
                     {r.total_t1 === 0 ? '0' : (r.total_t1 > 0 ? '+' : '') + r.total_t1.toFixed(1)}
                   </td>
