@@ -124,6 +124,9 @@ export default function Dashboard() {
         <Link href="/trader" className="text-sm text-cyan-400 hover:text-cyan-300 transition-colors">
           Trader →
         </Link>
+        <Link href="/scanner" className="text-sm text-amber-400 hover:text-amber-300 transition-colors">
+          Scanner →
+        </Link>
         <Link href="/vwaper" className="text-sm text-teal-400 hover:text-teal-300 transition-colors">
           VWAPer →
         </Link>
@@ -148,9 +151,6 @@ export default function Dashboard() {
         </Link>
         <Link href="/pnl" className="text-sm text-emerald-400 hover:text-emerald-300 transition-colors">
           PnL →
-        </Link>
-        <Link href="/pre-live" className="text-sm text-emerald-400 hover:text-emerald-300 transition-colors">
-          Pre-Live →
         </Link>
         <Link href="/draft-sim" className="text-sm text-cyan-400 hover:text-cyan-300 transition-colors">
           Draft Sim →
