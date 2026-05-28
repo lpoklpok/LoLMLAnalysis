@@ -171,6 +171,30 @@ def main():
     scaler = model.named_steps['s']
     lr     = model.named_steps['lr']
 
+    # === Post-draft model: same training procedure but with champion features ===
+    POST_FEATS = FEATS + ['avg_champ_meta_wr_diff', 'avg_player_champ_wr_diff',
+                          'roster_stability_diff']
+    POST_FILL = {**FILL,
+                 'avg_champ_meta_wr_diff': 0.0,
+                 'avg_player_champ_wr_diff': 0.0,
+                 'roster_stability_diff': 0.0}
+    champ_path = PROCESSED / 'champ_features.csv'
+    post_scaler = post_lr = None
+    if champ_path.exists():
+        ch = pd.read_csv(champ_path, low_memory=False)
+        merged = features_train.merge(ch, on='gameid', how='left')
+        train_post = merged[merged['year'].isin([2024, 2025])]
+        post_model = Pipeline([('s', StandardScaler()),
+                                ('lr', LogisticRegression(max_iter=1000))])
+        post_model.fit(train_post[POST_FEATS].fillna(POST_FILL),
+                        train_post['blue_win'].values)
+        post_scaler = post_model.named_steps['s']
+        post_lr     = post_model.named_steps['lr']
+        print(f"  post-draft model trained on {len(train_post):,} games "
+              f"(coef abs sum = {sum(abs(c) for c in post_lr.coef_[0]):.3f})")
+    else:
+        print("  WARN: champ_features.csv missing — post-draft model omitted")
+
     elo_map   = elo_state['elo_map']
 
     overrides_path = PROCESSED / 'elo_overrides.json'
@@ -292,6 +316,17 @@ def main():
         'player_h2h': player_h2h_out,
         'player_elos': player_elos_out,
     }
+    if post_scaler is not None and post_lr is not None:
+        out['post_draft'] = {
+            'features': POST_FEATS,
+            'fill':     POST_FILL,
+            'scaler': {
+                'mean':  [round(v, 8) for v in post_scaler.mean_.tolist()],
+                'scale': [round(v, 8) for v in post_scaler.scale_.tolist()],
+            },
+            'coef':       [round(v, 8) for v in post_lr.coef_[0].tolist()],
+            'intercept':  round(float(post_lr.intercept_[0]), 8),
+        }
 
     with open(OUT, 'w') as f:
         json.dump(out, f, separators=(',', ':'))

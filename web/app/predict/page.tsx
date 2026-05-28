@@ -27,6 +27,24 @@ interface ModelParams {
   h2h:           Record<string, number>
   player_h2h:    Record<string, { n: number; wins: number }>
   player_elos:   Record<string, number>
+  post_draft?:   {
+    features:  string[]
+    fill:      Record<string, number>
+    scaler:    { mean: number[]; scale: number[] }
+    coef:      number[]
+    intercept: number
+  }
+}
+
+interface ChampStatEntry { games: number; wr: number }
+interface ChampStats {
+  generated:    string
+  as_of:        string
+  meta_lookback_days:   number
+  player_lookback_days: number
+  champions:    string[]
+  meta_wr:      Record<string, ChampStatEntry>      // "Champ|pos"
+  player_champ: Record<string, ChampStatEntry>      // "Player|Champ"
 }
 
 interface PickStats {
@@ -247,13 +265,23 @@ export default function PredictPage() {
   // Per-game UI: which rows have their formula breakdown expanded
   const [expandedGames, setExpandedGames] = useState<Record<number, boolean>>({})
 
+  // Draft mode (post-draft model with champion features)
+  const [champStats,  setChampStats]  = useState<ChampStats | null>(null)
+  const [draftMode,   setDraftMode]   = useState(false)
+  // Per-side, per-position champion picks. "" = empty.
+  const POS_KEYS = ['top','jng','mid','bot','sup'] as const
+  type PosKey = typeof POS_KEYS[number]
+  const [t1Picks, setT1Picks] = useState<Record<PosKey, string>>({top:'',jng:'',mid:'',bot:'',sup:''})
+  const [t2Picks, setT2Picks] = useState<Record<PosKey, string>>({top:'',jng:'',mid:'',bot:'',sup:''})
+
   // Load static data files
   useEffect(() => {
     Promise.all([
       fetch('/model_params.json').then(r => r.json()),
       fetch('/team_state_history.json').then(r => r.json()),
       fetch('/pick_tendencies.json').then(r => r.ok ? r.json() : null).catch(() => null),
-    ]).then(([p, h, pk]) => { setParams(p); setHistory(h); setPicks(pk) })
+      fetch('/champ_stats.json').then(r => r.ok ? r.json() : null).catch(() => null),
+    ]).then(([p, h, pk, cs]) => { setParams(p); setHistory(h); setPicks(pk); setChampStats(cs) })
     .catch(e => setErr(String(e)))
   }, [])
 
@@ -902,6 +930,207 @@ export default function PredictPage() {
                 cleared={() => { const c = { ...rosters }; delete c[team2]; setRosters(c) }}
                 isOverride={!!rosters[team2]}
               />
+            </div>
+          )
+        })()}
+
+        {/* Draft Mode — post-draft model with champion picks */}
+        {params.post_draft && champStats && (() => {
+          const r1 = effectiveRoster(team1)
+          const r2 = effectiveRoster(team2)
+          const s1 = teamState(team1)
+          const s2 = teamState(team2)
+
+          // Average helper that ignores nulls
+          const avg = (xs: number[]) => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN
+
+          // Compute champion features only when ALL 10 picks are filled
+          const allFilled =
+            POS_KEYS.every(p => t1Picks[p]) && POS_KEYS.every(p => t2Picks[p])
+
+          // avg_player_champ_wr_diff (blue - red)
+          const t1_pwrs = POS_KEYS.map((p, i) => {
+            const player = r1[i]; const champ = t1Picks[p]
+            if (!player || !champ) return null
+            return champStats.player_champ[`${player}|${champ}`]?.wr ?? null
+          }).filter((x): x is number => x !== null)
+          const t2_pwrs = POS_KEYS.map((p, i) => {
+            const player = r2[i]; const champ = t2Picks[p]
+            if (!player || !champ) return null
+            return champStats.player_champ[`${player}|${champ}`]?.wr ?? null
+          }).filter((x): x is number => x !== null)
+          const player_wr_diff = (t1_pwrs.length && t2_pwrs.length)
+            ? avg(t1_pwrs) - avg(t2_pwrs) : 0
+
+          // avg_champ_meta_wr_diff (blue - red)
+          const t1_metas = POS_KEYS.map(p => {
+            const champ = t1Picks[p]
+            return champ ? champStats.meta_wr[`${champ}|${p}`]?.wr ?? null : null
+          }).filter((x): x is number => x !== null)
+          const t2_metas = POS_KEYS.map(p => {
+            const champ = t2Picks[p]
+            return champ ? champStats.meta_wr[`${champ}|${p}`]?.wr ?? null : null
+          }).filter((x): x is number => x !== null)
+          const meta_wr_diff = (t1_metas.length && t2_metas.length)
+            ? avg(t1_metas) - avg(t2_metas) : 0
+
+          // Pre-draft P(team1) from G1 — pull from existing predictions table
+          const preG1 = predictions?.games?.[0]
+          const pre_p = preG1?.breakdown?.p_t1 ?? 0.5
+
+          // Build post-draft prediction (G1 only, no G2 shrink path)
+          const post = params.post_draft!
+          const rawFeats: Record<string, number> = {
+            elo_diff:     (s1.elo ?? 0) - (s2.elo ?? 0),
+            rwr_diff:     (s1.rwr ?? 0) - (s2.rwr ?? 0),
+            h2h_wr:       params.h2h[[team1, team2].sort().join('|||')] ?? 0.5,
+            playoffs:     playoffs ? 1 : 0,
+            gd15_diff:    (s1.gd15 ?? 0) - (s2.gd15 ?? 0),
+            outperf_diff: (s1.outperf ?? 0) - (s2.outperf ?? 0),
+            avg_champ_meta_wr_diff:   meta_wr_diff,
+            avg_player_champ_wr_diff: player_wr_diff,
+            roster_stability_diff:    0,
+          }
+          let post_logodds = post.intercept
+          const contribs: Array<{ name: string; raw: number; contrib: number }> = []
+          for (let i = 0; i < post.features.length; i++) {
+            const f = post.features[i]
+            const raw = rawFeats[f] ?? post.fill[f] ?? 0
+            const scaled = (raw - post.scaler.mean[i]) / post.scaler.scale[i]
+            const c = scaled * post.coef[i]
+            post_logodds += c
+            contribs.push({ name: f, raw, contrib: c })
+          }
+          // Playoffs / coaching post-hoc (G1 → no G2 alpha/beta)
+          if (playoffs && poAdj) {
+            post_logodds += (params.teams[team1]?.po_adj ?? 0) - (params.teams[team2]?.po_adj ?? 0)
+          }
+          if (coachAdj) {
+            post_logodds += (params.teams[team1]?.coaching_adj ?? 0) - (params.teams[team2]?.coaching_adj ?? 0)
+          }
+          const post_p = 1 / (1 + Math.exp(-post_logodds))
+          const delta = post_p - pre_p
+
+          // The 3 champion features only — their pre-vs-post contribution
+          const champContribs = contribs.filter(c =>
+            c.name === 'avg_champ_meta_wr_diff' ||
+            c.name === 'avg_player_champ_wr_diff' ||
+            c.name === 'roster_stability_diff'
+          )
+
+          return (
+            <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold flex items-center gap-2">
+                  Draft Mode
+                  <span className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded bg-purple-900/40 text-purple-300 border border-purple-700/40">
+                    post-draft model
+                  </span>
+                </h2>
+                <Toggle label="Enable" checked={draftMode} onChange={setDraftMode} />
+              </div>
+              {!draftMode ? (
+                <p className="text-xs text-zinc-500">
+                  Toggle to enter champion picks for both sides. The post-draft
+                  model (LR + champion features, +5.3% LL improvement over pre-draft
+                  on majors) will compute the updated win probability.
+                </p>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {[
+                      { team: team1, label: 'Team 1', picks: t1Picks, setPicks: setT1Picks, roster: r1, color: 'text-blue-300' },
+                      { team: team2, label: 'Team 2', picks: t2Picks, setPicks: setT2Picks, roster: r2, color: 'text-red-300' },
+                    ].map((side, idx) => (
+                      <div key={idx} className="space-y-2">
+                        <div className={`text-sm font-semibold ${side.color}`}>{side.team}</div>
+                        {POS_KEYS.map((pos, i) => {
+                          const player = side.roster[i] ?? ''
+                          const champ  = side.picks[pos]
+                          const meta   = champ ? champStats.meta_wr[`${champ}|${pos}`] : undefined
+                          const pwr    = champ && player ? champStats.player_champ[`${player}|${champ}`] : undefined
+                          return (
+                            <div key={pos} className="flex items-center gap-2 text-xs">
+                              <span className="w-10 uppercase text-zinc-500">{pos}</span>
+                              <span className="w-24 truncate text-zinc-400">{player || '—'}</span>
+                              <input
+                                list="champ-list"
+                                value={champ}
+                                onChange={e => side.setPicks({ ...side.picks, [pos]: e.target.value })}
+                                placeholder="Champion…"
+                                className="flex-1 bg-zinc-950 border border-zinc-700 rounded px-2 py-1 font-mono"
+                              />
+                              <span className="w-20 text-right text-zinc-500 tabular-nums">
+                                {meta ? `meta ${(meta.wr*100).toFixed(0)}%` : '—'}
+                              </span>
+                              <span className="w-24 text-right text-emerald-400 tabular-nums">
+                                {pwr ? `${Math.round(pwr.games * pwr.wr)}/${pwr.games} (${(pwr.wr*100).toFixed(0)}%)` : ''}
+                              </span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                  <datalist id="champ-list">
+                    {champStats.champions.map(c => <option key={c} value={c} />)}
+                  </datalist>
+
+                  {/* Side-by-side prediction comparison */}
+                  <div className="mt-4 grid grid-cols-3 gap-4">
+                    <div className="bg-zinc-950/60 border border-zinc-800 rounded p-3">
+                      <div className="text-[11px] uppercase text-zinc-500">Pre-draft P({team1})</div>
+                      <div className="text-2xl font-mono mt-1 text-blue-300">{(pre_p*100).toFixed(1)}%</div>
+                    </div>
+                    <div className="bg-zinc-950/60 border border-zinc-800 rounded p-3">
+                      <div className="text-[11px] uppercase text-zinc-500">Post-draft P({team1})</div>
+                      <div className="text-2xl font-mono mt-1 text-purple-300">{allFilled ? `${(post_p*100).toFixed(1)}%` : '—'}</div>
+                      {!allFilled && <div className="text-[10px] text-zinc-500 mt-1">Fill all 10 picks</div>}
+                    </div>
+                    <div className="bg-zinc-950/60 border border-zinc-800 rounded p-3">
+                      <div className="text-[11px] uppercase text-zinc-500">Δ (draft impact)</div>
+                      <div className={`text-2xl font-mono mt-1 ${delta >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {allFilled ? `${delta >= 0 ? '+' : ''}${(delta*100).toFixed(1)}pp` : '—'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Per-feature contribution breakdown */}
+                  {allFilled && (
+                    <div className="mt-3">
+                      <div className="text-[11px] uppercase text-zinc-500 mb-2">Where the change comes from</div>
+                      <div className="space-y-1.5 text-xs">
+                        {[
+                          {
+                            label: 'Player–champion WR diff',
+                            raw: player_wr_diff,
+                            note: `t1 avg ${(avg(t1_pwrs)*100).toFixed(0)}% vs t2 avg ${(avg(t2_pwrs)*100).toFixed(0)}%`,
+                            contrib: champContribs.find(c => c.name === 'avg_player_champ_wr_diff')?.contrib ?? 0,
+                          },
+                          {
+                            label: 'Champion meta WR diff',
+                            raw: meta_wr_diff,
+                            note: `t1 avg ${(avg(t1_metas)*100).toFixed(0)}% vs t2 avg ${(avg(t2_metas)*100).toFixed(0)}%`,
+                            contrib: champContribs.find(c => c.name === 'avg_champ_meta_wr_diff')?.contrib ?? 0,
+                          },
+                        ].sort((a, b) => Math.abs(b.contrib) - Math.abs(a.contrib))
+                         .map((row, i) => (
+                          <div key={i} className="flex items-center gap-3">
+                            <span className="w-48 text-zinc-300">{row.label}</span>
+                            <span className="w-40 text-zinc-500 text-[11px]">{row.note}</span>
+                            <span className={`w-24 text-right font-mono ${row.raw >= 0 ? 'text-blue-300' : 'text-red-300'}`}>
+                              {row.raw >= 0 ? '+' : ''}{(row.raw*100).toFixed(2)}pp
+                            </span>
+                            <span className={`w-20 text-right text-[11px] tabular-nums ${row.contrib >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                              {row.contrib >= 0 ? '+' : ''}{row.contrib.toFixed(3)} log-odds
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           )
         })()}

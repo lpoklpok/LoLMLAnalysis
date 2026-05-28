@@ -125,6 +125,9 @@ jobs:
       - name: Export model params JSON
         run: python src/export_model_params.py
 
+      - name: Export champion stats JSON (for /predict draft mode)
+        run: python src/export_champ_stats.py
+
       - name: Export champion findings JSON
         run: python src/export_champion_findings.py
 
