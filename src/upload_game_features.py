@@ -80,9 +80,52 @@ def _safe(v):
         return None
 
 
+# Champion-level features added to the post-draft model. See
+# src/build_champ_features.py for the walk-forward computation.
+CHAMP_FEATS = [
+    'avg_champ_meta_wr_diff',         # strongest new signal
+    'avg_player_champ_wr_diff',       # 2nd strongest
+    'roster_stability_diff',          # small but cheap
+]
+CHAMP_FILL = {f: 0.0 for f in CHAMP_FEATS}
+
+
+def _apply_adjustments(logodds: np.ndarray, df: pd.DataFrame) -> np.ndarray:
+    """G2 draft + per-team playoff + coaching adjustments. Identical to the
+    bespoke math used for the pre-draft model so both predictions share the
+    same calibration framework."""
+    adj = logodds.copy()
+    g2_mask = ((df['game'] == 2) & (df['year'] >= 2025)).values
+    adj[g2_mask] = (ALPHA_G2 * adj[g2_mask]
+                    + BETA_DA * df['draft_advantage'].values[g2_mask])
+    po_mask = df['playoffs'].values == 1
+    if po_mask.any():
+        blue_po = np.array([TEAM_PO_ADJ.get(t, 0.0) for t in df['blue_team']])
+        red_po  = np.array([TEAM_PO_ADJ.get(t, 0.0) for t in df['red_team']])
+        adj[po_mask] += (blue_po - red_po)[po_mask]
+    years = df['year'].values
+    for team, (from_year, bonus) in COACHING_ADJ.items():
+        active = years >= from_year
+        adj[(df['blue_team'].values == team) & active] += bonus
+        adj[(df['red_team'].values  == team) & active] -= bonus
+    return adj
+
+
 def run():
     df = pd.read_csv(PROCESSED_DIR / 'features_all.csv', low_memory=False)
     df['date'] = pd.to_datetime(df['date'], utc=True)
+
+    # Merge champion-level features (built walk-forward by build_champ_features.py)
+    champ_path = PROCESSED_DIR / 'champ_features.csv'
+    if champ_path.exists():
+        ch = pd.read_csv(champ_path, low_memory=False)
+        df = df.merge(ch, on='gameid', how='left')
+        print(f'Merged {len(ch.columns)-1} champ features ({len(ch):,} rows)')
+    else:
+        # Add stub columns so the post-draft model trains (and predicts at neutral)
+        print('WARN: champ_features.csv missing — post_draft model will equal pre_draft.')
+        for f in CHAMP_FEATS:
+            df[f] = 0.0
 
     # Compute series metadata first — draft_advantage must exist before model training
     df['_date_day'] = df['date'].dt.date
@@ -104,38 +147,22 @@ def run():
     df['draft_advantage'] = shifted.map(lambda x: 0 if pd.isna(x) else (-1 if x == 1 else 1)).astype(int)
 
     train = df[df['year'].isin([2024, 2025])]
-    model = Pipeline([('s', StandardScaler()), ('lr', LogisticRegression(max_iter=1000))])
-    model.fit(train[FEATS].fillna(FILL), train['blue_win'].values)
 
-    # Raw log-odds aligned with current df row order
-    scaler = model.named_steps['s']
-    lr     = model.named_steps['lr']
-    X_sc   = scaler.transform(df[FEATS].fillna(FILL))
-    logodds = X_sc @ lr.coef_.ravel() + lr.intercept_[0]
+    # === PRE-DRAFT MODEL (current production: 6 features, no champ info) ===
+    model_pre = Pipeline([('s', StandardScaler()), ('lr', LogisticRegression(max_iter=1000))])
+    model_pre.fit(train[FEATS].fillna(FILL), train['blue_win'].values)
+    s_pre, lr_pre = model_pre.named_steps['s'], model_pre.named_steps['lr']
+    logodds_pre = s_pre.transform(df[FEATS].fillna(FILL)) @ lr_pre.coef_.ravel() + lr_pre.intercept_[0]
+    preds = 1 / (1 + np.exp(-_apply_adjustments(logodds_pre, df)))
 
-    # G2 adjustment for 2025+: alpha * logodds + beta * draft_advantage
-    g2_mask = ((df['game'] == 2) & (df['year'] >= 2025)).values
-    logodds_adj = logodds.copy()
-    logodds_adj[g2_mask] = (ALPHA_G2 * logodds[g2_mask]
-                            + BETA_DA * df['draft_advantage'].values[g2_mask])
-
-    # Team playoff adjustment: per-team logodds shift when in playoffs
-    po_mask = df['playoffs'].values == 1
-    if po_mask.any():
-        blue_po = np.array([TEAM_PO_ADJ.get(t, 0.0) for t in df['blue_team']])
-        red_po  = np.array([TEAM_PO_ADJ.get(t, 0.0) for t in df['red_team']])
-        logodds_adj[po_mask] += (blue_po - red_po)[po_mask]
-
-    # Coaching adjustments: applied to all games from the specified year onwards
-    years = df['year'].values
-    for team, (from_year, bonus) in COACHING_ADJ.items():
-        active = years >= from_year
-        blue_mask = (df['blue_team'].values == team) & active
-        red_mask  = (df['red_team'].values  == team) & active
-        logodds_adj[blue_mask] += bonus
-        logodds_adj[red_mask]  -= bonus
-
-    preds = 1 / (1 + np.exp(-logodds_adj))
+    # === POST-DRAFT MODEL (pre-draft + champion features) ===
+    feats_post = FEATS + CHAMP_FEATS
+    fill_post  = {**FILL, **CHAMP_FILL}
+    model_post = Pipeline([('s', StandardScaler()), ('lr', LogisticRegression(max_iter=1000))])
+    model_post.fit(train[feats_post].fillna(fill_post), train['blue_win'].values)
+    s_post, lr_post = model_post.named_steps['s'], model_post.named_steps['lr']
+    logodds_post = s_post.transform(df[feats_post].fillna(fill_post)) @ lr_post.coef_.ravel() + lr_post.intercept_[0]
+    preds_post = 1 / (1 + np.exp(-_apply_adjustments(logodds_post, df)))
 
     records = []
     for i, (_, row) in enumerate(df.iterrows()):
@@ -159,6 +186,7 @@ def run():
             'outperf_diff': _safe(row.get('outperf_diff')),
             'q_blue_win':   _safe(row.get('q_blue_win')),
             'model_pred':   round(float(preds[i]), 4),
+            'model_pred_post_draft': round(float(preds_post[i]), 4),
             'poly_blue_win_prob': _safe(row.get('poly_blue_win_prob')),
             'poly_source':        (None if (row.get('poly_source') is None or (isinstance(row.get('poly_source'), float) and np.isnan(row.get('poly_source')))) else str(row.get('poly_source'))),
         })

@@ -86,6 +86,9 @@ jobs:
       - name: Train model + save predictions
         run: python src/train_model.py
 
+      - name: Build champion-level features (for post-draft model)
+        run: python src/build_champ_features.py
+
       - name: Upload game features to Supabase
         run: python src/upload_game_features.py
         env:
