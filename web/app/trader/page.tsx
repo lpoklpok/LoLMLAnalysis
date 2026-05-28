@@ -1403,27 +1403,47 @@ function LadderModal({
     return () => { stopped = true; wsRef.current?.close(); wsRef.current = null }
   }, [thisTokenId, oppTokenId])
 
-  // ── Kalshi book polling (REST) ───────────────────────────────────────
-  // The Kalshi worker maintains the orderbook in memory via its own WSS to
-  // Kalshi (orderbook_delta channel) — so the freshness floor here is just
-  // the browser → Vercel → Fly round-trip (~50-100ms). Was polling every
-  // 2s which made the in-modal Kalshi ladder feel stuttery compared to the
-  // real-time Polymarket WSS book next to it. 750ms keeps it visually
-  // synced without piling on Vercel function invocations.
+  // ── Kalshi book SSE (push) ───────────────────────────────────────────
+  // Subscribes once to /api/kalshi/book-stream?tickers=T1,T2 — the worker
+  // pushes a full snapshot for the relevant ticker every time Kalshi sends
+  // an orderbook delta. Replaces the prior 750ms REST poll; freshness floor
+  // is now ~5-20ms (the round-trip from Kalshi → worker → browser).
+  // Safety-net /book GET every 30s in case SSE silently disconnects.
   useEffect(() => {
     if (!kalshiSide?.ticker) return
+    const t1 = kalshiSide.ticker
+    const t2 = kalshiOpposite?.ticker
+    const tickers = [t1, t2].filter(Boolean).join(',')
+
+    const applySnapshot = (payload: { ticker: string; bids?: [number, number][]; asks?: [number, number][]; ts?: number }) => {
+      const bids = new Map<number, number>()
+      const asks = new Map<number, number>()
+      for (const [p, sz] of (payload.bids ?? [])) bids.set(roundPx(p), (bids.get(roundPx(p)) ?? 0) + sz)
+      for (const [p, sz] of (payload.asks ?? [])) asks.set(roundPx(p), (asks.get(roundPx(p)) ?? 0) + sz)
+      const book: KalshiBook = { bids, asks, updated: Date.now() }
+      if (payload.ticker === t1) setKalshiThis(book)
+      else if (payload.ticker === t2) setKalshiOpp(book)
+    }
+
+    const es = new EventSource(`/api/kalshi/book-stream?tickers=${encodeURIComponent(tickers)}`)
+    es.onmessage = (ev) => {
+      try { applySnapshot(JSON.parse(ev.data)) } catch { /* ignore bad payload */ }
+    }
+    es.onerror = () => { /* EventSource auto-reconnects */ }
+
+    // Safety-net fetch (worker also seeds on (re)connect, this just covers
+    // long-silent reconnects on a quiet market).
     let stopped = false
-    async function poll() {
+    const safety = setInterval(async () => {
       if (stopped) return
       const [tb, ob] = await Promise.all([
-        fetchKalshiBook(kalshiSide!.ticker),
-        kalshiOpposite?.ticker ? fetchKalshiBook(kalshiOpposite.ticker) : Promise.resolve(null),
+        fetchKalshiBook(t1),
+        t2 ? fetchKalshiBook(t2) : Promise.resolve(null),
       ])
       if (!stopped) { setKalshiThis(tb); setKalshiOpp(ob) }
-      setTimeout(poll, 750)
-    }
-    poll()
-    return () => { stopped = true }
+    }, 30_000)
+
+    return () => { stopped = true; es.close(); clearInterval(safety) }
   }, [kalshiSide?.ticker, kalshiOpposite?.ticker])
 
   // ── Click-to-trade ───────────────────────────────────────────────────
