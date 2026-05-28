@@ -89,15 +89,31 @@ CHAMP_FEATS = [
 ]
 CHAMP_FILL = {f: 0.0 for f in CHAMP_FEATS}
 
-# In-game features (gold diff observed at minute 15 and minute 20 of the
-# actual game). Used by the IN_GAME_20 model. The gd20×gd15 interaction
-# adds a small but real lift (best LL on major leagues = 0.4421).
+# In-game features observable by minute 20 of the actual game. Used by
+# the IN_GAME_20 model with L1 (LASSO) regularization — best walk-forward
+# log loss on major leagues = 0.4131 (-33.5% vs pre-draft baseline).
 LIVE_FEATS = [
-    'actual_gd15_diff',
-    'actual_gd20_diff',
-    'gd20_x_gd15',  # interaction (gd20 * gd15 / 100)
+    # Gold/XP/CS diffs (blue - red) at minute 10, 15, 20
+    'actual_gd10_diff', 'actual_gd15_diff', 'actual_gd20_diff',
+    'xp10_diff',        'xp15_diff',        'xp20_diff',
+    'cs10_diff',        'cs15_diff',        'cs20_diff',
+    # KDA at 20 (diffs)
+    'kills20_diff', 'deaths20_diff', 'assists20_diff',
+    # Per-role gold @ 20 (blue's per-role golddiff)
+    'top_gd20', 'jng_gd20', 'mid_gd20', 'bot_gd20', 'sup_gd20',
+    # First-X flags (+1 blue, -1 red, 0 neither/not yet)
+    'firstblood', 'firstdragon', 'firsttower', 'firstmidtower',
+    'firstherald', 'firsttothreetowers',
 ]
 LIVE_FILL = {f: 0.0 for f in LIVE_FEATS}
+
+
+def _first_x(blue_val, red_val) -> float:
+    if pd.isna(blue_val) or pd.isna(red_val):
+        return 0.0
+    if blue_val == 1: return 1.0
+    if red_val  == 1: return -1.0
+    return 0.0
 
 
 def _apply_adjustments(logodds: np.ndarray, df: pd.DataFrame) -> np.ndarray:
@@ -137,14 +153,47 @@ def run():
         for f in CHAMP_FEATS:
             df[f] = 0.0
 
-    # Pull live in-game gold diffs from games_with_odds.csv
-    gw_path = PROCESSED_DIR / 'games_with_odds.csv'
-    gw = pd.read_csv(gw_path, low_memory=False,
-                       usecols=['gameid', 'blue_team_golddiffat15', 'blue_team_golddiffat20'])
+    # Pull all live in-game observations through minute 20 from games_with_odds.csv
+    gw_cols = [
+        'gameid',
+        'blue_team_golddiffat10','blue_team_golddiffat15','blue_team_golddiffat20',
+        'blue_team_xpdiffat10','blue_team_xpdiffat15','blue_team_xpdiffat20',
+        'blue_team_csdiffat10','blue_team_csdiffat15','blue_team_csdiffat20',
+        'blue_team_killsat20','red_team_killsat20',
+        'blue_team_deathsat20','red_team_deathsat20',
+        'blue_team_assistsat20','red_team_assistsat20',
+        'blue_top_golddiffat20','blue_jng_golddiffat20','blue_mid_golddiffat20',
+        'blue_bot_golddiffat20','blue_sup_golddiffat20',
+        'blue_team_firstblood','red_team_firstblood',
+        'blue_team_firstdragon','red_team_firstdragon',
+        'blue_team_firsttower','red_team_firsttower',
+        'blue_team_firstmidtower','red_team_firstmidtower',
+        'blue_team_firstherald','red_team_firstherald',
+        'blue_team_firsttothreetowers','red_team_firsttothreetowers',
+    ]
+    gw = pd.read_csv(PROCESSED_DIR / 'games_with_odds.csv', low_memory=False, usecols=gw_cols)
     df = df.merge(gw, on='gameid', how='left')
+    df['actual_gd10_diff'] = df['blue_team_golddiffat10']
     df['actual_gd15_diff'] = df['blue_team_golddiffat15']
     df['actual_gd20_diff'] = df['blue_team_golddiffat20']
-    df['gd20_x_gd15']      = (df['actual_gd20_diff'] * df['actual_gd15_diff']) / 100.0
+    df['xp10_diff']        = df['blue_team_xpdiffat10']
+    df['xp15_diff']        = df['blue_team_xpdiffat15']
+    df['xp20_diff']        = df['blue_team_xpdiffat20']
+    df['cs10_diff']        = df['blue_team_csdiffat10']
+    df['cs15_diff']        = df['blue_team_csdiffat15']
+    df['cs20_diff']        = df['blue_team_csdiffat20']
+    df['kills20_diff']     = df['blue_team_killsat20']   - df['red_team_killsat20']
+    df['deaths20_diff']    = df['blue_team_deathsat20']  - df['red_team_deathsat20']
+    df['assists20_diff']   = df['blue_team_assistsat20'] - df['red_team_assistsat20']
+    df['top_gd20']         = df['blue_top_golddiffat20']
+    df['jng_gd20']         = df['blue_jng_golddiffat20']
+    df['mid_gd20']         = df['blue_mid_golddiffat20']
+    df['bot_gd20']         = df['blue_bot_golddiffat20']
+    df['sup_gd20']         = df['blue_sup_golddiffat20']
+    for name in ['firstblood','firstdragon','firsttower','firstmidtower','firstherald','firsttothreetowers']:
+        df[name] = df.apply(
+            lambda r: _first_x(r.get(f'blue_team_{name}'), r.get(f'red_team_{name}')),
+            axis=1)
 
     # Compute series metadata first — draft_advantage must exist before model training
     df['_date_day'] = df['date'].dt.date
@@ -183,12 +232,16 @@ def run():
     logodds_post = s_post.transform(df[feats_post].fillna(fill_post)) @ lr_post.coef_.ravel() + lr_post.intercept_[0]
     preds_post = 1 / (1 + np.exp(-_apply_adjustments(logodds_post, df)))
 
-    # === IN_GAME_20 MODEL (pre-draft + champ + actual gd15/gd20) ===
+    # === IN_GAME_20 MODEL (pre-draft + champ + all live observations by min 20) ===
+    # 32 features total. L1 regularization (LASSO) with C=0.3 — best
+    # walk-forward LL = 0.4131 on major leagues (sweep in compare_in_game_full.py).
     feats_live = FEATS + CHAMP_FEATS + LIVE_FEATS
     fill_live  = {**FILL, **CHAMP_FILL, **LIVE_FILL}
-    # Train only on games where the live features are observed
     train_live = train[train['actual_gd20_diff'].notna()]
-    model_live = Pipeline([('s', StandardScaler()), ('lr', LogisticRegression(max_iter=1000))])
+    model_live = Pipeline([
+        ('s', StandardScaler()),
+        ('lr', LogisticRegression(max_iter=2000, C=0.3, penalty='l1', solver='liblinear')),
+    ])
     model_live.fit(train_live[feats_live].fillna(fill_live), train_live['blue_win'].values)
     s_live, lr_live = model_live.named_steps['s'], model_live.named_steps['lr']
     logodds_live = s_live.transform(df[feats_live].fillna(fill_live)) @ lr_live.coef_.ravel() + lr_live.intercept_[0]
