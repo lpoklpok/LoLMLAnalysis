@@ -345,10 +345,16 @@ function MainPanel({
       try {
         const r = await fetch('/api/kalshi/positions', { cache: 'no-store' })
         if (!r.ok) return
-        const d = await r.json() as { market_positions?: Array<{ ticker: string; position: number }> }
+        const d = await r.json() as { market_positions?: Array<{ ticker: string; position_fp?: string; position?: number }> }
         if (cancelled) return
         const m: Record<string, number> = {}
-        for (const p of d.market_positions ?? []) m[p.ticker] = p.position
+        for (const p of d.market_positions ?? []) {
+          // Kalshi field is `position_fp` (signed string, e.g. "2.00" = long YES, "-3.50" = long NO).
+          // Fall back to `position` for forward compat if API ever returns number.
+          const raw = p.position_fp != null ? parseFloat(p.position_fp) :
+                       p.position    != null ? Number(p.position) : 0
+          if (Number.isFinite(raw)) m[p.ticker] = raw
+        }
         setKalshiPositions(m)
       } catch { /* ignore */ }
     }
@@ -954,13 +960,16 @@ function LadderModal({
       try {
         const r = await fetch('/api/kalshi/positions', { cache: 'no-store' })
         if (!r.ok) return
-        const d = await r.json() as { market_positions?: Array<{ ticker: string; position: number; market_exposure?: number; total_traded?: number; resting_orders_count?: number }> }
+        const d = await r.json() as { market_positions?: Array<{ ticker: string; position_fp?: string; position?: number }> }
         if (stopped) return
         const map: Record<string, { yes: number; no: number }> = {}
         for (const p of d.market_positions ?? []) {
-          // Kalshi `position` is signed: positive = long YES, negative = long NO
-          const yes = p.position > 0 ? p.position : 0
-          const no  = p.position < 0 ? -p.position : 0
+          const raw = p.position_fp != null ? parseFloat(p.position_fp) :
+                       p.position    != null ? Number(p.position) : 0
+          if (!Number.isFinite(raw)) continue
+          // signed: positive = long YES, negative = long NO
+          const yes = raw > 0 ? raw : 0
+          const no  = raw < 0 ? -raw : 0
           map[p.ticker] = { yes, no }
         }
         setKalshiPositions(map)
