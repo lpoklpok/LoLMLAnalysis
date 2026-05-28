@@ -11,6 +11,7 @@ type EventOpt = { slug: string; title: string; start_date: string; volume: numbe
 type SliceState = {
   idx:                number
   target_size:        number
+  started_ts:         number
   passive_price:      number
   passive_order_id:   string
   passive_filled:     number
@@ -417,6 +418,7 @@ export default function VwaperPage() {
             <thead>
               <tr>
                 <th style={thStyle}>#</th>
+                <th style={thStyle}>started</th>
                 <th style={thStyle}>target</th>
                 <th style={thStyle}>passive px</th>
                 <th style={thStyle}>P1 filled</th>
@@ -431,6 +433,7 @@ export default function VwaperPage() {
               {job.slices.map(s => (
                 <tr key={s.idx}>
                   <td style={tdStyle}>{s.idx}</td>
+                  <td style={{ ...tdStyle, fontSize: 11, color: '#666' }}>{fmtTime(s.started_ts)}</td>
                   <td style={tdStyle}>{s.target_size.toFixed(2)}</td>
                   <td style={tdStyle}>{s.passive_price > 0 ? s.passive_price.toFixed(4) : '—'}</td>
                   <td style={tdStyle}>{s.passive_filled.toFixed(2)}</td>
@@ -455,6 +458,15 @@ export default function VwaperPage() {
 }
 
 // ── small UI helpers ─────────────────────────────────────────────────────────
+
+function fmtTime(unixTs: number): string {
+  if (!unixTs || unixTs <= 0) return '—'
+  const d = new Date(unixTs * 1000)
+  const hh = String(d.getUTCHours()).padStart(2, '0')
+  const mm = String(d.getUTCMinutes()).padStart(2, '0')
+  const ss = String(d.getUTCSeconds()).padStart(2, '0')
+  return `${hh}:${mm}:${ss}`
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
