@@ -137,6 +137,10 @@ export default function GamesPage() {
   const [league, setLeague]     = useState('All')
   const [year, setYear]         = useState('All')
   const [playoffs, setPlayoffs] = useState('All')
+  // Server-side date range filter (cuts payload before it leaves Supabase).
+  // Default = 90d to keep the page snappy + minimize egress; user can opt
+  // into the full history if they want.
+  const [dateRange, setDateRange] = useState<'30d' | '90d' | '1y' | 'all'>('90d')
 
   // Game table sort
   const [sortKey, setSortKey]   = useState<SortKey>('date')
@@ -151,11 +155,24 @@ export default function GamesPage() {
   useEffect(() => {
     async function load() {
       setLoading(true)
-      const { data } = await supabase
-        .from('game_features')
-        .select('*')
-        .order('date', { ascending: false })
-      setGames((data ?? []).map(g => {
+      // Explicit columns only — cuts payload ~50% vs select('*')
+      const COLUMNS = [
+        'date', 'league', 'year', 'playoffs', 'blue_team', 'red_team', 'blue_win',
+        'blue_elo', 'red_elo', 'elo_diff', 'h2h_wr', 'rwr_diff', 'gd15_diff', 'outperf_diff',
+        'q_blue_win', 'poly_blue_win_prob', 'poly_source',
+        'model_pred', 'model_pred_post_draft', 'model_pred_in_game_20',
+        'game_in_series', 'series_type',
+      ].join(',')
+
+      // Server-side date filter — keeps egress small for default 90d view
+      let query = supabase.from('game_features').select(COLUMNS).order('date', { ascending: false })
+      if (dateRange !== 'all') {
+        const days = dateRange === '30d' ? 30 : dateRange === '90d' ? 90 : 365
+        const cutoff = new Date(Date.now() - days * 86400_000).toISOString()
+        query = query.gte('date', cutoff)
+      }
+      const { data } = await query
+      setGames(((data ?? []) as unknown as Game[]).map(g => {
         const outcome = g.blue_win
         const mdl = g.model_pred
         // Coalesce: oddsportal first (historical coverage), fall back to Polymarket
@@ -211,7 +228,7 @@ export default function GamesPage() {
       setLoading(false)
     }
     load()
-  }, [])
+  }, [dateRange])
 
   // Leagues that have ever produced a market price (oddsportal or Polymarket)
   // since snapshots started. Computed once from the loaded games — used by the
@@ -343,6 +360,21 @@ export default function GamesPage() {
           onChange={e => { setSearch(e.target.value); handleFilter() }}
           className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-100 w-44 focus:outline-none focus:border-blue-500"
         />
+        {/* Server-side date range — controls how much data we pull from Supabase */}
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-gray-400">Window</label>
+          <select
+            value={dateRange}
+            onChange={e => { setDateRange(e.target.value as typeof dateRange); handleFilter() }}
+            className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+            title="Server-side filter — shorter windows mean faster page loads and lower Supabase egress"
+          >
+            <option value="30d">Last 30d</option>
+            <option value="90d">Last 90d</option>
+            <option value="1y">Last 1y</option>
+            <option value="all">All time</option>
+          </select>
+        </div>
         {[
           { label: 'League', value: league,   set: setLeague,   opts: leagues },
           { label: 'Year',   value: year,     set: setYear,     opts: years },
