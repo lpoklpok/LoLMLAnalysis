@@ -12,11 +12,31 @@ import { NextResponse } from 'next/server'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-const KALSHI_URL = 'https://api.elections.kalshi.com/trade-api/v2/markets'
+const KALSHI_URL        = 'https://api.elections.kalshi.com/trade-api/v2/markets'
+const KALSHI_WORKER_URL = process.env.KALSHI_WORKER_URL ?? ''     // optional WSS-fed worker
+const RELAY_SECRET      = process.env.RELAY_SECRET ?? ''
 
 export async function GET(req: Request) {
   const ticker = new URL(req.url).searchParams.get('ticker')
   if (!ticker) return NextResponse.json({ error: 'missing ticker' }, { status: 400 })
+
+  // Prefer WSS-fed worker (sub-second fresh). Fall back to direct REST.
+  if (KALSHI_WORKER_URL && RELAY_SECRET) {
+    try {
+      const r = await fetch(`${KALSHI_WORKER_URL}/book?ticker=${encodeURIComponent(ticker)}`,
+        { headers: { 'X-Relay-Auth': RELAY_SECRET }, cache: 'no-store',
+          signal: AbortSignal.timeout(2000) })
+      if (r.ok) {
+        const d = await r.json() as { ticker?: string; bids?: [number, number][]; asks?: [number, number][]; warming_up?: boolean }
+        if (!d.warming_up && (d.bids?.length ?? 0) + (d.asks?.length ?? 0) > 0) {
+          return NextResponse.json({
+            ticker, bids: d.bids ?? [], asks: d.asks ?? [],
+            refreshed_at: new Date().toISOString(), source: 'worker',
+          })
+        }
+      }
+    } catch { /* fall through */ }
+  }
 
   try {
     const r = await fetch(
