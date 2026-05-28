@@ -13,6 +13,7 @@ type StartBody = {
   n_slices?:          number
   max_price?:         number | null
   spread_poll_sec?:   number | null
+  passive_wait_sec?:  number | null
   max_spread_cross?:  number
   dry_run?:           boolean
 }

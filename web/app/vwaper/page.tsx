@@ -9,13 +9,19 @@ type SubmarketOpt = { mtype: string; label: string; condition_id: string; outcom
 type EventOpt = { slug: string; title: string; start_date: string; volume: number; submarkets: SubmarketOpt[] }
 
 type SliceState = {
-  idx:            number
-  target_size:    number
-  posted_price:   number
-  order_id:       string
-  filled_size:    number
-  avg_fill_price: number
-  error:          string
+  idx:                number
+  target_size:        number
+  passive_price:      number
+  passive_order_id:   string
+  passive_filled:     number
+  taker_price:        number
+  taker_order_id:     string
+  taker_filled:       number
+  posted_price:       number
+  order_id:           string
+  filled_size:        number
+  avg_fill_price:     number
+  error:              string
 }
 
 type Job = {
@@ -57,6 +63,7 @@ export default function VwaperPage() {
   const [slices, setSlices]             = useState(10)
   const [maxPrice, setMaxPrice]         = useState<string>('')
   const [maxSpreadCross, setMaxSpreadCross] = useState(0.03)
+  const [passiveWaitSec, setPassiveWaitSec] = useState<string>('')  // '' = auto (slice/2)
   const [dryRun, setDryRun]             = useState(true)
 
   // Load events on mount
@@ -106,6 +113,7 @@ export default function VwaperPage() {
         n_slices: slices,
         max_price: maxPrice ? Number(maxPrice) : null,
         max_spread_cross: maxSpreadCross,
+        passive_wait_sec: passiveWaitSec === '' ? null : Number(passiveWaitSec),
         dry_run: dryRun,
       }
       const r = await fetch('/api/vwap', {
@@ -121,7 +129,7 @@ export default function VwaperPage() {
     } finally {
       setStarting(false)
     }
-  }, [tokenIdInput, side, size, horizonMin, slices, maxPrice, maxSpreadCross, dryRun])
+  }, [tokenIdInput, side, size, horizonMin, slices, maxPrice, maxSpreadCross, passiveWaitSec, dryRun])
 
   const pollOnce = useCallback(async (jobId: string, machine: string) => {
     setPollErr('')
@@ -174,12 +182,12 @@ export default function VwaperPage() {
     <div style={{ padding: '24px', maxWidth: 1100, margin: '0 auto', fontFamily: 'system-ui, sans-serif' }}>
       <h1 style={{ marginTop: 0 }}>VWAPer</h1>
       <p style={{ color: '#666' }}>
-        Splits a Polymarket order into N slices over a time horizon and
-        executes each slice as a taker (Fill-And-Kill). Each slice waits for
-        the spread to be ≤ <code>max_spread_cross</code>, then lifts the offer
-        (BUY) or hits the bid (SELL) at top of book, capped at{' '}
-        <code>max_price</code>. Whatever doesn&apos;t fill rolls into the next
-        slice. No resting orders are ever placed.
+        Splits a Polymarket order into N slices over a time horizon. Each
+        slice runs two phases: <b>passive</b> first (rests inside the spread
+        at best_bid + 1¢ / best_ask − 1¢ for <code>passive_wait_sec</code>
+        seconds), then <b>taker</b> (FAK at top of book, gated by{' '}
+        <code>max_spread_cross</code>). Unfilled rolls forward. Set{' '}
+        <code>passive_wait_sec = 0</code> for pure-taker.
       </p>
 
       <section style={cardStyle}>
@@ -250,16 +258,23 @@ export default function VwaperPage() {
               onChange={e => setSlices(Number(e.target.value))} />
           </Field>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginTop: 8 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginTop: 8 }}>
           <Field label={side === 'BUY' ? 'Max price (cap)' : 'Min price (floor)'}>
             <input style={inputStyle} type="number" step="0.001" value={maxPrice}
               onChange={e => setMaxPrice(e.target.value)} placeholder="optional" />
           </Field>
-          <Field label="Max spread to cross (¢)">
+          <Field label="Passive wait (sec)">
+            <input style={inputStyle} type="number" step="1" value={passiveWaitSec}
+              onChange={e => setPassiveWaitSec(e.target.value)} placeholder="auto (slice/2)" />
+            <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>
+              How long to rest passive at best_bid + 1¢ before escalating to taker. 0 = pure taker.
+            </div>
+          </Field>
+          <Field label="Max spread to take (¢)">
             <input style={inputStyle} type="number" step="0.001" value={maxSpreadCross}
               onChange={e => setMaxSpreadCross(Number(e.target.value))} placeholder="0.03" />
             <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>
-              On reprice, only lift the offer / hit the bid if spread ≤ this. Else stay passive.
+              In taker phase, fire FAK only if spread ≤ this. Else wait / roll.
             </div>
           </Field>
           <Field label="Dry run">
@@ -310,10 +325,12 @@ export default function VwaperPage() {
               <tr>
                 <th style={thStyle}>#</th>
                 <th style={thStyle}>target</th>
-                <th style={thStyle}>take px</th>
-                <th style={thStyle}>filled</th>
+                <th style={thStyle}>passive px</th>
+                <th style={thStyle}>P1 filled</th>
+                <th style={thStyle}>taker px</th>
+                <th style={thStyle}>P2 filled</th>
+                <th style={thStyle}>total filled</th>
                 <th style={thStyle}>avg fill</th>
-                <th style={thStyle}>order</th>
                 <th style={thStyle}>note</th>
               </tr>
             </thead>
@@ -322,10 +339,12 @@ export default function VwaperPage() {
                 <tr key={s.idx}>
                   <td style={tdStyle}>{s.idx}</td>
                   <td style={tdStyle}>{s.target_size.toFixed(2)}</td>
-                  <td style={tdStyle}>{s.posted_price > 0 ? s.posted_price.toFixed(4) : '—'}</td>
+                  <td style={tdStyle}>{s.passive_price > 0 ? s.passive_price.toFixed(4) : '—'}</td>
+                  <td style={tdStyle}>{s.passive_filled.toFixed(2)}</td>
+                  <td style={tdStyle}>{s.taker_price > 0 ? s.taker_price.toFixed(4) : '—'}</td>
+                  <td style={tdStyle}>{s.taker_filled.toFixed(2)}</td>
                   <td style={tdStyle}>{s.filled_size.toFixed(2)}</td>
                   <td style={tdStyle}>{s.avg_fill_price > 0 ? s.avg_fill_price.toFixed(4) : '—'}</td>
-                  <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: 11 }}>{s.order_id ? s.order_id.slice(0, 16) : ''}</td>
                   <td style={{ ...tdStyle, fontSize: 11, color: '#888' }}>{s.error || ''}</td>
                 </tr>
               ))}
