@@ -1,5 +1,5 @@
 {
-  "generated": "2026-05-28T01:02:29Z",
+  "generated": "2026-05-28T11:42:23Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -28,9 +28,9 @@
       "team": "SK Gaming",
       "n_games": 27,
       "wins": 9,
-      "avg_pred": 0.249,
+      "avg_pred": 0.2489,
       "actual_wr": 0.3333,
-      "closing_rate": 0.0843
+      "closing_rate": 0.0844
     },
     {
       "team": "LYON",
@@ -62,7 +62,7 @@
       "wins": 24,
       "avg_pred": 0.506,
       "actual_wr": 0.5854,
-      "closing_rate": 0.0793
+      "closing_rate": 0.0794
     },
     {
       "team": "Sentinels",
@@ -100,17 +100,17 @@
       "team": "LOUD",
       "n_games": 8,
       "wins": 2,
-      "avg_pred": 0.2261,
+      "avg_pred": 0.2257,
       "actual_wr": 0.25,
-      "closing_rate": 0.0239
+      "closing_rate": 0.0243
     },
     {
       "team": "Karmine Corp",
       "n_games": 49,
       "wins": 30,
-      "avg_pred": 0.5885,
+      "avg_pred": 0.5883,
       "actual_wr": 0.6122,
-      "closing_rate": 0.0238
+      "closing_rate": 0.0239
     },
     {
       "team": "HANJIN BRION",
@@ -124,17 +124,17 @@
       "team": "Deep Cross Gaming",
       "n_games": 10,
       "wins": 6,
-      "avg_pred": 0.5883,
+      "avg_pred": 0.5882,
       "actual_wr": 0.6,
-      "closing_rate": 0.0117
+      "closing_rate": 0.0118
     },
     {
       "team": "FlyQuest",
       "n_games": 39,
       "wins": 21,
-      "avg_pred": 0.5333,
+      "avg_pred": 0.5334,
       "actual_wr": 0.5385,
-      "closing_rate": 0.0052
+      "closing_rate": 0.0051
     }
   ],
   "throwers": [
@@ -142,9 +142,9 @@
       "team": "Team Heretics",
       "n_games": 24,
       "wins": 3,
-      "avg_pred": 0.3382,
+      "avg_pred": 0.3383,
       "actual_wr": 0.125,
-      "closing_rate": -0.2132
+      "closing_rate": -0.2133
     },
     {
       "team": "Team Liquid",
@@ -176,31 +176,31 @@
       "wins": 4,
       "avg_pred": 0.1691,
       "actual_wr": 0.1053,
-      "closing_rate": -0.0639
+      "closing_rate": -0.0638
     },
     {
       "team": "Fukuoka SoftBank HAWKS gaming",
       "n_games": 10,
       "wins": 5,
-      "avg_pred": 0.5601,
+      "avg_pred": 0.56,
       "actual_wr": 0.5,
-      "closing_rate": -0.0601
+      "closing_rate": -0.06
     },
     {
       "team": "Dplus Kia",
       "n_games": 52,
       "wins": 25,
-      "avg_pred": 0.5351,
+      "avg_pred": 0.5352,
       "actual_wr": 0.4808,
-      "closing_rate": -0.0543
+      "closing_rate": -0.0544
     },
     {
       "team": "Nongshim RedForce",
       "n_games": 45,
       "wins": 15,
-      "avg_pred": 0.3798,
+      "avg_pred": 0.3799,
       "actual_wr": 0.3333,
-      "closing_rate": -0.0465
+      "closing_rate": -0.0466
     },
     {
       "team": "Shopify Rebellion",
@@ -214,7 +214,7 @@
       "team": "Dignitas",
       "n_games": 21,
       "wins": 3,
-      "avg_pred": 0.1743,
+      "avg_pred": 0.1742,
       "actual_wr": 0.1429,
       "closing_rate": -0.0314
     },
@@ -222,9 +222,9 @@
       "team": "CTBC Flying Oyster",
       "n_games": 8,
       "wins": 3,
-      "avg_pred": 0.4058,
+      "avg_pred": 0.406,
       "actual_wr": 0.375,
-      "closing_rate": -0.0308
+      "closing_rate": -0.031
     },
     {
       "team": "BNK FEARX",
@@ -238,7 +238,7 @@
       "team": "Natus Vincere",
       "n_games": 32,
       "wins": 17,
-      "avg_pred": 0.5576,
+      "avg_pred": 0.5577,
       "actual_wr": 0.5312,
       "closing_rate": -0.0264
     },
@@ -254,7 +254,7 @@
       "team": "Cloud9",
       "n_games": 33,
       "wins": 20,
-      "avg_pred": 0.6171,
+      "avg_pred": 0.6172,
       "actual_wr": 0.6061,
       "closing_rate": -0.0111
     }
