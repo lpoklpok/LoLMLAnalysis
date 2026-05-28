@@ -1,8 +1,12 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 type Side = 'BUY' | 'SELL'
+
+type OutcomeOpt = { name: string; token_id: string }
+type SubmarketOpt = { mtype: string; label: string; condition_id: string; outcomes: OutcomeOpt[]; volume: number }
+type EventOpt = { slug: string; title: string; start_date: string; volume: number; submarkets: SubmarketOpt[] }
 
 type SliceState = {
   idx:            number
@@ -38,20 +42,49 @@ type Job = {
 }
 
 export default function VwaperPage() {
+  // ── Event tree ────────────────────────────────────────────────────────────
+  const [events, setEvents]           = useState<EventOpt[]>([])
+  const [eventsErr, setEventsErr]     = useState('')
+  const [eventsLoading, setEventsLoading] = useState(false)
+  const [selectedSlug, setSelectedSlug]   = useState('')
+  const [selectedMtype, setSelectedMtype] = useState('')
+  const [selectedOutcome, setSelectedOutcome] = useState('')
+  const [tokenIdInput, setTokenIdInput]   = useState('')
+
   // ── Form state ────────────────────────────────────────────────────────────
-  const [tokenIdInput, setTokenIdInput] = useState('')
-  const [slug, setSlug]                 = useState('')
-  const [outcome, setOutcome]           = useState('')
-  const [marketType, setMarketType]     = useState('match_winner')
   const [side, setSide]                 = useState<Side>('BUY')
   const [size, setSize]                 = useState(100)
   const [horizonMin, setHorizonMin]     = useState(10)
   const [slices, setSlices]             = useState(10)
   const [maxPrice, setMaxPrice]         = useState<string>('')
+  const [maxSpreadCross, setMaxSpreadCross] = useState(0.03)
   const [dryRun, setDryRun]             = useState(true)
 
-  const [resolveResult, setResolveResult] = useState<{ title?: string; token_id?: string; outcomes?: string[]; error?: string } | null>(null)
-  const [resolving, setResolving]         = useState(false)
+  // Load events on mount
+  useEffect(() => {
+    setEventsLoading(true)
+    fetch('/api/vwap/events').then(r => r.json()).then(j => {
+      if (j.events) setEvents(j.events as EventOpt[])
+      else setEventsErr(j.error || 'no events returned')
+    }).catch(e => setEventsErr(`${e}`)).finally(() => setEventsLoading(false))
+  }, [])
+
+  // Derived: current event, submarket, outcome
+  const currentEvent = useMemo(() => events.find(e => e.slug === selectedSlug), [events, selectedSlug])
+  const currentSub   = useMemo(() => currentEvent?.submarkets.find(s => s.mtype === selectedMtype), [currentEvent, selectedMtype])
+  const currentOutcome = useMemo(() => currentSub?.outcomes.find(o => o.name === selectedOutcome), [currentSub, selectedOutcome])
+
+  // When picks change, push the resolved token_id into the input (overrides manual paste)
+  useEffect(() => {
+    if (currentOutcome) setTokenIdInput(currentOutcome.token_id)
+  }, [currentOutcome])
+
+  // When the user picks a new event, reset downstream picks
+  useEffect(() => {
+    setSelectedMtype('')
+    setSelectedOutcome('')
+  }, [selectedSlug])
+  useEffect(() => { setSelectedOutcome('') }, [selectedMtype])
 
   // ── Active job state ─────────────────────────────────────────────────────
   const [job, setJob]                 = useState<Job | null>(null)
@@ -60,23 +93,6 @@ export default function VwaperPage() {
   const [cancelling, setCancelling]   = useState(false)
   const [pollErr, setPollErr]         = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  // ── Resolvers ────────────────────────────────────────────────────────────
-  const resolveToken = useCallback(async () => {
-    if (!slug || !outcome) { setResolveResult({ error: 'slug + outcome required' }); return }
-    setResolving(true)
-    setResolveResult(null)
-    try {
-      const r = await fetch(`/api/vwap/resolve?slug=${encodeURIComponent(slug)}&outcome=${encodeURIComponent(outcome)}&market_type=${encodeURIComponent(marketType)}`)
-      const j = await r.json()
-      setResolveResult(j)
-      if (j.token_id) setTokenIdInput(j.token_id)
-    } catch (e) {
-      setResolveResult({ error: `network: ${e}` })
-    } finally {
-      setResolving(false)
-    }
-  }, [slug, outcome, marketType])
 
   // ── Start + poll ─────────────────────────────────────────────────────────
   const startJob = useCallback(async () => {
@@ -90,6 +106,7 @@ export default function VwaperPage() {
         horizon_sec: Math.max(60, Math.round(horizonMin * 60)),
         n_slices: slices,
         max_price: maxPrice ? Number(maxPrice) : null,
+        max_spread_cross: maxSpreadCross,
         dry_run: dryRun,
       }
       const r = await fetch('/api/vwap', {
@@ -105,7 +122,7 @@ export default function VwaperPage() {
     } finally {
       setStarting(false)
     }
-  }, [tokenIdInput, side, size, horizonMin, slices, maxPrice, dryRun])
+  }, [tokenIdInput, side, size, horizonMin, slices, maxPrice, maxSpreadCross, dryRun])
 
   const pollOnce = useCallback(async (jobId: string, machine: string) => {
     setPollErr('')
@@ -165,46 +182,53 @@ export default function VwaperPage() {
 
       <section style={cardStyle}>
         <h2 style={h2Style}>1. Pick a market</h2>
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: 8, alignItems: 'end' }}>
-          <Field label="Polymarket slug">
-            <input style={inputStyle} placeholder="lol-kt-t1-2026-05-28"
-              value={slug} onChange={e => setSlug(e.target.value)} />
-          </Field>
-          <Field label="Outcome">
-            <input style={inputStyle} placeholder="T1"
-              value={outcome} onChange={e => setOutcome(e.target.value)} />
-          </Field>
-          <Field label="Market type">
-            <select style={inputStyle} value={marketType} onChange={e => setMarketType(e.target.value)}>
-              <option value="match_winner">match_winner</option>
-              <option value="game_1_winner">game_1_winner</option>
-              <option value="game_2_winner">game_2_winner</option>
-              <option value="game_3_winner">game_3_winner</option>
-              <option value="game_handicap">game_handicap</option>
+        {eventsLoading && <div style={{ color: '#888', fontSize: 13 }}>Loading events…</div>}
+        {eventsErr && <div style={{ color: '#c00', fontSize: 13 }}>events error: {eventsErr}</div>}
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 8 }}>
+          <Field label={`Event (${events.length})`}>
+            <select style={inputStyle} value={selectedSlug} onChange={e => setSelectedSlug(e.target.value)}>
+              <option value="">— select event —</option>
+              {events.map(ev => (
+                <option key={ev.slug} value={ev.slug}>
+                  {ev.title.length > 70 ? ev.title.slice(0, 70) + '…' : ev.title}
+                  {ev.volume > 0 ? `  ($${ev.volume.toLocaleString(undefined, {maximumFractionDigits: 0})})` : ''}
+                </option>
+              ))}
             </select>
           </Field>
-          <button style={btnStyle} disabled={resolving || !slug || !outcome} onClick={resolveToken}>
-            {resolving ? 'Resolving…' : 'Resolve →'}
-          </button>
+          <Field label="Submarket">
+            <select style={inputStyle} value={selectedMtype} onChange={e => setSelectedMtype(e.target.value)}
+                    disabled={!currentEvent}>
+              <option value="">{currentEvent ? '— select —' : '(pick event first)'}</option>
+              {currentEvent?.submarkets.map(s => (
+                <option key={s.mtype} value={s.mtype}>
+                  {s.label}{s.volume > 0 ? `  ($${s.volume.toLocaleString(undefined, {maximumFractionDigits: 0})})` : ''}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Outcome">
+            <select style={inputStyle} value={selectedOutcome} onChange={e => setSelectedOutcome(e.target.value)}
+                    disabled={!currentSub}>
+              <option value="">{currentSub ? '— select —' : '(pick submarket first)'}</option>
+              {currentSub?.outcomes.map(o => (
+                <option key={o.token_id} value={o.name}>{o.name}</option>
+              ))}
+            </select>
+          </Field>
         </div>
-        {resolveResult && (
-          <div style={{ marginTop: 10, fontSize: 13 }}>
-            {resolveResult.error
-              ? <span style={{ color: '#c00' }}>{resolveResult.error}{resolveResult.outcomes && ` — outcomes: ${resolveResult.outcomes.join(' / ')}`}</span>
-              : <span style={{ color: '#080' }}>✓ {resolveResult.title} → token_id <code>{resolveResult.token_id?.slice(0, 18)}…</code></span>
-            }
-          </div>
-        )}
-        <Field label="…or paste token_id directly">
-          <input style={{ ...inputStyle, fontFamily: 'monospace', fontSize: 12 }}
-            placeholder="123456789..." value={tokenIdInput}
-            onChange={e => setTokenIdInput(e.target.value)} />
-        </Field>
+        <div style={{ marginTop: 10 }}>
+          <Field label="token_id (auto-filled from dropdowns; paste directly to override)">
+            <input style={{ ...inputStyle, fontFamily: 'monospace', fontSize: 12 }}
+              placeholder="123456789..." value={tokenIdInput}
+              onChange={e => setTokenIdInput(e.target.value)} />
+          </Field>
+        </div>
       </section>
 
       <section style={cardStyle}>
         <h2 style={h2Style}>2. Execution params</h2>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 8 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
           <Field label="Side">
             <select style={inputStyle} value={side} onChange={e => setSide(e.target.value as Side)}>
               <option value="BUY">BUY</option>
@@ -223,9 +247,18 @@ export default function VwaperPage() {
             <input style={inputStyle} type="number" value={slices} min={1} max={60}
               onChange={e => setSlices(Number(e.target.value))} />
           </Field>
-          <Field label={side === 'BUY' ? 'Max price' : 'Min price'}>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginTop: 8 }}>
+          <Field label={side === 'BUY' ? 'Max price (cap)' : 'Min price (floor)'}>
             <input style={inputStyle} type="number" step="0.001" value={maxPrice}
               onChange={e => setMaxPrice(e.target.value)} placeholder="optional" />
+          </Field>
+          <Field label="Max spread to cross (¢)">
+            <input style={inputStyle} type="number" step="0.001" value={maxSpreadCross}
+              onChange={e => setMaxSpreadCross(Number(e.target.value))} placeholder="0.03" />
+            <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>
+              On reprice, only lift the offer / hit the bid if spread ≤ this. Else stay passive.
+            </div>
           </Field>
           <Field label="Dry run">
             <label style={{ display: 'flex', alignItems: 'center', height: 32 }}>
