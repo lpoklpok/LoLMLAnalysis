@@ -1147,26 +1147,71 @@ function LadderModal({
       log(false, `kalshi error: ${(e as Error).message}`)
     }
   }
+  // Smart router: pick the ticker (team1 vs team2) whose book actually has the
+  // resting offer at the user's chosen price. All orders are BUYs (no short
+  // selling required).
+  //
+  // ASK click @ $p (user wants LONG team1, pay $p):
+  //   - team1 has matching offer if kalshiThis.asks[$p] > 0  (= team1.no_dollars at $(1−p))
+  //       → BUY YES on team1 at $p
+  //   - team2 has matching offer if kalshiOpp.bids[$(1−p)] > 0  (= team2.yes_dollars at $(1−p))
+  //       → BUY NO on team2 at $p
+  //   - pick whichever has more visible size; default team1 if tied or both empty
+  //
+  // BID click @ $p (user wants SHORT team1 / synthetic SELL at $p):
+  //   - team1 has matching bid if kalshiThis.bids[$p] > 0  (= team1.yes_dollars at $p)
+  //       → BUY NO on team1 at $(1−p)
+  //   - team2 has matching bid if kalshiOpp.asks[$(1−p)] > 0  (= team2.no_dollars at $p)
+  //       → BUY YES on team2 at $(1−p)
+  //   - pick whichever has more visible size; default team1 if tied or both empty
   function onClickKalshiAsk(price_yes: number) {
-    // BUY YES at price_yes (lift the offer on Kalshi YES book)
-    if (!kalshiSide?.ticker) return
-    fireKalshi({
-      ticker: kalshiSide.ticker, side: 'yes',
-      px_cents: Math.round(price_yes * 100),
-      count:    Math.round(size),
-      label:    `BUY YES ${kalshiSide.team}`,
-    })
+    const p_cents = Math.round(price_yes * 100)
+    const inv_cents = 100 - p_cents
+    const t1Size = kalshiThis?.asks.get(price_yes) ?? kalshiThis?.asks.get(Math.round(price_yes * 100) / 100) ?? 0
+    const t2Size = kalshiOpp?.bids.get(Math.round((1 - price_yes) * 100) / 100) ?? 0
+    const useTeam2 = t2Size > t1Size && !!kalshiOpposite?.ticker
+    if (useTeam2) {
+      fireKalshi({
+        ticker:   kalshiOpposite!.ticker,
+        side:     'no',
+        px_cents: p_cents,
+        count:    Math.round(size),
+        label:    `BUY NO ${kalshiOpposite!.team} (=long ${kalshiSide?.team ?? 'team1'} @ ${p_cents}¢; routed via team2)`,
+      })
+    } else if (kalshiSide?.ticker) {
+      fireKalshi({
+        ticker:   kalshiSide.ticker,
+        side:     'yes',
+        px_cents: p_cents,
+        count:    Math.round(size),
+        label:    `BUY YES ${kalshiSide.team} @ ${p_cents}¢`,
+      })
+    }
+    void inv_cents  // (silence unused — used as comment math)
   }
   function onClickKalshiBid(price_yes: number) {
-    // SELL YES at price_yes ≡ BUY NO at (1 − price_yes)  (synthetic, requires no YES inventory)
-    if (!kalshiSide?.ticker) return
-    const no_cents = Math.round((1 - price_yes) * 100)
-    fireKalshi({
-      ticker: kalshiSide.ticker, side: 'no',
-      px_cents: no_cents,
-      count:    Math.round(size),
-      label:    `SELL YES ${kalshiSide.team} (=BUY NO @${no_cents}¢)`,
-    })
+    const p_cents     = Math.round(price_yes * 100)
+    const inv_cents   = 100 - p_cents
+    const t1Size = kalshiThis?.bids.get(Math.round(price_yes * 100) / 100) ?? 0
+    const t2Size = kalshiOpp?.asks.get(Math.round((1 - price_yes) * 100) / 100) ?? 0
+    const useTeam2 = t2Size > t1Size && !!kalshiOpposite?.ticker
+    if (useTeam2) {
+      fireKalshi({
+        ticker:   kalshiOpposite!.ticker,
+        side:     'yes',
+        px_cents: inv_cents,
+        count:    Math.round(size),
+        label:    `BUY YES ${kalshiOpposite!.team} @ ${inv_cents}¢ (=short ${kalshiSide?.team ?? 'team1'} @ ${p_cents}¢; routed via team2)`,
+      })
+    } else if (kalshiSide?.ticker) {
+      fireKalshi({
+        ticker:   kalshiSide.ticker,
+        side:     'no',
+        px_cents: inv_cents,
+        count:    Math.round(size),
+        label:    `BUY NO ${kalshiSide.team} @ ${inv_cents}¢ (=short ${kalshiSide.team} @ ${p_cents}¢)`,
+      })
+    }
   }
   // Quick-action: market-sell at best bid (synthetic = BUY opposite at 1-bestBid)
   function sellAtBestBid() {
