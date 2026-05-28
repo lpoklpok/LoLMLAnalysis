@@ -975,8 +975,14 @@ function LadderModal({
   useEffect(() => {
     if (!kalshiSide?.ticker && !kalshiOpposite?.ticker) return
     pullKalshiPositions()
-    const id = setInterval(pullKalshiPositions, 5000)
-    return () => clearInterval(id)
+    // WSS-driven instant refresh: subscribe to fill events from the Kalshi
+    // worker. Each fill triggers a position re-pull. Safety-net slow poll
+    // (30s) in case SSE silently dies.
+    const es = new EventSource('/api/kalshi/user-stream')
+    es.onmessage = () => { pullKalshiPositions() }
+    es.onerror   = () => { /* browser auto-reconnects */ }
+    const safety = setInterval(pullKalshiPositions, 30_000)
+    return () => { es.close(); clearInterval(safety) }
   }, [kalshiSide?.ticker, kalshiOpposite?.ticker, pullKalshiPositions])
   const [size, setSize] = useState<number>(100)
   const [mode, setMode] = useState<'FAK' | 'GTD'>('FAK')
@@ -1790,17 +1796,36 @@ export default function TraderPage() {
     return () => clearInterval(interval)
   }, [selectedSlug, refreshDetail])
 
-  // Poll positions when relay is connected
+  // Positions: initial pull + WSS-driven refresh.
+  // Subscribe to relay /user_stream (proxied via /api/trader/user-stream).
+  // Every fill event triggers an immediate position re-fetch. Fall back to
+  // a slow 30s poll as a safety net in case the SSE disconnects.
   useEffect(() => {
     if (!relaySecret) { setPositions([]); return }
     let cancelled = false
-    async function poll() {
+    async function pull() {
       const ps = await fetchPositions(relaySecret!)
       if (!cancelled) setPositions(ps)
     }
-    poll()
-    const interval = setInterval(poll, 5_000)
-    return () => { cancelled = true; clearInterval(interval) }
+    pull()
+    // Connect to SSE — push-driven instant updates
+    const es = new EventSource('/api/trader/user-stream')
+    es.onmessage = () => {
+      // Any trade event (regardless of market) is worth re-pulling positions.
+      // Could filter by event.market here if we wanted to be more selective.
+      pull()
+    }
+    es.onerror = () => {
+      // EventSource auto-reconnects with exponential backoff. Just log.
+      // (Don't close — let the browser retry.)
+    }
+    // Safety-net slow poll (30s) in case SSE silently dies
+    const safety = setInterval(pull, 30_000)
+    return () => {
+      cancelled = true
+      es.close()
+      clearInterval(safety)
+    }
   }, [relaySecret])
 
   // j/k + ↑/↓ keyboard navigation
