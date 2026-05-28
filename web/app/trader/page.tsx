@@ -737,11 +737,12 @@ async function fetchKalshiBook(ticker: string): Promise<KalshiBook | null> {
 }
 
 function LadderModal({
-  plan, secret, onClose,
+  plan, secret, polyPositions, onClose,
 }: {
-  plan: LadderPlan
-  secret: string | null
-  onClose: () => void
+  plan:          LadderPlan
+  secret:        string | null
+  polyPositions: PolyPosition[]
+  onClose:       () => void
 }) {
   const { thisRow, oppositeRow, kalshiSide, kalshiOpposite } = plan
   const thisTokenId = thisRow.token_id
@@ -751,6 +752,33 @@ function LadderModal({
   const [books, setBooks] = useState<Record<string, BookState>>({})
   const [kalshiThis, setKalshiThis] = useState<KalshiBook | null>(null)
   const [kalshiOpp,  setKalshiOpp]  = useState<KalshiBook | null>(null)
+  // Kalshi positions: yes_count + no_count keyed by ticker
+  const [kalshiPositions, setKalshiPositions] = useState<Record<string, { yes: number; no: number; avg_yes?: number; avg_no?: number }>>({})
+
+  // Fetch Kalshi positions for this matchup's two tickers
+  useEffect(() => {
+    if (!kalshiSide?.ticker && !kalshiOpposite?.ticker) return
+    let stopped = false
+    async function pull() {
+      try {
+        const r = await fetch('/api/kalshi/positions', { cache: 'no-store' })
+        if (!r.ok) return
+        const d = await r.json() as { market_positions?: Array<{ ticker: string; position: number; market_exposure?: number; total_traded?: number; resting_orders_count?: number }> }
+        if (stopped) return
+        const map: Record<string, { yes: number; no: number }> = {}
+        for (const p of d.market_positions ?? []) {
+          // Kalshi `position` is signed: positive = long YES, negative = long NO
+          const yes = p.position > 0 ? p.position : 0
+          const no  = p.position < 0 ? -p.position : 0
+          map[p.ticker] = { yes, no }
+        }
+        setKalshiPositions(map)
+      } catch { /* ignore */ }
+    }
+    pull()
+    const id = setInterval(pull, 5000)
+    return () => { stopped = true; clearInterval(id) }
+  }, [kalshiSide?.ticker, kalshiOpposite?.ticker])
   const [size, setSize] = useState<number>(100)
   const [mode, setMode] = useState<'FAK' | 'GTD'>('FAK')
   const [logLines, setLogLines] = useState<{ ts: string; ok: boolean; text: string }[]>([])
@@ -1024,6 +1052,60 @@ function LadderModal({
             <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-2xl leading-none ml-1">×</button>
           </div>
         </div>
+
+        {/* Positions banner — cumulative long/short for this team across PM + Kalshi */}
+        {(() => {
+          // Polymarket: positions matched by token_id (this outcome = long, opp = short)
+          const pmLongShares  = polyPositions.find(p => (p.tokenId ?? p.token_id ?? p.asset) === thisTokenId)
+          const pmShortShares = polyPositions.find(p => (p.tokenId ?? p.token_id ?? p.asset) === oppTokenId)
+          const pmLong  = pmLongShares  ? num(pmLongShares.size) : 0
+          const pmShort = pmShortShares ? num(pmShortShares.size) : 0
+          // Kalshi: yes contracts on this team's ticker = long; no contracts = short (= long NO)
+          const kThis = kalshiSide?.ticker ? kalshiPositions[kalshiSide.ticker] : undefined
+          const kOpp  = kalshiOpposite?.ticker ? kalshiPositions[kalshiOpposite.ticker] : undefined
+          const kLong  = (kThis?.yes ?? 0) + (kOpp?.no ?? 0)   // long this team = YES this OR NO opposite
+          const kShort = (kThis?.no  ?? 0) + (kOpp?.yes ?? 0)  // short this team = NO this OR YES opposite
+
+          const totalLong  = pmLong + kLong
+          const totalShort = pmShort + kShort
+          const net        = totalLong - totalShort
+          const hasAny     = totalLong > 0 || totalShort > 0
+          if (!hasAny) return (
+            <div className="px-3 md:px-6 py-2 border-b border-gray-800 bg-gray-950/40 text-[11px] text-gray-600">
+              No open positions on {thisRow.outcome_label}.
+            </div>
+          )
+          return (
+            <div className="px-3 md:px-6 py-2 border-b border-gray-800 bg-gray-950/40 text-xs flex flex-wrap items-center gap-x-4 gap-y-1">
+              <span className="text-gray-500 uppercase tracking-wide text-[10px]">Position · {thisRow.outcome_label}:</span>
+              <span className="font-mono">
+                <span className={net > 0 ? 'text-emerald-400 font-bold' : net < 0 ? 'text-rose-400 font-bold' : 'text-gray-400'}>
+                  {net >= 0 ? '+' : ''}{net.toLocaleString()}
+                </span>
+                <span className="text-gray-500"> net</span>
+              </span>
+              <span className="text-gray-700">·</span>
+              <span className="font-mono">
+                <span className="text-emerald-400">{totalLong.toLocaleString()}</span>
+                <span className="text-gray-500"> long</span>
+              </span>
+              <span className="font-mono">
+                <span className="text-rose-400">{totalShort.toLocaleString()}</span>
+                <span className="text-gray-500"> short</span>
+              </span>
+              {(pmLong > 0 || pmShort > 0) && (
+                <span className="text-gray-600 text-[10px]">
+                  PM: +{pmLong.toLocaleString()} / −{pmShort.toLocaleString()}
+                </span>
+              )}
+              {(kLong > 0 || kShort > 0) && (
+                <span className="text-gray-600 text-[10px]">
+                  Kalshi: +{kLong.toLocaleString()} / −{kShort.toLocaleString()}
+                </span>
+              )}
+            </div>
+          )
+        })()}
 
         {/* Quick action bar */}
         <div className="px-3 md:px-6 py-2 border-b border-gray-800 bg-gray-900/40 flex flex-wrap items-center gap-2 md:gap-3 text-xs">
@@ -1507,6 +1589,7 @@ export default function TraderPage() {
         <LadderModal
           plan={ladderPlan}
           secret={relaySecret}
+          polyPositions={positions}
           onClose={() => setLadderPlan(null)}
         />
       )}
