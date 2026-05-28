@@ -334,6 +334,111 @@ function MainPanel({
     .map(t => ({ ...t, pos: positionByToken.get(t.token_id) }))
     .filter(t => t.pos && Math.abs(num(t.pos.size)) > 0.0001)
 
+  // ── Game-level delta tracker ────────────────────────────────────────────
+  // For each game in the series, compute net delta to team1 winning that game.
+  // Delta sources for a position on team1 outcome of market M:
+  //   - match_winner shares × ∂(series_prob_t1) / ∂(p_game_N) at current state
+  //   - game_N_winner shares × 1   (direct exposure)
+  //   - game_M_winner shares × 0  (M ≠ N)
+  // Auto-detects completed games from `detail.submarkets[i].outcome_mids` being
+  // pinned at 0/1 (resolved Polymarket games) — those contribute 0 delta and
+  // shift the series state for remaining games.
+  const gameDeltas = useMemo(() => {
+    if (!detail || !pred.best_of || pred.best_of <= 1) return null
+    const pRaw = pred.pred_blue_win
+    if (pRaw == null || !Number.isFinite(pRaw)) return null
+    const p: number = pRaw
+    const bo  = pred.best_of
+    const needed = Math.ceil(bo / 2)
+
+    // Tally completed games from submarket prices (game_N_winner mid pinned ≥0.97 or ≤0.03 = settled)
+    // We need to map outcome[0] of each game_N market to team1 (blue).
+    const norm = (s: string) => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+    let t1Wins = 0, t2Wins = 0
+    const settledGames: number[] = []
+    for (const sm of detail.submarkets) {
+      if (!sm.market_type.startsWith('game_') || !sm.market_type.endsWith('_winner')) continue
+      const n = parseInt(sm.market_type.replace('game_','').replace('_winner',''), 10)
+      if (!Number.isFinite(n)) continue
+      const t1IsBlue = norm(sm.outcomes[0]) === norm(pred.blue_team)
+      const [m1, m2] = sm.outcome_mids
+      const settled = (m1 != null && (m1 >= 0.97 || m1 <= 0.03)) ||
+                       (m2 != null && (m2 >= 0.97 || m2 <= 0.03))
+      if (!settled) continue
+      // Whichever side is at ~1 won
+      const t1Won = (t1IsBlue && (m1 ?? 0) > 0.5) || (!t1IsBlue && (m2 ?? 0) > 0.5)
+      if (t1Won) t1Wins++; else t2Wins++
+      settledGames.push(n)
+    }
+
+    // Series prob from a (b, r) state (constant-p model, no draft swap)
+    function sProb(b: number, r: number): number {
+      if (b >= needed) return 1
+      if (r >= needed) return 0
+      return p * sProb(b+1, r) + (1-p) * sProb(b, r+1)
+    }
+
+    // Delta to (next undecided) game N's outcome = P(reach G_N AND win) − P(reach G_N AND lose),
+    // measured as how series_prob changes when conditioning game N on win vs loss.
+    // Computed by walking the tree: for each future game position equal to N,
+    // accumulate (path_prob_to_reaching_that_game) × Δ_one_game.
+    // Implementation: recursive walk that tracks "what game number we're at" relative to settled state.
+    function deltaForGame(targetN: number): number {
+      // gameNum 1..bo; we're starting after `t1Wins + t2Wins` games already settled
+      const startGame = t1Wins + t2Wins + 1
+      if (targetN < startGame) return 0   // game already played
+      if (targetN > bo) return 0
+      // Walk
+      function w(b: number, r: number, gameNum: number): { wReach: number; lReach: number } {
+        if (b >= needed) return { wReach: 0, lReach: 0 }
+        if (r >= needed) return { wReach: 0, lReach: 0 }
+        if (gameNum > bo) return { wReach: 0, lReach: 0 }
+        if (gameNum === targetN) {
+          // At target. If t1 wins it, contributes sProb(b+1,r) to win-conditional series_prob.
+          return { wReach: sProb(b+1, r), lReach: sProb(b, r+1) }
+        }
+        const nW = w(b+1, r, gameNum+1)
+        const nL = w(b, r+1, gameNum+1)
+        return {
+          wReach: p * nW.wReach + (1-p) * nL.wReach,
+          lReach: p * nW.lReach + (1-p) * nL.lReach,
+        }
+      }
+      const { wReach, lReach } = w(t1Wins, t2Wins, startGame)
+      return wReach - lReach
+    }
+
+    // Aggregate positions: for each game N, sum
+    //   match_winner_pos × deltaPerShare(N) + game_N_winner_pos × 1
+    // Sign convention: positive = long team1 in that game; negative = long team2.
+    const mwSm = detail.submarkets.find(s => s.market_type === 'match_winner')
+    const mwT1Idx = mwSm && norm(mwSm.outcomes[0]) === norm(pred.blue_team) ? 0 : 1
+    const mwT1Token = mwSm?.token_ids[mwT1Idx] ?? null
+    const mwT2Token = mwSm?.token_ids[1 - mwT1Idx] ?? null
+    const mwT1Pos = mwT1Token ? num(positionByToken.get(mwT1Token)?.size) : 0
+    const mwT2Pos = mwT2Token ? num(positionByToken.get(mwT2Token)?.size) : 0
+    const mwNetT1 = mwT1Pos - mwT2Pos   // net long team1 (in match_winner)
+
+    const rows: Array<{ n: number; settled: boolean; delta_per_share: number; direct_t1: number; direct_t2: number; mw_contrib: number; total_t1: number }> = []
+    for (let n = 1; n <= bo; n++) {
+      const isSettled = settledGames.includes(n)
+      const deltaPS = isSettled ? 0 : deltaForGame(n)
+      const gw = detail.submarkets.find(s => s.market_type === `game_${n}_winner`)
+      let direct_t1 = 0, direct_t2 = 0
+      if (gw) {
+        const t1Idx = norm(gw.outcomes[0]) === norm(pred.blue_team) ? 0 : 1
+        const t1Tok = gw.token_ids[t1Idx]
+        const t2Tok = gw.token_ids[1 - t1Idx]
+        direct_t1 = t1Tok ? num(positionByToken.get(t1Tok)?.size) : 0
+        direct_t2 = t2Tok ? num(positionByToken.get(t2Tok)?.size) : 0
+      }
+      const mw_contrib = mwNetT1 * deltaPS
+      const total_t1 = mw_contrib + direct_t1 - direct_t2
+      rows.push({ n, settled: isSettled, delta_per_share: deltaPS, direct_t1, direct_t2, mw_contrib, total_t1 })
+    }
+    return { rows, t1Wins, t2Wins, needed, mwNetT1, p }
+  }, [detail, pred, positionByToken])
+
   return (
     <div className="p-3 md:p-6 space-y-4 md:space-y-6">
       {/* Header */}
@@ -413,6 +518,53 @@ function MainPanel({
                 </div>
               )
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Game-level delta tracker */}
+      {gameDeltas && (gameDeltas.mwNetT1 !== 0 || gameDeltas.rows.some(r => r.direct_t1 !== 0 || r.direct_t2 !== 0)) && (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <div className="flex items-baseline justify-between mb-3">
+            <h3 className="text-sm font-semibold text-gray-300">Per-game delta</h3>
+            <div className="text-[10px] text-gray-500">
+              Series state: {gameDeltas.t1Wins}–{gameDeltas.t2Wins} (need {gameDeltas.needed})
+              {gameDeltas.mwNetT1 !== 0 && (
+                <span className="ml-3">Match-Winner net: {gameDeltas.mwNetT1 > 0 ? '+' : ''}{gameDeltas.mwNetT1.toFixed(0)} {pred.blue_team}</span>
+              )}
+            </div>
+          </div>
+          <table className="w-full text-xs">
+            <thead className="text-gray-500">
+              <tr>
+                <th className="text-left py-1 pr-2">Game</th>
+                <th className="text-right py-1 pr-2" title="Delta-per-share for that game: how much owning 1 match_winner share moves with this game's outcome">δ/share</th>
+                <th className="text-right py-1 pr-2" title="Match-winner delta contribution to this game">from MW</th>
+                <th className="text-right py-1 pr-2" title="Direct position on game_N_winner market for {pred.blue_team}">direct {pred.blue_team.slice(0,8)}</th>
+                <th className="text-right py-1 pr-2" title="Direct position on game_N_winner market for {pred.red_team}">direct {pred.red_team.slice(0,8)}</th>
+                <th className="text-right py-1" title="Net delta = MW contribution + direct {pred.blue_team} − direct {pred.red_team}">Net δ ({pred.blue_team.slice(0,8)})</th>
+              </tr>
+            </thead>
+            <tbody>
+              {gameDeltas.rows.map(r => (
+                <tr key={r.n} className={`border-t border-gray-800/50 ${r.settled ? 'opacity-50' : ''}`}>
+                  <td className="py-1 pr-2 font-mono">
+                    G{r.n} {r.settled && <span className="text-[9px] text-gray-600 uppercase">done</span>}
+                  </td>
+                  <td className="py-1 pr-2 text-right font-mono text-gray-400">{r.settled ? '—' : r.delta_per_share.toFixed(3)}</td>
+                  <td className="py-1 pr-2 text-right font-mono text-gray-400">{r.mw_contrib === 0 ? '—' : (r.mw_contrib > 0 ? '+' : '') + r.mw_contrib.toFixed(1)}</td>
+                  <td className="py-1 pr-2 text-right font-mono">{r.direct_t1 === 0 ? '—' : <span className="text-emerald-400">+{r.direct_t1.toFixed(0)}</span>}</td>
+                  <td className="py-1 pr-2 text-right font-mono">{r.direct_t2 === 0 ? '—' : <span className="text-rose-400">+{r.direct_t2.toFixed(0)}</span>}</td>
+                  <td className={`py-1 text-right font-mono font-semibold ${r.total_t1 > 0 ? 'text-emerald-400' : r.total_t1 < 0 ? 'text-rose-400' : 'text-gray-500'}`}>
+                    {r.total_t1 === 0 ? '0' : (r.total_t1 > 0 ? '+' : '') + r.total_t1.toFixed(1)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="text-[10px] text-gray-600 mt-2">
+            Per-game probability used: {(gameDeltas.p * 100).toFixed(1)}% for {pred.blue_team}.
+            Net δ &gt; 0 = long {pred.blue_team} on that game; &lt; 0 = long {pred.red_team}. Settled games show δ = 0 and shift remaining states.
           </div>
         </div>
       )}
