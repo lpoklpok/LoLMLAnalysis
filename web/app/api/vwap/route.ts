@@ -15,6 +15,8 @@ type StartBody = {
   spread_poll_sec?:   number | null
   passive_wait_sec?:  number | null
   max_spread_cross?:  number
+  max_recent_move?:        number
+  recent_move_window_sec?: number
   dry_run?:           boolean
 }
 

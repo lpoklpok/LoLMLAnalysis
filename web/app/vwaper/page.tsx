@@ -46,6 +46,25 @@ type Job = {
   dry_run:        boolean
 }
 
+const STORAGE_KEY = 'vwaper:form:v1'
+
+type Persisted = {
+  selectedSlug?:    string
+  selectedMtype?:   string
+  selectedOutcome?: string
+  tokenIdInput?:    string
+  side?:            Side
+  size?:            number
+  horizonMin?:      number
+  slices?:          number
+  maxPrice?:        string
+  maxSpreadCross?:  number
+  maxRecentMove?:   number
+  recentMoveWindowSec?: number
+  passiveWaitSec?:  string
+  dryRun?:          boolean
+}
+
 export default function VwaperPage() {
   // ── Event tree ────────────────────────────────────────────────────────────
   const [events, setEvents]           = useState<EventOpt[]>([])
@@ -63,8 +82,59 @@ export default function VwaperPage() {
   const [slices, setSlices]             = useState(10)
   const [maxPrice, setMaxPrice]         = useState<string>('')
   const [maxSpreadCross, setMaxSpreadCross] = useState(0.03)
+  const [maxRecentMove, setMaxRecentMove]   = useState(0.03)
+  const [recentMoveWindowSec, setRecentMoveWindowSec] = useState(1.0)
   const [passiveWaitSec, setPassiveWaitSec] = useState<string>('')  // '' = auto (slice/2)
   const [dryRun, setDryRun]             = useState(true)
+
+  // ── localStorage persistence ────────────────────────────────────────────
+  const [loaded, setLoaded] = useState(false)
+  // Set true during the restore so cascade-clear effects don't blow away
+  // the just-restored picks.
+  const restoringRef = useRef(false)
+
+  // Load saved form values on mount
+  useEffect(() => {
+    if (typeof window === 'undefined') { setLoaded(true); return }
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (raw) {
+        const v = JSON.parse(raw) as Persisted
+        restoringRef.current = true
+        if (v.selectedSlug    !== undefined) setSelectedSlug(v.selectedSlug)
+        if (v.selectedMtype   !== undefined) setSelectedMtype(v.selectedMtype)
+        if (v.selectedOutcome !== undefined) setSelectedOutcome(v.selectedOutcome)
+        if (v.tokenIdInput    !== undefined) setTokenIdInput(v.tokenIdInput)
+        if (v.side            !== undefined) setSide(v.side)
+        if (v.size            !== undefined) setSize(v.size)
+        if (v.horizonMin      !== undefined) setHorizonMin(v.horizonMin)
+        if (v.slices          !== undefined) setSlices(v.slices)
+        if (v.maxPrice        !== undefined) setMaxPrice(v.maxPrice)
+        if (v.maxSpreadCross  !== undefined) setMaxSpreadCross(v.maxSpreadCross)
+        if (v.maxRecentMove   !== undefined) setMaxRecentMove(v.maxRecentMove)
+        if (v.recentMoveWindowSec !== undefined) setRecentMoveWindowSec(v.recentMoveWindowSec)
+        if (v.passiveWaitSec  !== undefined) setPassiveWaitSec(v.passiveWaitSec)
+        if (v.dryRun          !== undefined) setDryRun(v.dryRun)
+      }
+    } catch { /* ignore */ }
+    setLoaded(true)
+    // Clear the restoring flag after this paint cycle so subsequent user
+    // edits trigger the cascade-clear effects normally.
+    queueMicrotask(() => { restoringRef.current = false })
+  }, [])
+
+  // Save to localStorage on every change (skipped until restore completes)
+  useEffect(() => {
+    if (!loaded || typeof window === 'undefined') return
+    const all: Persisted = {
+      selectedSlug, selectedMtype, selectedOutcome, tokenIdInput,
+      side, size, horizonMin, slices, maxPrice, maxSpreadCross,
+      maxRecentMove, recentMoveWindowSec, passiveWaitSec, dryRun,
+    }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(all)) } catch { /* quota */ }
+  }, [loaded, selectedSlug, selectedMtype, selectedOutcome, tokenIdInput,
+      side, size, horizonMin, slices, maxPrice, maxSpreadCross,
+      maxRecentMove, recentMoveWindowSec, passiveWaitSec, dryRun])
 
   // Load events on mount
   useEffect(() => {
@@ -85,12 +155,16 @@ export default function VwaperPage() {
     if (currentOutcome) setTokenIdInput(currentOutcome.token_id)
   }, [currentOutcome])
 
-  // When the user picks a new event, reset downstream picks
+  // When the user picks a new event, reset downstream picks (skip during restore)
   useEffect(() => {
+    if (restoringRef.current) return
     setSelectedMtype('')
     setSelectedOutcome('')
   }, [selectedSlug])
-  useEffect(() => { setSelectedOutcome('') }, [selectedMtype])
+  useEffect(() => {
+    if (restoringRef.current) return
+    setSelectedOutcome('')
+  }, [selectedMtype])
 
   // ── Active job state ─────────────────────────────────────────────────────
   const [job, setJob]                 = useState<Job | null>(null)
@@ -113,6 +187,8 @@ export default function VwaperPage() {
         n_slices: slices,
         max_price: maxPrice ? Number(maxPrice) : null,
         max_spread_cross: maxSpreadCross,
+        max_recent_move: maxRecentMove,
+        recent_move_window_sec: recentMoveWindowSec,
         passive_wait_sec: passiveWaitSec === '' ? null : Number(passiveWaitSec),
         dry_run: dryRun,
       }
@@ -129,7 +205,8 @@ export default function VwaperPage() {
     } finally {
       setStarting(false)
     }
-  }, [tokenIdInput, side, size, horizonMin, slices, maxPrice, maxSpreadCross, passiveWaitSec, dryRun])
+  }, [tokenIdInput, side, size, horizonMin, slices, maxPrice, maxSpreadCross,
+      maxRecentMove, recentMoveWindowSec, passiveWaitSec, dryRun])
 
   const pollOnce = useCallback(async (jobId: string, machine: string) => {
     setPollErr('')
@@ -282,6 +359,22 @@ export default function VwaperPage() {
               <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.target.checked)} />
               <span style={{ marginLeft: 6 }}>simulate, no orders</span>
             </label>
+          </Field>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, marginTop: 8 }}>
+          <Field label="Vol guard: max move (¢)">
+            <input style={inputStyle} type="number" step="0.001" value={maxRecentMove}
+              onChange={e => setMaxRecentMove(Number(e.target.value))} placeholder="0.03" />
+            <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>
+              Skip FAK if bid/ask moved more than this within the window. Set high (e.g. 1) to disable.
+            </div>
+          </Field>
+          <Field label="Vol guard: window (sec)">
+            <input style={inputStyle} type="number" step="0.1" min={0} value={recentMoveWindowSec}
+              onChange={e => setRecentMoveWindowSec(Number(e.target.value))} placeholder="1.0" />
+            <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>
+              Seconds between vol-check snapshots before firing. 0 = disable guard.
+            </div>
           </Field>
         </div>
         <div style={{ marginTop: 12 }}>
