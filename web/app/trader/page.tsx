@@ -934,11 +934,12 @@ async function fetchKalshiBook(ticker: string): Promise<KalshiBook | null> {
 }
 
 function LadderModal({
-  plan, secret, polyPositions, onClose,
+  plan, secret, polyPositions, onOrderFired, onClose,
 }: {
   plan:          LadderPlan
   secret:        string | null
   polyPositions: PolyPosition[]
+  onOrderFired?: () => void   // called after each successful fire so parent can refresh PM positions
   onClose:       () => void
 }) {
   const { thisRow, oppositeRow, kalshiSide, kalshiOpposite } = plan
@@ -952,33 +953,31 @@ function LadderModal({
   // Kalshi positions: yes_count + no_count keyed by ticker
   const [kalshiPositions, setKalshiPositions] = useState<Record<string, { yes: number; no: number; avg_yes?: number; avg_no?: number }>>({})
 
-  // Fetch Kalshi positions for this matchup's two tickers
+  // Pull function exposed for instant-refresh after a fill
+  const pullKalshiPositions = useCallback(async () => {
+    try {
+      const r = await fetch('/api/kalshi/positions', { cache: 'no-store' })
+      if (!r.ok) return
+      const d = await r.json() as { market_positions?: Array<{ ticker: string; position_fp?: string; position?: number }> }
+      const map: Record<string, { yes: number; no: number }> = {}
+      for (const p of d.market_positions ?? []) {
+        const raw = p.position_fp != null ? parseFloat(p.position_fp) :
+                     p.position    != null ? Number(p.position) : 0
+        if (!Number.isFinite(raw)) continue
+        const yes = raw > 0 ? raw : 0
+        const no  = raw < 0 ? -raw : 0
+        map[p.ticker] = { yes, no }
+      }
+      setKalshiPositions(map)
+    } catch { /* ignore */ }
+  }, [])
+
   useEffect(() => {
     if (!kalshiSide?.ticker && !kalshiOpposite?.ticker) return
-    let stopped = false
-    async function pull() {
-      try {
-        const r = await fetch('/api/kalshi/positions', { cache: 'no-store' })
-        if (!r.ok) return
-        const d = await r.json() as { market_positions?: Array<{ ticker: string; position_fp?: string; position?: number }> }
-        if (stopped) return
-        const map: Record<string, { yes: number; no: number }> = {}
-        for (const p of d.market_positions ?? []) {
-          const raw = p.position_fp != null ? parseFloat(p.position_fp) :
-                       p.position    != null ? Number(p.position) : 0
-          if (!Number.isFinite(raw)) continue
-          // signed: positive = long YES, negative = long NO
-          const yes = raw > 0 ? raw : 0
-          const no  = raw < 0 ? -raw : 0
-          map[p.ticker] = { yes, no }
-        }
-        setKalshiPositions(map)
-      } catch { /* ignore */ }
-    }
-    pull()
-    const id = setInterval(pull, 5000)
-    return () => { stopped = true; clearInterval(id) }
-  }, [kalshiSide?.ticker, kalshiOpposite?.ticker])
+    pullKalshiPositions()
+    const id = setInterval(pullKalshiPositions, 5000)
+    return () => clearInterval(id)
+  }, [kalshiSide?.ticker, kalshiOpposite?.ticker, pullKalshiPositions])
   const [size, setSize] = useState<number>(100)
   const [mode, setMode] = useState<'FAK' | 'GTD'>('FAK')
   const [logLines, setLogLines] = useState<{ ts: string; ok: boolean; text: string }[]>([])
@@ -1097,6 +1096,12 @@ function LadderModal({
       ? `✓ ${label} ${size}@${price.toFixed(3)} ${dt}ms — ${JSON.stringify(resp.response).slice(0, 120)}`
       : `✗ ${label} ${size}@${price.toFixed(3)} ${dt}ms — ${resp.detail ?? 'unknown error'}`
     log(resp.ok, summary)
+    // Instant-refresh PM positions (data-api is laggy ~30-60s so this only
+    // shortens the visible delay vs the 5s poll, not the underlying lag).
+    if (resp.ok) {
+      onOrderFired?.()
+      setTimeout(() => onOrderFired?.(), 1200)
+    }
   }
 
   function onClickAsk(price: number) {
@@ -1151,6 +1156,13 @@ function LadderModal({
         ? `✓ ${args.label} ${args.count}@${args.px_cents}¢ ${dt}ms — ${JSON.stringify(body).slice(0,150)}`
         : `✗ ${args.label} ${args.count}@${args.px_cents}¢ ${dt}ms — ${JSON.stringify(body).slice(0,180)}`
       log(ok, summary)
+      // Instant-refresh positions so the user sees the fill without waiting for the 5s poll.
+      // We do it twice: immediately (catches Kalshi side, REST is fast) and at 800ms
+      // (catches any settled fills that needed a moment).
+      if (ok) {
+        pullKalshiPositions()
+        setTimeout(() => { pullKalshiPositions(); onOrderFired?.() }, 800)
+      }
     } catch (e) {
       log(false, `kalshi error: ${(e as Error).message}`)
     }
@@ -1862,6 +1874,12 @@ export default function TraderPage() {
           plan={ladderPlan}
           secret={relaySecret}
           polyPositions={positions}
+          onOrderFired={() => {
+            // Instant-refresh PM positions (relay → Polymarket data-api).
+            // data-api can lag 30-60s but this at least cuts the visible delay
+            // from "up to 5s + lag" to "lag only".
+            if (relaySecret) fetchPositions(relaySecret).then(ps => setPositions(ps))
+          }}
           onClose={() => setLadderPlan(null)}
         />
       )}
