@@ -3,8 +3,15 @@
 // For every upcoming/live LoL event with a Polymarket slug, fetches the full
 // submarket detail (PM mids + Kalshi sides), pulls bid/ask SIZES from each
 // venue's book endpoint, computes a per-outcome fair value from the static
-// pre-game prior, and ranks the opportunities by total available edge ($).
+// pre-game prior, and ranks the opportunities by total available $ PnL
+// against the resting book (assuming our fair holds).
 // Also ranks the top-of-book liquidity (best price + 1¢ deeper) by notional.
+//
+// Fair values computed:
+//   - match_winner         → seriesProb(pG1, bestOf)
+//   - game_N_winner        → pG1 (no shrinkage applied per game for v1)
+//   - game_handicap        → pHandicap over full series distribution
+//   - games_total_X.Y      → pOverGames over full series distribution
 //
 // Cached server-side for 10s (so the page can poll at any rate without
 // blowing the upstream APIs).
@@ -34,10 +41,13 @@ type Venue = 'pm' | 'kalshi'
 interface BookLevel { price: number; size: number }
 interface OutcomeBook { bids: BookLevel[]; asks: BookLevel[] }
 interface OutcomeView {
-  outcome: string
-  fair:    number | null
-  pm:      OutcomeBook | null
-  kalshi:  OutcomeBook | null
+  outcome:           string
+  fair:              number | null
+  token_id:          string | null
+  kalshi_ticker:     string | null
+  kalshi_opp_ticker: string | null
+  pm:                OutcomeBook | null
+  kalshi:            OutcomeBook | null
   // Best price snapshots for fast UI render
   pm_best:     { bid: BookLevel | null; ask: BookLevel | null } | null
   kalshi_best: { bid: BookLevel | null; ask: BookLevel | null } | null
@@ -92,28 +102,84 @@ interface ScannerResponse {
   ms_elapsed:     number
 }
 
-// ── Math: series prob with draft-aware shrinkage (matches /trader) ──────
+// ── Math: series distribution with draft-aware shrinkage (matches /trader) ─
 const ALPHA_G2 = 0.897
 const BETA_DA  = 0.0929
-function seriesProb(pG1: number, bestOf: number): number {
-  if (bestOf <= 1) return pG1
+
+// Returns full joint distribution: key = "<t1|t2>_<totalGames>",
+// value = probability of that exact ending. Used to derive series winner,
+// game-handicap fairs (=margin of victory), and Over/Under N-games fairs.
+function seriesDistribution(pG1: number, bestOf: number): Map<string, number> {
+  const dist = new Map<string, number>()
+  if (bestOf <= 1) {
+    dist.set('t1_1', pG1)
+    dist.set('t2_1', 1 - pG1)
+    return dist
+  }
   const z = Math.log(pG1 / (1 - pG1))
-  const g1 = pG1
   const g2_t1won = 1 / (1 + Math.exp(-(ALPHA_G2 * z - BETA_DA)))
   const g2_t2won = 1 / (1 + Math.exp(-(ALPHA_G2 * z + BETA_DA)))
-  const g3plus   = g1
+  const g3plus   = pG1   // matches /trader simplification — no further shrinkage for G3+
   const needed   = Math.ceil(bestOf / 2)
-  function r(t1w: number, t2w: number, prev: 't1' | 't2' | null): number {
-    if (t1w === needed) return 1
-    if (t2w === needed) return 0
+  function walk(t1w: number, t2w: number, prob: number, prev: 't1' | 't2' | null) {
+    if (t1w === needed) {
+      const k = `t1_${t1w + t2w}`; dist.set(k, (dist.get(k) ?? 0) + prob); return
+    }
+    if (t2w === needed) {
+      const k = `t2_${t1w + t2w}`; dist.set(k, (dist.get(k) ?? 0) + prob); return
+    }
     const gnum = t1w + t2w + 1
     let p: number
-    if      (gnum === 1) p = g1
+    if      (gnum === 1) p = pG1
     else if (gnum === 2) p = prev === 't1' ? g2_t1won : g2_t2won
     else                 p = g3plus
-    return p * r(t1w + 1, t2w, 't1') + (1 - p) * r(t1w, t2w + 1, 't2')
+    walk(t1w + 1, t2w, prob * p,       't1')
+    walk(t1w, t2w + 1, prob * (1 - p), 't2')
   }
-  return r(0, 0, null)
+  walk(0, 0, 1, null)
+  return dist
+}
+
+function seriesProb(pG1: number, bestOf: number): number {
+  const d = seriesDistribution(pG1, bestOf)
+  let p = 0
+  for (const [k, v] of d) if (k.startsWith('t1_')) p += v
+  return p
+}
+
+// Handicap = team1 must win series by at least |H| game margin. team1 -1.5 in
+// Bo3 means 2-0. team2 +1.5 means t2 can lose ≤ 0-2 (i.e., NOT a 2-0 t1 sweep).
+// Returns P(team1 covers handicap H), assuming standard convention where
+// negative H means team1 favoured.
+function pHandicap(dist: Map<string, number>, bestOf: number, handicapTeam1: number): number {
+  const neededT1 = Math.ceil(bestOf / 2)
+  let p = 0
+  for (const [k, v] of dist) {
+    const [winner, gamesStr] = k.split('_')
+    const totalGames = parseInt(gamesStr, 10)
+    if (winner === 't1') {
+      const t1Wins = neededT1
+      const t2Wins = totalGames - t1Wins
+      const margin = t1Wins - t2Wins  // positive
+      if (margin + handicapTeam1 > 0) p += v
+    } else {
+      const t2Wins = neededT1
+      const t1Wins = totalGames - t2Wins
+      const margin = t1Wins - t2Wins  // negative
+      if (margin + handicapTeam1 > 0) p += v
+    }
+  }
+  return p
+}
+
+// Over N games: total games strictly greater than N.
+function pOverGames(dist: Map<string, number>, n: number): number {
+  let p = 0
+  for (const [k, v] of dist) {
+    const games = parseInt(k.split('_')[1], 10)
+    if (games > n) p += v
+  }
+  return p
 }
 
 const _norm = (s: string) => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
@@ -300,6 +366,15 @@ export async function GET(): Promise<Response> {
     const pBlue = pred.pred_blue_win ?? null
     const submarkets: SubmarketView[] = []
 
+    // Precompute the series distribution once per event — used for handicap
+    // + O/U fair values. Series math is from team1's POV (= Polymarket
+    // outcome[0] of game-winner markets; for handicap markets we re-map
+    // when team1IsBlue is false).
+    const pT1G1 = pBlue != null
+      ? (_norm(d.team1) === _norm(pred.blue_team) ? pBlue : 1 - pBlue)
+      : null
+    const seriesDist = pT1G1 != null ? seriesDistribution(pT1G1, pred.best_of) : null
+
     for (const sm of d.submarkets) {
       // Map outcome[0] to team1's perspective vs pred.blue_team
       const team1IsBlue = _norm(sm.outcomes[0]) === _norm(pred.blue_team)
@@ -314,10 +389,29 @@ export async function GET(): Promise<Response> {
         const gnum = parseInt(sm.market_type.replace('game_','').replace('_winner',''), 10)
         label = `Game ${gnum} Winner`
         fv1 = team1IsBlue ? pBlue : 1 - pBlue
-      } else if (sm.market_type === 'game_handicap') {
-        label = 'Game Handicap'   // fair left null — out of scope for v1
-      } else if (sm.market_type === 'games_total_2.5') {
-        label = 'Total Games O/U 2.5'
+      } else if (sm.market_type === 'game_handicap' && seriesDist) {
+        // outcome[0] is "team_X (-1.5)" or similar. Extract handicap from
+        // the question, default to -1.5 for Bo3 if unparseable.
+        label = 'Game Handicap'
+        const m = /([+-]?\d+\.?\d*)/.exec(sm.question)
+        const h0 = m ? parseFloat(m[1]) : (pred.best_of === 5 ? -2.5 : -1.5)
+        // h0 is the handicap of outcome[0]. We need P(outcome[0] covers).
+        // If outcome[0] is the original DB team1 (= our seriesDist team1), use directly.
+        // Otherwise the handicap belongs to "other team" — translate.
+        const team1Side1 = _norm(sm.outcomes[0])
+        const oeT1Side    = _norm(d.team1)
+        const handicapForOurT1 = team1Side1 === oeT1Side ? h0 : -h0
+        const pOurT1 = pHandicap(seriesDist, pred.best_of, handicapForOurT1)
+        // outcome[0]_is_our_t1 → fv1 = pOurT1; else fv1 = 1 - pOurT1
+        fv1 = team1Side1 === oeT1Side ? pOurT1 : 1 - pOurT1
+      } else if (sm.market_type.startsWith('games_total_') && seriesDist) {
+        // Outcomes are typically ["Over", "Under"] for a stated threshold.
+        const m = /(\d+\.?\d*)/.exec(sm.market_type.replace('games_total_', ''))
+        const threshold = m ? parseFloat(m[1]) : (pred.best_of === 5 ? 3.5 : 2.5)
+        label = `Total Games O/U ${threshold}`
+        const pOver = pOverGames(seriesDist, threshold)
+        // outcomes order varies; check first outcome label
+        fv1 = sm.outcomes[0].toLowerCase().includes('over') ? pOver : 1 - pOver
       }
       const fv2 = fv1 != null ? 1 - fv1 : null
 
@@ -408,7 +502,17 @@ export async function GET(): Promise<Response> {
         pushLiquidity('pm', pmBook)
         pushLiquidity('kalshi', kalshiBook)
 
-        return { outcome: name, fair, pm: pmBook, kalshi: kalshiBook, pm_best: pmBest, kalshi_best: kalshiBest }
+        return {
+          outcome:           name,
+          fair,
+          token_id:          tid ?? null,
+          kalshi_ticker:     ksTicker ?? null,
+          kalshi_opp_ticker: ksOppTicker ?? null,
+          pm:                pmBook,
+          kalshi:            kalshiBook,
+          pm_best:           pmBest,
+          kalshi_best:       kalshiBest,
+        }
       })
 
       submarkets.push({ market_type: sm.market_type, market_label: label, outcomes: outcomeViews })
