@@ -1,0 +1,21 @@
+{
+  "generated": "2026-05-28T00:37:50Z",
+  "lookback_days": 90,
+  "min_games": 8,
+  "leagues": [
+    "LCK",
+    "LPL",
+    "LEC",
+    "LCS",
+    "LTA",
+    "LTA N",
+    "LTA S",
+    "WLDs",
+    "MSI",
+    "EWC",
+    "FST"
+  ],
+  "closers": [],
+  "throwers": [],
+  "note": "Column not yet populated. Will fill in after next cron run."
+}

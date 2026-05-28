@@ -705,9 +705,19 @@ function SynergyHalf({ rows, direction }: { rows: SynergyRow[]; direction: 'over
   )
 }
 
+interface ClosingRateEntry {
+  team: string; n_games: number; wins: number;
+  avg_pred: number; actual_wr: number; closing_rate: number
+}
+interface ClosingRateData {
+  generated: string; lookback_days: number; min_games: number;
+  closers: ClosingRateEntry[]; throwers: ClosingRateEntry[]
+}
+
 export default function FindingsPage() {
   const [data, setData]       = useState<FindingsData | null>(null)
   const [glData, setGlData]   = useState<GoldLeadData | null>(null)
+  const [crData, setCrData]   = useState<ClosingRateData | null>(null)
   const [glTime, setGlTime]   = useState('10')
   const [pos, setPos]         = useState<typeof POSITIONS[number]>('mid')
   const [fpPos, setFpPos]     = useState<typeof POSITIONS[number]>('top')
@@ -726,6 +736,10 @@ export default function FindingsPage() {
     fetch('/gold_lead.json')
       .then(r => r.json())
       .then(setGlData)
+      .catch(() => {})
+    fetch('/closing_rate.json')
+      .then(r => r.json())
+      .then(setCrData)
       .catch(() => {})
   }, [])
 
@@ -1190,6 +1204,74 @@ export default function FindingsPage() {
               </section>
             )
           })()}
+
+          {/* ── Section 8: Closing rate (late-game closers / throwers) ── */}
+          {crData && crData.closers.length > 0 && (
+            <section>
+              <h2 className="text-lg font-semibold text-gray-100 mb-1">Late-Game Closers vs Throwers</h2>
+              <p className="text-gray-500 text-sm mb-4">
+                Last {crData.lookback_days} days, major leagues + tournaments.
+                For each game, compare what the in-game-20 model expected (given the
+                gold/xp/cs/kda/objectives state at min 20) to what actually happened.
+                <span className="text-emerald-400"> Positive</span> = team wins more
+                than the 20-min state predicts (closers / comebackers).
+                <span className="text-red-400"> Negative</span> = team wins less than
+                the state predicts (late-game throwers). Min {crData.min_games} games.
+              </p>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                  <h3 className="text-sm font-semibold text-emerald-400 mb-3">🔒 Top Closers</h3>
+                  <table className="text-xs w-full">
+                    <thead>
+                      <tr className="text-gray-500 border-b border-gray-800">
+                        <th className="text-left pb-2 font-normal">Team</th>
+                        <th className="text-right pb-2 font-normal">Games</th>
+                        <th className="text-right pb-2 font-normal">Win% (act)</th>
+                        <th className="text-right pb-2 font-normal">Exp%</th>
+                        <th className="text-right pb-2 font-normal">Δ</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {crData.closers.map((r, i) => (
+                        <tr key={r.team} className={i % 2 === 0 ? 'bg-gray-900/40' : ''}>
+                          <td className="py-1.5 pr-3 text-gray-200">{r.team}</td>
+                          <td className="py-1.5 text-right text-gray-400 tabular-nums">{r.n_games}</td>
+                          <td className="py-1.5 text-right text-gray-300 tabular-nums">{(r.actual_wr*100).toFixed(0)}%</td>
+                          <td className="py-1.5 text-right text-gray-500 tabular-nums">{(r.avg_pred*100).toFixed(0)}%</td>
+                          <td className="py-1.5 text-right text-emerald-400 font-mono">+{(r.closing_rate*100).toFixed(1)}pp</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                  <h3 className="text-sm font-semibold text-red-400 mb-3">💥 Top Throwers</h3>
+                  <table className="text-xs w-full">
+                    <thead>
+                      <tr className="text-gray-500 border-b border-gray-800">
+                        <th className="text-left pb-2 font-normal">Team</th>
+                        <th className="text-right pb-2 font-normal">Games</th>
+                        <th className="text-right pb-2 font-normal">Win% (act)</th>
+                        <th className="text-right pb-2 font-normal">Exp%</th>
+                        <th className="text-right pb-2 font-normal">Δ</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {crData.throwers.map((r, i) => (
+                        <tr key={r.team} className={i % 2 === 0 ? 'bg-gray-900/40' : ''}>
+                          <td className="py-1.5 pr-3 text-gray-200">{r.team}</td>
+                          <td className="py-1.5 text-right text-gray-400 tabular-nums">{r.n_games}</td>
+                          <td className="py-1.5 text-right text-gray-300 tabular-nums">{(r.actual_wr*100).toFixed(0)}%</td>
+                          <td className="py-1.5 text-right text-gray-500 tabular-nums">{(r.avg_pred*100).toFixed(0)}%</td>
+                          <td className="py-1.5 text-right text-red-400 font-mono">{(r.closing_rate*100).toFixed(1)}pp</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+          )}
 
           <p className="text-xs text-gray-600">
             Updated {new Date(data.generated).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}

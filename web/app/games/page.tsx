@@ -25,6 +25,8 @@ interface Game {
   poly_blue_win_prob: number | null    // Polymarket-derived market prob (newer source)
   poly_source: string | null
   model_pred: number | null
+  model_pred_post_draft: number | null   // PROD + champ features
+  model_pred_in_game_20: number | null   // PROD + champ + live gd/xp/cs/kda @ 20
   game_in_series: number | null
   series_type: string | null
   // Derived: q_blue_win when present, else poly_blue_win_prob
@@ -66,7 +68,9 @@ const COLS: { key: SortKey; label: string; fmt?: (v: number) => string; width?: 
   { key: 'blue_win',       label: 'Result',      width: 'w-16' },
   { key: 'series_type',    label: 'Series',      width: 'w-12' },
   { key: 'game_in_series', label: 'Game',        width: 'w-10' },
-  { key: 'model_pred',      label: 'Model',       fmt: v => `${(v*100).toFixed(0)}%` },
+  { key: 'model_pred',           label: 'Model (pre)',    fmt: v => `${(v*100).toFixed(0)}%` },
+  { key: 'model_pred_post_draft', label: 'Model (draft)', fmt: v => `${(v*100).toFixed(0)}%` },
+  { key: 'model_pred_in_game_20', label: 'Model (20m)',   fmt: v => `${(v*100).toFixed(0)}%` },
   { key: 'effective_market',label: 'Market',      fmt: v => `${(v*100).toFixed(0)}%` },
   { key: 'elo_diff',       label: 'ELO Δ',       fmt: v => (v>=0?'+':'')+v.toFixed(0) },
   { key: 'h2h_wr',         label: 'H2H',         fmt: v => `${(v*100).toFixed(0)}%` },
@@ -104,7 +108,8 @@ function cellColor(col: typeof COLS[0], val: unknown): string {
   if (val === null || val === undefined) return 'text-gray-600'
   const v = val as number
   if (col.key === 'blue_win') return v === 1 ? 'text-blue-400 font-semibold' : 'text-red-400 font-semibold'
-  if (col.key === 'model_pred') return v >= 0.6 ? 'text-blue-400' : v <= 0.4 ? 'text-red-400' : 'text-gray-300'
+  if (col.key === 'model_pred' || col.key === 'model_pred_post_draft' || col.key === 'model_pred_in_game_20')
+    return v >= 0.6 ? 'text-blue-400' : v <= 0.4 ? 'text-red-400' : 'text-gray-300'
   if (col.key === 'effective_market') return v >= 0.6 ? 'text-blue-400' : v <= 0.4 ? 'text-red-400' : 'text-gray-300'
   if (col.key === 'elo_diff' || col.key === 'rwr_diff' || col.key === 'gd15_diff' || col.key === 'outperf_diff') {
     return v > 0 ? 'text-blue-400' : v < 0 ? 'text-red-400' : 'text-gray-400'

@@ -128,6 +128,12 @@ jobs:
       - name: Export champion findings JSON
         run: python src/export_champion_findings.py
 
+      - name: Export team closing rate JSON (late-game closers/throwers)
+        run: python src/export_closing_rate.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
       - name: Export draft simulator lookups JSON
         run: python src/export_draft_lookups.py
 
