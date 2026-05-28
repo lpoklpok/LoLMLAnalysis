@@ -881,6 +881,65 @@ function LadderModal({
     const oppPrice = roundPx(1 - price)
     fire(oppTokenId, oppPrice, `SELL ${thisRow.outcome_label} (=BUY ${oppositeRow.outcome_label})`)
   }
+
+  // ── Kalshi click-to-trade ────────────────────────────────────────────
+  async function fireKalshi(args: {
+    ticker:   string
+    side:     'yes' | 'no'
+    px_cents: number       // 1..99
+    count:    number
+    label:    string
+  }) {
+    if (size < 1 || !Number.isInteger(size)) {
+      log(false, `kalshi size must be positive integer (got ${size})`)
+      return
+    }
+    const t0 = Date.now()
+    log(true, `→ ${args.label} ${args.count} @ ${args.px_cents}¢ (kalshi)`)
+    try {
+      const r = await fetch('/api/kalshi/order', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ticker: args.ticker,
+          side:   args.side,
+          action: 'buy',
+          count:  args.count,
+          [args.side === 'yes' ? 'yes_price' : 'no_price']: args.px_cents,
+        }),
+      })
+      const dt = Date.now() - t0
+      const body = await r.json().catch(() => ({}))
+      const ok = r.ok && body.ok !== false
+      const summary = ok
+        ? `✓ ${args.label} ${args.count}@${args.px_cents}¢ ${dt}ms — ${JSON.stringify(body).slice(0,150)}`
+        : `✗ ${args.label} ${args.count}@${args.px_cents}¢ ${dt}ms — ${JSON.stringify(body).slice(0,180)}`
+      log(ok, summary)
+    } catch (e) {
+      log(false, `kalshi error: ${(e as Error).message}`)
+    }
+  }
+  function onClickKalshiAsk(price_yes: number) {
+    // BUY YES at price_yes (lift the offer on Kalshi YES book)
+    if (!kalshiSide?.ticker) return
+    fireKalshi({
+      ticker: kalshiSide.ticker, side: 'yes',
+      px_cents: Math.round(price_yes * 100),
+      count:    Math.round(size),
+      label:    `BUY YES ${kalshiSide.team}`,
+    })
+  }
+  function onClickKalshiBid(price_yes: number) {
+    // SELL YES at price_yes ≡ BUY NO at (1 − price_yes)  (synthetic, requires no YES inventory)
+    if (!kalshiSide?.ticker) return
+    const no_cents = Math.round((1 - price_yes) * 100)
+    fireKalshi({
+      ticker: kalshiSide.ticker, side: 'no',
+      px_cents: no_cents,
+      count:    Math.round(size),
+      label:    `SELL YES ${kalshiSide.team} (=BUY NO @${no_cents}¢)`,
+    })
+  }
   // Quick-action: market-sell at best bid (synthetic = BUY opposite at 1-bestBid)
   function sellAtBestBid() {
     const thisBookSnap = thisTokenId ? books[thisTokenId] : null
@@ -1065,7 +1124,7 @@ function LadderModal({
               <div>
                 <div className="text-xs uppercase text-gray-500 tracking-wide mb-2 flex items-baseline gap-2">
                   <span>Kalshi · {kalshiSide.team}</span>
-                  <span className="text-gray-700 normal-case">(display only)</span>
+                  <span className="text-gray-700 normal-case">YES book (sells = synth BUY NO)</span>
                   {hasData && kBest.bb != null && kBest.ba != null && (
                     <span className="ml-auto text-[10px] font-mono normal-case">
                       <span className="text-green-400">{kBest.bb.toFixed(2)}</span>
@@ -1075,13 +1134,13 @@ function LadderModal({
                   )}
                 </div>
                 <div className="grid grid-cols-3 gap-px text-xs bg-gray-800 rounded overflow-hidden">
-                  <div className="bg-gray-900 px-2 py-1.5 text-gray-500 text-right">BID</div>
+                  <div className="bg-green-900/40 px-2 py-1.5 text-green-300 text-right font-bold">▼ SELL · BID SIZE</div>
                   <div className="bg-gray-900 px-2 py-1.5 text-center">
                     <span className="text-green-400">BID</span>
                     <span className="text-gray-700 mx-1">/</span>
                     <span className="text-red-400">OFFER</span>
                   </div>
-                  <div className="bg-gray-900 px-2 py-1.5 text-gray-500">ASK</div>
+                  <div className="bg-red-900/40 px-2 py-1.5 text-red-300 font-bold">▲ BUY · ASK SIZE</div>
                   {!hasData && (
                     <div className="col-span-3 px-3 py-3 text-gray-600 text-center">loading Kalshi book…</div>
                   )}
@@ -1099,9 +1158,21 @@ function LadderModal({
                     else if (kBest.ba != null && p > kBest.ba) centerBg = 'bg-red-900/20 text-red-400'
                     return (
                       <Fragment key={p}>
-                        <div className={`px-2 py-1 text-right font-mono ${bs > 0 ? (isBB ? 'bg-green-900/60 text-green-200' : 'bg-green-900/20 text-green-300') : 'bg-gray-900 text-gray-700'}`}>{bs > 0 ? Math.round(bs).toLocaleString() : ''}</div>
+                        <button
+                          onClick={() => onClickKalshiBid(p)}
+                          disabled={!kalshiSide?.ticker}
+                          className={`px-2 py-1 text-right font-mono tabular-nums hover:bg-green-900/40 cursor-pointer disabled:cursor-not-allowed ${bs > 0 ? (isBB ? 'bg-green-900/60 text-green-200' : 'bg-green-900/20 text-green-300') : 'bg-gray-900 text-gray-700'}`}
+                          title={`Click → SELL YES ${kalshiSide.team} at ${p.toFixed(2)} (= BUY NO at ${(1-p).toFixed(2)})`}>
+                          {bs > 0 ? Math.round(bs).toLocaleString() : ''}
+                        </button>
                         <div className={`px-2 py-1 text-center font-mono ${centerBg}`}>{p.toFixed(2)}</div>
-                        <div className={`px-2 py-1 font-mono ${as_ > 0 ? (isBA ? 'bg-red-900/60 text-red-200' : 'bg-red-900/20 text-red-300') : 'bg-gray-900 text-gray-700'}`}>{as_ > 0 ? Math.round(as_).toLocaleString() : ''}</div>
+                        <button
+                          onClick={() => onClickKalshiAsk(p)}
+                          disabled={!kalshiSide?.ticker}
+                          className={`px-2 py-1 text-left font-mono tabular-nums hover:bg-red-900/40 cursor-pointer disabled:cursor-not-allowed ${as_ > 0 ? (isBA ? 'bg-red-900/60 text-red-200' : 'bg-red-900/20 text-red-300') : 'bg-gray-900 text-gray-700'}`}
+                          title={`Click → BUY YES ${kalshiSide.team} at ${p.toFixed(2)}`}>
+                          {as_ > 0 ? Math.round(as_).toLocaleString() : ''}
+                        </button>
                       </Fragment>
                     )
                   })}
