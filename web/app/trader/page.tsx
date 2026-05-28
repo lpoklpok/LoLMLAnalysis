@@ -62,6 +62,37 @@ interface EventDetail {
   refreshed_at: string
 }
 
+// Live-model snapshot from LoLLivePredictor worker (via /api/lol/live-state).
+// One per currently-live game. We match by team names (fuzzy lowercase/strip).
+interface LiveSnapshot {
+  game_id: string
+  event_id: string
+  league: string
+  team_a_id: string
+  team_a_name: string
+  team_b_id: string
+  team_b_name: string
+  blue_team_id: string | null
+  red_team_id: string | null
+  game_number: number
+  series_prior: number
+  per_game_prior_blue: number
+  clock_s: number
+  state: string
+  blue_kills: number; red_kills: number
+  blue_towers: number; red_towers: number
+  blue_dragons: number; red_dragons: number
+  blue_soul: boolean; red_soul: boolean
+  blue_barons: number; red_barons: number
+  blue_inhib: number; red_inhib: number
+  gold_diff: number
+  kill_diff: number
+  p_model: number
+  p_adj: number
+  buffer_s: number
+  updated_ts: number
+}
+
 // ── Math helpers ────────────────────────────────────────────────────────────
 
 // Draft-swap aware series probability. The G1 loser picks blue side in G2,
@@ -92,6 +123,41 @@ function seriesProb(pG1: number, bestOf: number): number {
   return r(0, 0, null)
 }
 
+// Series probability that overrides game `liveGameNum` with `pLive` (the
+// in-game team1 win prob from the live model), starting from a given series
+// score (t1Wins-t2Wins). Other games use the static draft-aware formula.
+//
+// Use when a specific game is in progress: pLive replaces the static G_N prob
+// for the live game. Settled games (G1 if we're in G2) are accounted for by
+// passing the current series score, not 0-0.
+function seriesProbLive(
+  pStatic:     number,
+  bestOf:      number,
+  startT1Wins: number,
+  startT2Wins: number,
+  liveGameNum: number,
+  pLive:       number,
+): number {
+  if (bestOf <= 1) return pLive
+  const z         = Math.log(pStatic / (1 - pStatic))
+  const g2_t1won  = 1 / (1 + Math.exp(-(ALPHA_G2 * z - BETA_DA)))
+  const g2_t2won  = 1 / (1 + Math.exp(-(ALPHA_G2 * z + BETA_DA)))
+  const g3plus    = pStatic
+  const needed    = Math.ceil(bestOf / 2)
+  function r(t1w: number, t2w: number, prev: 't1' | 't2' | null): number {
+    if (t1w === needed) return 1
+    if (t2w === needed) return 0
+    const gnum = t1w + t2w + 1
+    let p: number
+    if      (gnum === liveGameNum) p = pLive
+    else if (gnum === 1)           p = pStatic
+    else if (gnum === 2)           p = prev === 't1' ? g2_t1won : g2_t2won
+    else                           p = g3plus
+    return p * r(t1w + 1, t2w, 't1') + (1 - p) * r(t1w, t2w + 1, 't2')
+  }
+  return r(startT1Wins, startT2Wins, null)
+}
+
 function fmtPct(p: number | null | undefined, signed = false) {
   if (p == null || !Number.isFinite(p)) return '—'
   const v = (p * 100)
@@ -108,6 +174,42 @@ function edgeColor(edge: number | null) {
   if (edge <= -0.05) return 'text-red-400 font-semibold'
   if (edge <= -0.02) return 'text-red-500'
   return 'text-gray-400'
+}
+
+// Poll the live-model worker; returns the snapshot matching the given team
+// names (fuzzy normalised). Returns null if no live game matches.
+function useLiveSnapshot(blueTeam: string | null, redTeam: string | null): LiveSnapshot | null {
+  const [snap, setSnap] = useState<LiveSnapshot | null>(null)
+  useEffect(() => {
+    if (!blueTeam || !redTeam) { setSnap(null); return }
+    const a_n = blueTeam.toLowerCase().replace(/[^a-z0-9]/g, '')
+    const b_n = redTeam.toLowerCase().replace(/[^a-z0-9]/g, '')
+    let cancelled = false
+    const pull = async () => {
+      try {
+        const r = await fetch('/api/lol/live-state', { cache: 'no-store' })
+        if (!r.ok) return
+        const d = await r.json() as { games?: Record<string, LiveSnapshot> }
+        if (cancelled) return
+        const games = Object.values(d.games ?? {})
+        const matches = games.filter(g => {
+          const ga = (g.team_a_name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+          const gb = (g.team_b_name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+          return (a_n.includes(ga) || ga.includes(a_n)) && (b_n.includes(gb) || gb.includes(b_n))
+              || (a_n.includes(gb) || gb.includes(a_n)) && (b_n.includes(ga) || ga.includes(b_n))
+        })
+        // Multiple games per matchup possible (e.g. G1 finished + G2 live, both
+        // still in worker cache). Pick the freshest by updated_ts.
+        const match = matches.length === 0 ? null
+          : matches.reduce((a, b) => (b.updated_ts > a.updated_ts ? b : a))
+        setSnap(match)
+      } catch { /* ignore */ }
+    }
+    pull()
+    const id = setInterval(pull, 1000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [blueTeam, redTeam])
+  return snap
 }
 
 function timeUntil(iso: string): string {
@@ -199,6 +301,8 @@ interface Row {
   kalshi_ask: number | null
   kalshi_mid: number | null
   kalshi_edge_vs_fv: number | null
+  // True when fv was computed using the live in-game model (vs pre-game prior)
+  fv_is_live: boolean
 }
 
 // Normalise team names for matching against Polymarket outcomes. Polymarket
@@ -207,7 +311,7 @@ interface Row {
 // comparing. Mirrors the python `_norm_team` in src/merge_polymarket_data.py.
 const _normTeam = (s: string): string => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
 
-function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
+function buildRows(pred: Prediction, detail: EventDetail | null, liveSnap: LiveSnapshot | null): Row[] {
   if (!detail) return []
   const rows: Row[] = []
   const bo = pred.best_of
@@ -217,6 +321,42 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
   const pBlue = pred.pred_blue_win
   const hasModel = pBlue != null && !Number.isNaN(pBlue)
 
+  // ── Live-model FV override ─────────────────────────────────────────────
+  // When this matchup has an in-progress game, replace the static per-game
+  // prior with the live `p_adj` for that game number. Match Winner gets
+  // recomputed via seriesProbLive accounting for any settled games.
+  let liveGameNum: number | null = null
+  let pTeam1Live:  number | null = null
+  // Current series score in (team1Wins, team2Wins) from Polymarket pinned mids
+  let t1Wins = 0, t2Wins = 0
+  if (liveSnap && hasModel) {
+    liveGameNum = liveSnap.game_number
+    // Map live in-game blue → team1
+    // `pred.blue_team` is team1 in our DB (= team A in the worker).
+    // `liveSnap.blue_team_id === liveSnap.team_a_id` ⇒ in-game blue is team A = pred.blue_team.
+    const predBlueIsIngameBlue = liveSnap.blue_team_id !== null
+      ? liveSnap.blue_team_id === liveSnap.team_a_id
+      : true
+    // Polymarket outcome[0] (= team1 in the market) may or may not match pred.blue_team
+    const team1IsPredBlue = detail.submarkets[0]?.outcomes
+      ? _normTeam(detail.submarkets[0].outcomes[0]) === _normTeam(pred.blue_team)
+      : true
+    const team1IsIngameBlue = team1IsPredBlue === predBlueIsIngameBlue
+    pTeam1Live = team1IsIngameBlue ? liveSnap.p_adj : 1 - liveSnap.p_adj
+
+    // Detect settled prior games from pinned game_N_winner mids
+    for (const sm of detail.submarkets) {
+      if (!sm.market_type.startsWith('game_') || !sm.market_type.endsWith('_winner')) continue
+      const n = parseInt(sm.market_type.replace('game_','').replace('_winner',''), 10)
+      if (!Number.isFinite(n) || n >= liveGameNum) continue
+      const [m1, m2] = sm.outcome_mids
+      const t1IsThisMarketBlue = _normTeam(sm.outcomes[0]) === _normTeam(pred.blue_team)
+      const t1Pin = t1IsThisMarketBlue ? m1 : m2
+      if (t1Pin != null && t1Pin >= 0.98) t1Wins++
+      else if (t1Pin != null && t1Pin <= 0.02) t2Wins++
+    }
+  }
+
   // For each polymarket submarket, compute model fair value for outcomes[0] and outcomes[1].
   for (const sm of detail.submarkets) {
     const [o1, o2] = sm.outcomes
@@ -224,6 +364,7 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
 
     let fv1: number | null = null
     let fv2: number | null = null
+    let fv_is_live = false
     let market_label: string = sm.question
 
     if (sm.market_type === 'match_winner') {
@@ -231,7 +372,14 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
       if (hasModel) {
         const team1IsBlue = _normTeam(o1) === _normTeam(pred.blue_team)
         const pTeam1Game = team1IsBlue ? (pBlue as number) : 1 - (pBlue as number)
-        fv1 = seriesProb(pTeam1Game, bo)
+        if (liveGameNum != null && pTeam1Live != null) {
+          // Map team1 in this market to team1 in our reference frame
+          const pT1Live = team1IsBlue ? pTeam1Live : 1 - pTeam1Live
+          fv1 = seriesProbLive(pTeam1Game, bo, t1Wins, t2Wins, liveGameNum, pT1Live)
+          fv_is_live = true
+        } else {
+          fv1 = seriesProb(pTeam1Game, bo)
+        }
         fv2 = 1 - fv1
       }
     } else if (sm.market_type.startsWith('game_') && sm.market_type.endsWith('_winner')) {
@@ -239,7 +387,13 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
       market_label = `Game ${gnum} Winner`
       if (hasModel) {
         const team1IsBlue = _normTeam(o1) === _normTeam(pred.blue_team)
-        fv1 = team1IsBlue ? (pBlue as number) : 1 - (pBlue as number)
+        if (liveGameNum != null && pTeam1Live != null && gnum === liveGameNum) {
+          // Live override for this specific game
+          fv1 = team1IsBlue ? pTeam1Live : 1 - pTeam1Live
+          fv_is_live = true
+        } else {
+          fv1 = team1IsBlue ? (pBlue as number) : 1 - (pBlue as number)
+        }
         fv2 = 1 - fv1
       }
     } else if (sm.market_type === 'game_handicap') {
@@ -270,6 +424,7 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
       kalshi_ask:        kalshi1?.yes_ask ?? null,
       kalshi_mid:        kalshi1?.yes_mid ?? null,
       kalshi_edge_vs_fv: fv1 != null && kalshi1?.yes_mid != null ? fv1 - kalshi1.yes_mid : null,
+      fv_is_live,
     })
     rows.push({
       market_type:    sm.market_type,
@@ -287,6 +442,7 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
       kalshi_ask:        kalshi2?.yes_ask ?? null,
       kalshi_mid:        kalshi2?.yes_mid ?? null,
       kalshi_edge_vs_fv: fv2 != null && kalshi2?.yes_mid != null ? fv2 - kalshi2.yes_mid : null,
+      fv_is_live,
     })
   }
   return rows
@@ -294,6 +450,7 @@ function buildRows(pred: Prediction, detail: EventDetail | null): Row[] {
 
 function MainPanel({
   pred, detail, loading, lastRefreshed, onRefresh, onPlanTrade, positions, onClosePosition,
+  openLadderTokenId, onLadderRefresh,
 }: {
   pred: Prediction
   detail: EventDetail | null
@@ -303,8 +460,27 @@ function MainPanel({
   onPlanTrade: (thisRow: Row, oppositeRow: Row) => void
   positions: PolyPosition[]
   onClosePosition: (thisRow: Row, oppositeRow: Row) => void
+  openLadderTokenId: string | null            // token_id of the row whose ladder modal is currently open
+  onLadderRefresh: (thisRow: Row, oppositeRow: Row) => void
 }) {
-  const rows = useMemo(() => buildRows(pred, detail), [pred, detail])
+  // Live-model snapshot (if this game is currently live)
+  const liveSnap = useLiveSnapshot(pred.blue_team, pred.red_team)
+  const rows = useMemo(() => buildRows(pred, detail, liveSnap), [pred, detail, liveSnap])
+
+  // When the live model updates `rows`, push the refreshed thisRow/oppositeRow
+  // into the open ladder modal so its highlighted FAIR row follows live changes.
+  // Stable ref to avoid infinite re-renders if parent passes a fresh callback
+  // every render (onLadderRefresh isn't wrapped in useCallback at the caller).
+  const onLadderRefreshRef = useRef(onLadderRefresh)
+  useEffect(() => { onLadderRefreshRef.current = onLadderRefresh }, [onLadderRefresh])
+  useEffect(() => {
+    if (!openLadderTokenId) return
+    const i = rows.findIndex(r => r.token_id === openLadderTokenId)
+    if (i < 0) return
+    const same = rows.filter(r => r.market_type === rows[i].market_type)
+    const opp  = same.find(r => r.token_id !== openLadderTokenId)
+    if (opp) onLadderRefreshRef.current(rows[i], opp)
+  }, [rows, openLadderTokenId])
 
   // Build a fast lookup: token_id → position
   const positionByToken = useMemo(() => {
@@ -334,7 +510,8 @@ function MainPanel({
     .map(t => ({ ...t, pos: positionByToken.get(t.token_id) }))
     .filter(t => t.pos && Math.abs(num(t.pos.size)) > 0.0001)
 
-  // Kalshi positions per ticker — for delta calc on Kalshi side
+  // Kalshi positions per ticker — for delta calc on Kalshi side. SSE-driven
+  // instant updates on fill events, plus a 2s safety-net poll.
   const [kalshiPositions, setKalshiPositions] = useState<Record<string, number>>({})
   useEffect(() => {
     // Only fetch if event has any Kalshi tickers
@@ -359,8 +536,13 @@ function MainPanel({
       } catch { /* ignore */ }
     }
     pull()
-    const id = setInterval(pull, 5000)
-    return () => { cancelled = true; clearInterval(id) }
+    // SSE: push-driven instant refresh on fill events
+    const es = new EventSource('/api/kalshi/user-stream')
+    es.onmessage = () => pull()
+    es.onerror = () => { /* browser auto-reconnects */ }
+    // Safety-net poll (down from 5s → 2s)
+    const id = setInterval(pull, 2000)
+    return () => { cancelled = true; clearInterval(id); es.close() }
   }, [detail])
 
   // ── Game-level delta tracker ────────────────────────────────────────────
@@ -614,6 +796,95 @@ function MainPanel({
         </div>
       )}
 
+      {/* Live model — only renders when this matchup has an in-progress game */}
+      {liveSnap && (() => {
+        // Match team-A in live snapshot to in-game blue
+        const t1IsBlue = _normTeam(liveSnap.team_a_name) === _normTeam(pred.blue_team)
+        const pBlueModel = t1IsBlue || liveSnap.blue_team_id === null
+          ? liveSnap.p_model
+          : 1 - liveSnap.p_model
+        const pBlueAdj   = t1IsBlue || liveSnap.blue_team_id === null
+          ? liveSnap.p_adj
+          : 1 - liveSnap.p_adj
+        const mins = Math.floor(liveSnap.clock_s / 60)
+        const secs = Math.floor(liveSnap.clock_s % 60)
+        const clockStr = `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`
+        // Side-of-pred-blue label (which team is on in-game blue is independent
+        // of which team we call "blue_team" in our DB)
+        const liveBlueLabel  = t1IsBlue ? pred.blue_team : pred.red_team
+        // FV for series, using live p_blue for the CURRENT live game only.
+        // Uses seriesProbLive accounting for any settled previous games.
+        const team1IsPredBlue = detail?.submarkets?.[0]?.outcomes
+          ? _normTeam(detail.submarkets[0].outcomes[0]) === _normTeam(pred.blue_team)
+          : true
+        const pStaticT1 = team1IsPredBlue ? (pred.pred_blue_win ?? 0.5) : 1 - (pred.pred_blue_win ?? 0.5)
+        // Map live blue-side p → team1 side
+        const pTeam1LiveForSeries = team1IsPredBlue
+          ? (liveSnap.blue_team_id === liveSnap.team_a_id ? pBlueAdj : 1 - pBlueAdj)
+          : (liveSnap.blue_team_id === liveSnap.team_a_id ? 1 - pBlueAdj : pBlueAdj)
+        // Detect settled prior games same way as buildRows
+        let t1W = 0, t2W = 0
+        for (const sm of detail?.submarkets ?? []) {
+          if (!sm.market_type.startsWith('game_') || !sm.market_type.endsWith('_winner')) continue
+          const n = parseInt(sm.market_type.replace('game_','').replace('_winner',''), 10)
+          if (!Number.isFinite(n) || n >= liveSnap.game_number) continue
+          const t1IsThisMarketBlue = _normTeam(sm.outcomes[0]) === _normTeam(pred.blue_team)
+          const t1Pin = t1IsThisMarketBlue ? sm.outcome_mids[0] : sm.outcome_mids[1]
+          if (t1Pin != null && t1Pin >= 0.98) t1W++
+          else if (t1Pin != null && t1Pin <= 0.02) t2W++
+        }
+        const liveSeriesFV = seriesProbLive(
+          pStaticT1, pred.best_of, t1W, t2W, liveSnap.game_number, pTeam1LiveForSeries,
+        )
+        return (
+          <div className="bg-gradient-to-r from-red-950/40 to-pink-950/30 border border-red-900/50 rounded-xl p-4 space-y-2">
+            <div className="flex items-baseline gap-3">
+              <span className="text-xs uppercase tracking-wide text-red-300 font-semibold">● LIVE Model</span>
+              <span className="text-xs text-gray-400">Game {liveSnap.game_number} · {clockStr} · {liveSnap.state}</span>
+              <span className="text-[10px] text-gray-600 ml-auto">
+                buf {liveSnap.buffer_s}s · upd {Math.round((Date.now()/1000) - liveSnap.updated_ts)}s ago
+              </span>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-x-6 gap-y-2 text-sm">
+              <div>
+                <div className="text-[10px] uppercase text-gray-500">In-game state</div>
+                <div className="font-mono text-gray-100">
+                  {liveSnap.blue_kills}–{liveSnap.red_kills} K · {liveSnap.blue_towers}–{liveSnap.red_towers} T
+                </div>
+                <div className="font-mono text-[11px] text-gray-400">
+                  {liveSnap.blue_dragons}{liveSnap.blue_soul ? '🐲SOUL' : ''}–{liveSnap.red_dragons}{liveSnap.red_soul ? '🐲SOUL' : ''} D · {liveSnap.blue_barons}–{liveSnap.red_barons} B · {liveSnap.blue_inhib}–{liveSnap.red_inhib} I
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase text-gray-500">Gold diff</div>
+                <div className={`font-mono text-base ${liveSnap.gold_diff > 0 ? 'text-blue-300' : liveSnap.gold_diff < 0 ? 'text-rose-300' : 'text-gray-300'}`}>
+                  {liveSnap.gold_diff > 0 ? '+' : ''}{Math.round(liveSnap.gold_diff).toLocaleString()}
+                </div>
+                <div className="text-[10px] text-gray-600">in-game blue</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase text-gray-500">p_blue (model)</div>
+                <div className="font-mono text-base text-gray-100">{fmtPct(pBlueModel)}</div>
+                <div className="text-[10px] text-gray-600">{liveBlueLabel.slice(0,12)} on blue</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase text-gray-500">p_blue (+overlay)</div>
+                <div className="font-mono text-base text-red-200 font-semibold">{fmtPct(pBlueAdj)}</div>
+                <div className="text-[10px] text-gray-600">soul/baron/inhib aware</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase text-gray-500">Live series FV (t1)</div>
+                <div className="font-mono text-base text-pink-200 font-semibold">{fmtPct(liveSeriesFV)}</div>
+                <div className="text-[10px] text-gray-600">replaces pre-game FV</div>
+              </div>
+            </div>
+            <div className="text-[10px] text-gray-600 pt-1">
+              Note: ~22-25s lag vs broadcast (lolesports floor). MMs with GRID see this ~18-22s earlier.
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Feature snapshot */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-wrap gap-x-8 gap-y-2 text-sm">
         <div>
@@ -666,7 +937,14 @@ function MainPanel({
                       <div key={`${r.outcome_label}-${idx}`} className="bg-gray-950/60 rounded-lg p-3">
                         <div className="flex items-baseline justify-between mb-1">
                           <div className="text-base font-semibold text-gray-100 truncate pr-2">{r.outcome_label}</div>
-                          <div className="text-xs text-gray-400 font-mono">fair {fmtPct(r.fv)}</div>
+                          {r.fv_is_live ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-950/70 border border-red-700/60 text-red-200 font-mono text-xs font-semibold">
+                              <span className="text-red-400 text-[9px] animate-pulse">●</span>
+                              fair {fmtPct(r.fv)}
+                            </span>
+                          ) : (
+                            <div className="text-xs text-gray-400 font-mono">fair {fmtPct(r.fv)}</div>
+                          )}
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-xs font-mono mb-3">
                           <div className="bg-gray-900 rounded px-2 py-1.5">
@@ -743,12 +1021,31 @@ function MainPanel({
                       {isFirstOfPair ? r.market_label : ''}
                     </td>
                     <td className="px-4 py-2 text-gray-200">{r.outcome_label}</td>
-                    <td className="px-4 py-2 text-right tabular-nums text-gray-300 font-mono">{fmtPct(r.fv)}</td>
+                    <td className="px-4 py-2 text-right tabular-nums font-mono"
+                        title={r.fv_is_live ? 'Live in-game model FV (replaces pre-game prior)' : 'Pre-game model FV'}>
+                      {r.fv_is_live ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-950/70 border border-red-700/60 text-red-200 font-semibold">
+                          <span className="text-red-400 text-[10px] animate-pulse">●</span>
+                          {fmtPct(r.fv)}
+                        </span>
+                      ) : (
+                        <span className="text-gray-300">{fmtPct(r.fv)}</span>
+                      )}
+                    </td>
                     <td className="px-4 py-2 text-right tabular-nums font-mono text-xs">
                       {r.bid != null || r.ask != null ? (
                         <span>
                           <span className="text-green-400">{r.bid != null ? (r.bid * 100).toFixed(1) : '–'}</span>
                           <span className="text-gray-700 mx-1">·</span>
+                          {r.fv != null && (
+                            <>
+                              <span className={r.fv_is_live ? 'text-amber-300 font-bold' : 'text-amber-500/80'}
+                                    title={r.fv_is_live ? 'Live in-game model fair' : 'Pre-game model fair'}>
+                                {r.fv_is_live && '●'}{Math.round(r.fv * 100)}
+                              </span>
+                              <span className="text-gray-700 mx-1">·</span>
+                            </>
+                          )}
                           <span className="text-red-400">{r.ask != null ? (r.ask * 100).toFixed(1) : '–'}</span>
                         </span>
                       ) : (
@@ -1289,6 +1586,14 @@ function LadderModal({
     if (c >= 1 && c <= 99) sortedPrices.push(c / 100)
   }
 
+  // Model fair value, rounded to the nearest cent — used to highlight the
+  // price row where our fair lives so you can see edge vs market at a glance.
+  const fvCents: number | null = thisRow.fv != null && Number.isFinite(thisRow.fv)
+    ? Math.max(1, Math.min(99, Math.round(thisRow.fv * 100)))
+    : null
+  // Same for the opposite outcome → maps to (1 - fv) cents on Kalshi book
+  // (Kalshi is shown in team1's YES space, same as Polymarket here)
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-1 md:p-4" onClick={onClose}>
       <div className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-full max-w-4xl max-h-[95vh] md:max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
@@ -1423,12 +1728,14 @@ function LadderModal({
                 const isInsideSpread = bestBidC != null && bestAskC != null && px > bestBidC && px < bestAskC
                 const isBidZone = bestBidC != null && px <= bestBidC
                 const isAskZone = bestAskC != null && px >= bestAskC
+                const isFair = fvCents != null && Math.round(px * 100) === fvCents
                 // Center column: emphasize what side this price is on.
                 // - At best bid: bright green ("you would SELL here, getting filled vs bids")
                 // - Bid zone (below best bid): dim green (sell side, deeper)
                 // - At best ask: bright red ("you would BUY here, lifting the offer")
                 // - Ask zone (above best ask): dim red (buy side, deeper)
                 // - Inside spread (between bid and ask): blue, where you might rest a passive order
+                // - Model fair: amber halo, overrides above (so you can see edge against book)
                 let priceBg = 'bg-gray-900 text-gray-500'
                 let priceLabel: string | null = null
                 if (isBestBid) { priceBg = 'bg-green-700/70 text-white font-bold'; priceLabel = 'BID' }
@@ -1436,6 +1743,11 @@ function LadderModal({
                 else if (isInsideSpread) priceBg = 'bg-blue-900/30 text-blue-200'
                 else if (isBidZone) priceBg = 'bg-green-900/30 text-green-300'
                 else if (isAskZone) priceBg = 'bg-red-900/30 text-red-300'
+                if (isFair) {
+                  // Amber/yellow takes priority — the fair-value highlight
+                  priceBg = `bg-amber-500/80 text-gray-950 font-bold ring-2 ring-amber-300 ring-inset`
+                  priceLabel = thisRow.fv_is_live ? 'LIVE FAIR' : 'FAIR'
+                }
                 return (
                   <Fragment key={px}>
                     <button
@@ -1522,12 +1834,18 @@ function LadderModal({
                     const isBB = p === kBest.bb
                     const isBA = p === kBest.ba
                     const inside = kBest.bb != null && kBest.ba != null && p > kBest.bb && p < kBest.ba
+                    const isFair = fvCents != null && Math.round(p * 100) === fvCents
                     let centerBg = 'bg-gray-900 text-gray-600'
+                    let centerLabel: string | null = null
                     if (isBB) centerBg = 'bg-green-700/70 text-white font-bold'
                     else if (isBA) centerBg = 'bg-red-700/70 text-white font-bold'
                     else if (inside) centerBg = 'bg-blue-900/30 text-blue-200'
                     else if (kBest.bb != null && p < kBest.bb) centerBg = 'bg-green-900/20 text-green-400'
                     else if (kBest.ba != null && p > kBest.ba) centerBg = 'bg-red-900/20 text-red-400'
+                    if (isFair) {
+                      centerBg = 'bg-amber-500/80 text-gray-950 font-bold ring-2 ring-amber-300 ring-inset'
+                      centerLabel = thisRow.fv_is_live ? 'LIVE' : 'FAIR'
+                    }
                     return (
                       <Fragment key={p}>
                         <button
@@ -1537,7 +1855,10 @@ function LadderModal({
                           title={`Click → SELL YES ${kalshiSide.team} at ${p.toFixed(2)} (= BUY NO at ${(1-p).toFixed(2)})`}>
                           {bs > 0 ? Math.round(bs).toLocaleString() : ''}
                         </button>
-                        <div className={`px-2 py-1 text-center font-mono ${centerBg}`}>{p.toFixed(2)}</div>
+                        <div className={`px-2 py-1 text-center font-mono ${centerBg}`}>
+                          <span>{p.toFixed(2)}</span>
+                          {centerLabel && <span className="ml-1 text-[9px] uppercase tracking-wider opacity-80">{centerLabel}</span>}
+                        </div>
                         <button
                           onClick={() => onClickKalshiAsk(p)}
                           disabled={!kalshiSide?.ticker}
@@ -1796,10 +2117,17 @@ export default function TraderPage() {
     return () => clearInterval(interval)
   }, [selectedSlug, refreshDetail])
 
-  // Positions: initial pull + WSS-driven refresh.
-  // Subscribe to relay /user_stream (proxied via /api/trader/user-stream).
-  // Every fill event triggers an immediate position re-fetch. Fall back to
-  // a slow 30s poll as a safety net in case the SSE disconnects.
+  // Positions: initial pull + SSE-driven optimistic updates + slow safety poll.
+  //
+  // Polymarket's /positions REST endpoint (the data-api) lags fills by 30-60s.
+  // That's not network — it's their server. So even if we re-fetch instantly
+  // on a fill SSE, the response is stale.
+  //
+  // We side-step the lag by applying the SSE payload as an OPTIMISTIC LOCAL
+  // delta to the positions state. The next safety-net fetch reconciles.
+  //
+  // SSE event shape: { transaction_hash, market, asset, side ('BUY'|'SELL'),
+  //                    price, size, outcome, order_ids[], ts }
   useEffect(() => {
     if (!relaySecret) { setPositions([]); return }
     let cancelled = false
@@ -1808,18 +2136,56 @@ export default function TraderPage() {
       if (!cancelled) setPositions(ps)
     }
     pull()
-    // Connect to SSE — push-driven instant updates
+    // Dedupe SSE events by transaction_hash (relay can deliver duplicates if
+    // it reconnects mid-stream).
+    const seen = new Set<string>()
     const es = new EventSource('/api/trader/user-stream')
-    es.onmessage = () => {
-      // Any trade event (regardless of market) is worth re-pulling positions.
-      // Could filter by event.market here if we wanted to be more selective.
+    es.onmessage = (ev) => {
+      let fill: { asset?: string; side?: string; size?: number | string; price?: number | string; transaction_hash?: string; outcome?: string; title?: string } | null = null
+      try { fill = JSON.parse(ev.data) } catch { /* ignore parse errors */ }
+      if (!fill) { pull(); return }
+      const tx = fill.transaction_hash
+      if (tx && seen.has(tx)) return
+      if (tx) seen.add(tx)
+      const asset = fill.asset
+      const sz = typeof fill.size === 'string' ? parseFloat(fill.size) : (fill.size ?? 0)
+      const px = typeof fill.price === 'string' ? parseFloat(fill.price) : (fill.price ?? 0)
+      const side = (fill.side ?? '').toUpperCase()
+      if (asset && Number.isFinite(sz) && sz > 0 && (side === 'BUY' || side === 'SELL')) {
+        const delta = side === 'BUY' ? sz : -sz
+        setPositions(prev => {
+          const idx = prev.findIndex(p => (p.asset ?? p.tokenId ?? p.token_id) === asset)
+          if (idx < 0) {
+            if (delta <= 0) return prev   // selling nothing — wait for fetch to reconcile
+            return [...prev, {
+              asset, size: delta, avgPrice: px,
+              outcome: fill.outcome, title: fill.title,
+            }]
+          }
+          const next = [...prev]
+          const cur  = next[idx]
+          const curSize = typeof cur.size === 'string' ? parseFloat(cur.size) : (cur.size ?? 0)
+          const newSize = curSize + delta
+          if (Math.abs(newSize) < 0.0001) {
+            next.splice(idx, 1)
+          } else {
+            // For BUY: blended avg = (cur*avgPrice + delta*px) / newSize (only positive deltas)
+            const curAvg = typeof cur.avgPrice === 'string' ? parseFloat(cur.avgPrice) : (cur.avgPrice ?? px)
+            const newAvg = delta > 0 && curSize > 0
+              ? (curSize * curAvg + delta * px) / newSize
+              : curAvg
+            next[idx] = { ...cur, size: newSize, avgPrice: newAvg }
+          }
+          return next
+        })
+      }
+      // Still trigger a reconcile fetch in the background so other fields
+      // (currentValue, pnl) eventually become accurate. The lag is fine —
+      // the visible size/avgPrice that drives the UI was already updated.
       pull()
     }
-    es.onerror = () => {
-      // EventSource auto-reconnects with exponential backoff. Just log.
-      // (Don't close — let the browser retry.)
-    }
-    // Safety-net slow poll (30s) in case SSE silently dies
+    es.onerror = () => { /* EventSource auto-reconnects */ }
+    // Safety-net poll (30s) in case SSE silently disconnects
     const safety = setInterval(pull, 30_000)
     return () => {
       cancelled = true
@@ -1886,6 +2252,12 @@ export default function TraderPage() {
                 setLadderPlan(buildLadderPlan(thisRow, oppositeRow, detail))
               }}
               onPlanTrade={(thisRow, oppositeRow) => {
+                setLadderPlan(buildLadderPlan(thisRow, oppositeRow, detail))
+              }}
+              openLadderTokenId={ladderPlan?.thisRow.token_id ?? null}
+              onLadderRefresh={(thisRow, oppositeRow) => {
+                // Keep modal open; just swap in updated row data so the
+                // amber FAIR row in the ladder tracks live model updates.
                 setLadderPlan(buildLadderPlan(thisRow, oppositeRow, detail))
               }}
             />

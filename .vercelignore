@@ -1,0 +1,6 @@
+data/
+notebooks/
+*.pkl
+*.csv
+!web/**/*.csv
+*.parquet

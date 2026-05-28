@@ -8,3 +8,4 @@ __pycache__/
 .idea/
 data/raw/
 data/*.csv
+.vercel
