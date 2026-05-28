@@ -1403,7 +1403,13 @@ function LadderModal({
     return () => { stopped = true; wsRef.current?.close(); wsRef.current = null }
   }, [thisTokenId, oppTokenId])
 
-  // ── Kalshi polling (REST) ────────────────────────────────────────────
+  // ── Kalshi book polling (REST) ───────────────────────────────────────
+  // The Kalshi worker maintains the orderbook in memory via its own WSS to
+  // Kalshi (orderbook_delta channel) — so the freshness floor here is just
+  // the browser → Vercel → Fly round-trip (~50-100ms). Was polling every
+  // 2s which made the in-modal Kalshi ladder feel stuttery compared to the
+  // real-time Polymarket WSS book next to it. 750ms keeps it visually
+  // synced without piling on Vercel function invocations.
   useEffect(() => {
     if (!kalshiSide?.ticker) return
     let stopped = false
@@ -1414,7 +1420,7 @@ function LadderModal({
         kalshiOpposite?.ticker ? fetchKalshiBook(kalshiOpposite.ticker) : Promise.resolve(null),
       ])
       if (!stopped) { setKalshiThis(tb); setKalshiOpp(ob) }
-      setTimeout(poll, 2000)
+      setTimeout(poll, 750)
     }
     poll()
     return () => { stopped = true }
