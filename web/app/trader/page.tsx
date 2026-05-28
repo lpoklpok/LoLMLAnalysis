@@ -581,8 +581,9 @@ function MainPanel({
     const es = new EventSource('/api/kalshi/user-stream')
     es.onmessage = () => pull()
     es.onerror = () => { /* browser auto-reconnects */ }
-    // Safety-net poll (down from 5s → 2s)
-    const id = setInterval(pull, 2000)
+    // Safety-net poll. SSE handles every fill within ~50ms, so the safety
+    // poll only needs to cover silent SSE drops. 30s is plenty.
+    const id = setInterval(pull, 30_000)
     return () => { cancelled = true; clearInterval(id); es.close() }
   }, [detail])
 
