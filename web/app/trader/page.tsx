@@ -1124,10 +1124,11 @@ function LadderModal({
     }
     const t0 = Date.now()
     // Honor the IOC/GTD toggle from the top of the modal:
-    //   FAK (IOC): expiration_ts 2s from now → match-or-die
+    //   FAK (IOC): expiration_ts = now → Kalshi treats any expiry ≤ now+59s as IOC
+    //              (match immediately, cancel any unfilled remainder)
     //   GTD     : expiration_ts 5min from now → rests on the book
     const nowSec     = Math.floor(Date.now() / 1000)
-    const expiration = mode === 'FAK' ? nowSec + 2 : nowSec + 300
+    const expiration = mode === 'FAK' ? nowSec : nowSec + 300
     const modeTag    = mode === 'FAK' ? 'IOC' : 'GTD'
     log(true, `→ ${args.label} ${args.count} @ ${args.px_cents}¢ (kalshi · ${modeTag})`)
     try {
