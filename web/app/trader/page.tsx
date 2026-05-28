@@ -1123,16 +1123,23 @@ function LadderModal({
       return
     }
     const t0 = Date.now()
-    log(true, `→ ${args.label} ${args.count} @ ${args.px_cents}¢ (kalshi)`)
+    // Honor the IOC/GTD toggle from the top of the modal:
+    //   FAK (IOC): expiration_ts 2s from now → match-or-die
+    //   GTD     : expiration_ts 5min from now → rests on the book
+    const nowSec     = Math.floor(Date.now() / 1000)
+    const expiration = mode === 'FAK' ? nowSec + 2 : nowSec + 300
+    const modeTag    = mode === 'FAK' ? 'IOC' : 'GTD'
+    log(true, `→ ${args.label} ${args.count} @ ${args.px_cents}¢ (kalshi · ${modeTag})`)
     try {
       const r = await fetch('/api/kalshi/order', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ticker: args.ticker,
-          side:   args.side,
-          action: 'buy',
-          count:  args.count,
+          ticker:         args.ticker,
+          side:           args.side,
+          action:         'buy',
+          count:          args.count,
+          expiration_ts:  expiration,
           [args.side === 'yes' ? 'yes_price' : 'no_price']: args.px_cents,
         }),
       })
@@ -1291,7 +1298,7 @@ function LadderModal({
               className="w-20 px-2 py-1 text-xs font-mono bg-gray-800 text-gray-100 rounded border border-gray-700" />
             <button onClick={() => setMode(mode === 'FAK' ? 'GTD' : 'FAK')}
               className={`px-3 py-1 text-xs rounded font-bold ${mode === 'FAK' ? 'bg-orange-900/40 text-orange-300' : 'bg-blue-900/40 text-blue-300'}`}
-              title={mode === 'FAK' ? 'Fill-or-kill (clicks fire IOC orders)' : 'GTD 5min (clicks fire post-only resting orders)'}>
+              title={mode === 'FAK' ? 'IOC mode — clicks fire fill-or-kill orders on both Polymarket (FAK) and Kalshi (expiration_ts=now+2s)' : 'GTD 5 min — clicks rest as limit orders on both PM and Kalshi for ~5 minutes'}>
               {mode === 'FAK' ? 'IOC' : 'GTD 5m'}
             </button>
             <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-2xl leading-none ml-1">×</button>
