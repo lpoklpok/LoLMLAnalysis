@@ -89,6 +89,16 @@ CHAMP_FEATS = [
 ]
 CHAMP_FILL = {f: 0.0 for f in CHAMP_FEATS}
 
+# In-game features (gold diff observed at minute 15 and minute 20 of the
+# actual game). Used by the IN_GAME_20 model. The gd20×gd15 interaction
+# adds a small but real lift (best LL on major leagues = 0.4421).
+LIVE_FEATS = [
+    'actual_gd15_diff',
+    'actual_gd20_diff',
+    'gd20_x_gd15',  # interaction (gd20 * gd15 / 100)
+]
+LIVE_FILL = {f: 0.0 for f in LIVE_FEATS}
+
 
 def _apply_adjustments(logodds: np.ndarray, df: pd.DataFrame) -> np.ndarray:
     """G2 draft + per-team playoff + coaching adjustments. Identical to the
@@ -127,6 +137,15 @@ def run():
         for f in CHAMP_FEATS:
             df[f] = 0.0
 
+    # Pull live in-game gold diffs from games_with_odds.csv
+    gw_path = PROCESSED_DIR / 'games_with_odds.csv'
+    gw = pd.read_csv(gw_path, low_memory=False,
+                       usecols=['gameid', 'blue_team_golddiffat15', 'blue_team_golddiffat20'])
+    df = df.merge(gw, on='gameid', how='left')
+    df['actual_gd15_diff'] = df['blue_team_golddiffat15']
+    df['actual_gd20_diff'] = df['blue_team_golddiffat20']
+    df['gd20_x_gd15']      = (df['actual_gd20_diff'] * df['actual_gd15_diff']) / 100.0
+
     # Compute series metadata first — draft_advantage must exist before model training
     df['_date_day'] = df['date'].dt.date
     df['_team_key'] = df.apply(
@@ -164,6 +183,20 @@ def run():
     logodds_post = s_post.transform(df[feats_post].fillna(fill_post)) @ lr_post.coef_.ravel() + lr_post.intercept_[0]
     preds_post = 1 / (1 + np.exp(-_apply_adjustments(logodds_post, df)))
 
+    # === IN_GAME_20 MODEL (pre-draft + champ + actual gd15/gd20) ===
+    feats_live = FEATS + CHAMP_FEATS + LIVE_FEATS
+    fill_live  = {**FILL, **CHAMP_FILL, **LIVE_FILL}
+    # Train only on games where the live features are observed
+    train_live = train[train['actual_gd20_diff'].notna()]
+    model_live = Pipeline([('s', StandardScaler()), ('lr', LogisticRegression(max_iter=1000))])
+    model_live.fit(train_live[feats_live].fillna(fill_live), train_live['blue_win'].values)
+    s_live, lr_live = model_live.named_steps['s'], model_live.named_steps['lr']
+    logodds_live = s_live.transform(df[feats_live].fillna(fill_live)) @ lr_live.coef_.ravel() + lr_live.intercept_[0]
+    preds_live = 1 / (1 + np.exp(-_apply_adjustments(logodds_live, df)))
+    # NULL out predictions for games that never reached 20 min (no observation)
+    no_gd20 = df['actual_gd20_diff'].isna().values
+    preds_live = np.where(no_gd20, np.nan, preds_live)
+
     records = []
     for i, (_, row) in enumerate(df.iterrows()):
         records.append({
@@ -187,6 +220,8 @@ def run():
             'q_blue_win':   _safe(row.get('q_blue_win')),
             'model_pred':   round(float(preds[i]), 4),
             'model_pred_post_draft': round(float(preds_post[i]), 4),
+            'model_pred_in_game_20': (None if np.isnan(preds_live[i])
+                                       else round(float(preds_live[i]), 4)),
             'poly_blue_win_prob': _safe(row.get('poly_blue_win_prob')),
             'poly_source':        (None if (row.get('poly_source') is None or (isinstance(row.get('poly_source'), float) and np.isnan(row.get('poly_source')))) else str(row.get('poly_source'))),
         })
