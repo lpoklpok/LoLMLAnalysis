@@ -12,7 +12,7 @@ type StartBody = {
   horizon_sec:        number
   n_slices?:          number
   max_price?:         number | null
-  reprice_after_sec?: number | null
+  spread_poll_sec?:   number | null
   max_spread_cross?:  number
   dry_run?:           boolean
 }

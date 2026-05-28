@@ -15,7 +15,6 @@ type SliceState = {
   order_id:       string
   filled_size:    number
   avg_fill_price: number
-  repriced:       boolean
   error:          string
 }
 
@@ -175,9 +174,12 @@ export default function VwaperPage() {
     <div style={{ padding: '24px', maxWidth: 1100, margin: '0 auto', fontFamily: 'system-ui, sans-serif' }}>
       <h1 style={{ marginTop: 0 }}>VWAPer</h1>
       <p style={{ color: '#666' }}>
-        Slices a Polymarket order over time. Each slice posts a passive resting
-        order at best bid +1 tick (BUY) or best ask −1 tick (SELL), repriced
-        once if unfilled. Unfilled size rolls to the next slice.
+        Splits a Polymarket order into N slices over a time horizon and
+        executes each slice as a taker (Fill-And-Kill). Each slice waits for
+        the spread to be ≤ <code>max_spread_cross</code>, then lifts the offer
+        (BUY) or hits the bid (SELL) at top of book, capped at{' '}
+        <code>max_price</code>. Whatever doesn&apos;t fill rolls into the next
+        slice. No resting orders are ever placed.
       </p>
 
       <section style={cardStyle}>
@@ -308,11 +310,11 @@ export default function VwaperPage() {
               <tr>
                 <th style={thStyle}>#</th>
                 <th style={thStyle}>target</th>
-                <th style={thStyle}>posted px</th>
+                <th style={thStyle}>take px</th>
                 <th style={thStyle}>filled</th>
-                <th style={thStyle}>avg px</th>
-                <th style={thStyle}>reprice</th>
+                <th style={thStyle}>avg fill</th>
                 <th style={thStyle}>order</th>
+                <th style={thStyle}>note</th>
               </tr>
             </thead>
             <tbody>
@@ -323,8 +325,8 @@ export default function VwaperPage() {
                   <td style={tdStyle}>{s.posted_price > 0 ? s.posted_price.toFixed(4) : '—'}</td>
                   <td style={tdStyle}>{s.filled_size.toFixed(2)}</td>
                   <td style={tdStyle}>{s.avg_fill_price > 0 ? s.avg_fill_price.toFixed(4) : '—'}</td>
-                  <td style={tdStyle}>{s.repriced ? 'yes' : ''}</td>
                   <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: 11 }}>{s.order_id ? s.order_id.slice(0, 16) : ''}</td>
+                  <td style={{ ...tdStyle, fontSize: 11, color: '#888' }}>{s.error || ''}</td>
                 </tr>
               ))}
             </tbody>
