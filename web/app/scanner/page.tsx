@@ -54,6 +54,22 @@ interface EdgeRow extends EventRef {
   edge_per_share:  number
   total_edge_usd:  number
 }
+// One bucket = one (event, market, outcome, venue, side). Aggregates every
+// positive-edge price level so the row represents "what you'd capture if
+// you took the full stack" — best, +1¢, +2¢, etc. all rolled together.
+interface CumulativeEdgeRow extends EventRef {
+  market_label:    string
+  outcome:         string
+  venue:           'pm' | 'kalshi'
+  side:            'bid' | 'ask'
+  best_price:      number   // top-of-book price (lowest ask / highest bid)
+  best_eps:        number   // ¢/sh at top of book
+  worst_price:     number   // furthest price where edge stays positive
+  cum_size:        number   // total stackable size across all positive-edge levels
+  cum_edge_usd:    number   // sum of (eps * size) across all positive-edge levels
+  avg_eps:         number   // cum_edge_usd / cum_size — blended ¢/sh
+  num_levels:      number
+}
 interface LiquidityRow extends EventRef {
   market_label:   string
   outcome:        string
@@ -619,14 +635,46 @@ export default function ScannerPage() {
       .sort((a, b) => b.total_edge_usd - a.total_edge_usd)
   }, [rendered, leagueFilter, search, minEdge, majorOnly])
 
-  const filteredEdges = useMemo(
-    () => allEdges
-      .filter(e => !majorOnly || MAJOR_LEAGUES.has(e.league))
-      .filter(e => venueFilter === 'all' || e.venue === venueFilter)
-      .filter(e => e.total_edge_usd >= minEdge)
-      .slice(0, 30),
-    [allEdges, venueFilter, minEdge, majorOnly],
-  )
+  // Cumulative per (event, market, outcome, venue, side). One row per bucket,
+  // aggregated across every positive-edge price level (BBO + penny-through +
+  // deeper). Ranked by total $ you'd capture if you took the full stack.
+  const cumulativeEdges = useMemo(() => {
+    const groups = new Map<string, CumulativeEdgeRow>()
+    for (const e of allEdges) {
+      if (majorOnly && !MAJOR_LEAGUES.has(e.league)) continue
+      if (venueFilter !== 'all' && e.venue !== venueFilter) continue
+      const k = `${e.team1}|${e.team2}|${e.market_label}|${e.outcome}|${e.venue}|${e.side}`
+      const existing = groups.get(k)
+      if (!existing) {
+        groups.set(k, {
+          team1: e.team1, team2: e.team2, best_of: e.best_of, league: e.league, mkt_t1: e.mkt_t1,
+          market_label: e.market_label, outcome: e.outcome, venue: e.venue, side: e.side,
+          best_price: e.price, best_eps: e.edge_per_share,
+          worst_price: e.price,
+          cum_size: e.size, cum_edge_usd: e.total_edge_usd, avg_eps: e.edge_per_share, num_levels: 1,
+        })
+      } else {
+        // For ASK (BUY): best = lowest price, worst = highest you'd still take.
+        // For BID (SELL): best = highest price, worst = lowest you'd still take.
+        if (e.side === 'ask') {
+          if (e.price < existing.best_price) { existing.best_price = e.price; existing.best_eps = e.edge_per_share }
+          if (e.price > existing.worst_price) existing.worst_price = e.price
+        } else {
+          if (e.price > existing.best_price) { existing.best_price = e.price; existing.best_eps = e.edge_per_share }
+          if (e.price < existing.worst_price) existing.worst_price = e.price
+        }
+        existing.cum_size     += e.size
+        existing.cum_edge_usd += e.total_edge_usd
+        existing.num_levels   += 1
+      }
+    }
+    // Compute blended avg ¢/sh per bucket, filter by minEdge, rank, cap at 30.
+    return Array.from(groups.values())
+      .map(g => ({ ...g, avg_eps: g.cum_size > 0 ? g.cum_edge_usd / g.cum_size : 0 }))
+      .filter(g => g.cum_edge_usd >= minEdge)
+      .sort((a, b) => b.cum_edge_usd - a.cum_edge_usd)
+      .slice(0, 30)
+  }, [allEdges, venueFilter, minEdge, majorOnly])
   const substantialEdges = useMemo(
     () => [...allEdges]
       .filter(e => !majorOnly || MAJOR_LEAGUES.has(e.league))
@@ -719,8 +767,9 @@ export default function ScannerPage() {
       <div className="grid md:grid-cols-3 gap-3 p-3 md:p-4">
         <div className="bg-gray-900 border border-amber-700/30 rounded-lg overflow-hidden">
           <div className="px-3 py-2 border-b border-gray-800 flex items-baseline gap-2">
-            <span className="text-xs uppercase tracking-wide text-amber-300 font-semibold">Top Edge ($)</span>
-            <span className="text-[10px] text-gray-600">{filteredEdges.length} of {allEdges.length}</span>
+            <span className="text-xs uppercase tracking-wide text-amber-300 font-semibold">Top Edge ($) · cumulative</span>
+            <span className="text-[10px] text-gray-600">{cumulativeEdges.length} buckets</span>
+            <span className="text-[10px] text-gray-700 ml-auto" title="Each row aggregates every positive-edge level for that (event, market, outcome, venue, side). 'BBO' is the top-of-book price. 'Stack' is total size you could take across all positive-edge levels.">stack = BBO + penny-through + deeper</span>
           </div>
           <div className="max-h-[380px] overflow-y-auto">
             <table className="w-full text-xs">
@@ -728,29 +777,33 @@ export default function ScannerPage() {
                 <tr className="border-b border-gray-800">
                   <th className="px-2 py-1.5 text-left font-normal">Matchup · Bet</th>
                   <th className="px-2 py-1.5 text-right font-normal">Venue</th>
-                  <th className="px-2 py-1.5 text-right font-normal">Sz</th>
-                  <th className="px-2 py-1.5 text-right font-normal">Fair</th>
-                  <th className="px-2 py-1.5 text-right font-normal text-amber-300">¢/sh</th>
-                  <th className="px-2 py-1.5 text-right font-normal">Edge $</th>
+                  <th className="px-2 py-1.5 text-right font-normal" title="Top-of-book price (best ask if buying, best bid if selling)">BBO</th>
+                  <th className="px-2 py-1.5 text-right font-normal" title="Worst price you'd still take — beyond this, edge turns negative">→</th>
+                  <th className="px-2 py-1.5 text-right font-normal" title="Total stackable size across all positive-edge levels">Stack</th>
+                  <th className="px-2 py-1.5 text-right font-normal text-amber-300" title="Blended (size-weighted) ¢/sh across all stacked levels">Avg ¢/sh</th>
+                  <th className="px-2 py-1.5 text-right font-normal" title="Total $ captured if you took the full stack at your model's fair">Edge $</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-900">
-                {filteredEdges.length === 0 && (
-                  <tr><td colSpan={6} className="px-2 py-4 text-center text-gray-600">No edge above filter. Lower the Min edge threshold.</td></tr>
+                {cumulativeEdges.length === 0 && (
+                  <tr><td colSpan={7} className="px-2 py-4 text-center text-gray-600">No edge above filter. Lower the Min edge threshold.</td></tr>
                 )}
-                {filteredEdges.map((e, i) => (
+                {cumulativeEdges.map((e, i) => (
                   <tr key={i} className="hover:bg-gray-900/60 transition">
-                    <MatchupCell row={e} bet={{ side: e.side, price: e.price }} />
+                    <MatchupCell row={e} bet={{ side: e.side, price: e.best_price }} />
                     <td className="px-2 py-1.5 text-right">
                       <span className={`text-[10px] uppercase font-semibold ${e.venue === 'pm' ? 'text-blue-300' : 'text-purple-300'}`}>{e.venue}</span>
                     </td>
-                    <td className="px-2 py-1.5 text-right font-mono text-gray-400">{fmtSize(e.size)}</td>
-                    <td className="px-2 py-1.5 text-right font-mono text-amber-300">{fmtCent(e.fair)}</td>
-                    <td className={`px-2 py-1.5 text-right font-mono ${epsBgClass(e.edge_per_share)}`}>
-                      {(e.edge_per_share * 100).toFixed(1)}c
+                    <td className="px-2 py-1.5 text-right font-mono text-gray-300">{fmtCent(e.best_price)}</td>
+                    <td className="px-2 py-1.5 text-right font-mono text-gray-500" title={`${e.num_levels} level${e.num_levels === 1 ? '' : 's'} of positive edge`}>
+                      {e.num_levels > 1 ? fmtCent(e.worst_price) : <span className="text-gray-700">—</span>}
                     </td>
-                    <td className={`px-2 py-1.5 text-right font-mono font-semibold ${edgeBgClass(e.total_edge_usd)}`}>
-                      {fmtUsd(e.total_edge_usd)}
+                    <td className="px-2 py-1.5 text-right font-mono text-gray-400">{fmtSize(e.cum_size)}</td>
+                    <td className={`px-2 py-1.5 text-right font-mono ${epsBgClass(e.avg_eps)}`}>
+                      {(e.avg_eps * 100).toFixed(1)}c
+                    </td>
+                    <td className={`px-2 py-1.5 text-right font-mono font-semibold ${edgeBgClass(e.cum_edge_usd)}`}>
+                      {fmtUsd(e.cum_edge_usd)}
                     </td>
                   </tr>
                 ))}
