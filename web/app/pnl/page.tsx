@@ -25,6 +25,7 @@ interface PnLData {
   wallet:            string
   kalshi_available:  boolean
   start_date:        string
+  model_era_start?:  string   // "post-model" cutoff (default 2026-05-18)
   days:              DayRow[]
   cumulative:        CumRow[]
   totals: {
@@ -35,6 +36,8 @@ interface PnLData {
     kalshi_trades:     number
   }
 }
+
+type RangeMode = 'all' | 'model_era' | '30d' | '90d'
 
 function fmt$(x: number, d = 0): string {
   const v = (Math.abs(x) >= 1000 ? x.toFixed(d) : x.toFixed(2))
@@ -100,6 +103,7 @@ function SparkLine({ data, color = '#3b82f6', height = 36 }: {
 export default function PnLPage() {
   const [data, setData]   = useState<PnLData | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [range, setRange] = useState<RangeMode>('all')
 
   useEffect(() => {
     fetch('/pnl_daily.json')
@@ -108,15 +112,46 @@ export default function PnLPage() {
       .catch(e => setError(String(e)))
   }, [])
 
+  // Filter days by the chosen range. All numbers (totals, cumulative, sparkline,
+  // max-for-heatmap) recompute from the filtered subset so the entire page
+  // reflects the selection.
+  const modelEraStart = data?.model_era_start ?? '2026-05-18'
+  const today = new Date().toISOString().slice(0, 10)
+  const cutoff = range === 'all'       ? '0000-00-00'
+               : range === 'model_era' ? modelEraStart
+               : range === '30d'       ? new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10)
+               : range === '90d'       ? new Date(Date.now() - 90 * 86400_000).toISOString().slice(0, 10)
+               :                          '0000-00-00'
+
+  const filtered = useMemo(() => {
+    if (!data) return null
+    const days = data.days.filter(d => d.date >= cutoff && d.date <= today)
+    const totals = days.reduce((acc, d) => ({
+      polymarket_pnl:    acc.polymarket_pnl    + d.polymarket_pnl,
+      kalshi_pnl:        acc.kalshi_pnl        + d.kalshi_pnl,
+      total_pnl:         acc.total_pnl         + d.total_pnl,
+      polymarket_trades: acc.polymarket_trades + d.polymarket_trades,
+      kalshi_trades:     acc.kalshi_trades     + d.kalshi_trades,
+    }), { polymarket_pnl: 0, kalshi_pnl: 0, total_pnl: 0, polymarket_trades: 0, kalshi_trades: 0 })
+    // Cumulative restarts from 0 inside the window (so the sparkline reads as
+    // "what's my PnL gain over this period?").
+    let run = 0
+    const cumulative: CumRow[] = days.map(d => {
+      run += d.total_pnl
+      return { date: d.date, polymarket_pnl: d.polymarket_pnl, kalshi_pnl: d.kalshi_pnl, total_pnl: d.total_pnl, cum_pnl: run }
+    })
+    return { days, totals, cumulative }
+  }, [data, cutoff, today])
+
   const maxAbs = useMemo(() => {
-    if (!data) return 0
+    if (!filtered) return 0
     return Math.max(
-      ...data.days.flatMap(d => [Math.abs(d.polymarket_pnl), Math.abs(d.kalshi_pnl), Math.abs(d.total_pnl)]),
+      ...filtered.days.flatMap(d => [Math.abs(d.polymarket_pnl), Math.abs(d.kalshi_pnl), Math.abs(d.total_pnl)]),
       1,
     )
-  }, [data])
+  }, [filtered])
 
-  const cum = data?.cumulative ?? []
+  const cum = filtered?.cumulative ?? []
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
@@ -145,28 +180,53 @@ export default function PnLPage() {
         {error && <p className="text-red-400">Failed to load PnL data: {error}</p>}
         {!data && !error && <p className="text-gray-400">Loading…</p>}
 
-        {data && (
+        {data && filtered && (
           <>
-            {/* Totals since start_date */}
+            {/* Range filter — defaults to All-time (post-Feb start). */}
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-gray-500 mr-1">Range:</span>
+              {([
+                { id: 'all',       label: `All time (since ${data.start_date})` },
+                { id: 'model_era', label: `Post-model era (since ${modelEraStart})` },
+                { id: '90d',       label: 'Last 90d' },
+                { id: '30d',       label: 'Last 30d' },
+              ] as Array<{ id: RangeMode; label: string }>).map(opt => (
+                <button key={opt.id} onClick={() => setRange(opt.id)}
+                        className={`px-3 py-1 rounded border text-xs font-medium transition ${
+                          range === opt.id
+                            ? 'border-emerald-500/60 bg-emerald-900/30 text-emerald-300'
+                            : 'border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600'
+                        }`}>
+                  {opt.label}
+                </button>
+              ))}
+              <span className="ml-auto text-xs text-gray-500 font-mono">{filtered.days.length} days · {filtered.totals.polymarket_trades + filtered.totals.kalshi_trades} trades</span>
+            </div>
+
+            {/* Totals */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <StatCard label={`Total since ${data.start_date}`} value={fmt$(data.totals.total_pnl)}
-                        valueColor={clrFor(data.totals.total_pnl)}
-                        sub={`${data.totals.polymarket_trades + data.totals.kalshi_trades} trades`} />
-              <StatCard label="Polymarket" value={fmt$(data.totals.polymarket_pnl)}
-                        valueColor={clrFor(data.totals.polymarket_pnl)}
-                        sub={`${data.totals.polymarket_trades} trades`} />
-              <StatCard label="Kalshi"     value={data.kalshi_available ? fmt$(data.totals.kalshi_pnl) : 'N/A'}
-                        valueColor={data.kalshi_available ? clrFor(data.totals.kalshi_pnl) : 'text-gray-500'}
-                        sub={data.kalshi_available ? `${data.totals.kalshi_trades} trades` : 'Kalshi unavailable'} />
+              <StatCard label={range === 'all' ? `Total since ${data.start_date}` :
+                                range === 'model_era' ? `Total since ${modelEraStart}` :
+                                range === '90d' ? 'Last 90 days' : 'Last 30 days'}
+                        value={fmt$(filtered.totals.total_pnl)}
+                        valueColor={clrFor(filtered.totals.total_pnl)}
+                        sub={`${filtered.totals.polymarket_trades + filtered.totals.kalshi_trades} trades`} />
+              <StatCard label="Polymarket" value={fmt$(filtered.totals.polymarket_pnl)}
+                        valueColor={clrFor(filtered.totals.polymarket_pnl)}
+                        sub={`${filtered.totals.polymarket_trades} trades`} />
+              <StatCard label="Kalshi"     value={data.kalshi_available ? fmt$(filtered.totals.kalshi_pnl) : 'N/A'}
+                        valueColor={data.kalshi_available ? clrFor(filtered.totals.kalshi_pnl) : 'text-gray-500'}
+                        sub={data.kalshi_available ? `${filtered.totals.kalshi_trades} trades` : 'Kalshi unavailable'} />
               <StatCard label="Best/Worst Day"
-                        value={`${fmt$(Math.max(...data.days.map(d => d.total_pnl)))} / ${fmt$(Math.min(...data.days.map(d => d.total_pnl)))}`}
+                        value={filtered.days.length === 0 ? '—' :
+                          `${fmt$(Math.max(...filtered.days.map(d => d.total_pnl)))} / ${fmt$(Math.min(...filtered.days.map(d => d.total_pnl)))}`}
                         valueColor="text-gray-200"
                         sub="best vs worst single day" />
             </div>
 
-            {/* Daily breakdown table since start_date */}
+            {/* Daily breakdown table for current range */}
             <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-              <h2 className="text-lg font-semibold text-gray-100 mb-1">Daily breakdown — since {data.start_date}</h2>
+              <h2 className="text-lg font-semibold text-gray-100 mb-1">Daily breakdown — {range === 'all' ? `since ${data.start_date}` : range === 'model_era' ? `since ${modelEraStart} (post-model)` : range === '90d' ? 'last 90 days' : 'last 30 days'}</h2>
               <p className="text-xs text-gray-500 mb-5">
                 Trade-date mark-to-current PnL by UTC date.
                 LoL markets only ({data.kalshi_available ? 'PM keywords + Kalshi KXLOL* prefix' : 'PM only — Kalshi auth unavailable'}).
@@ -185,7 +245,7 @@ export default function PnLPage() {
                     </tr>
                   </thead>
                   <tbody className="font-mono">
-                    {data.days.map(d => (
+                    {filtered.days.map(d => (
                       <tr key={d.date} className="border-b border-gray-800/60">
                         <td className="px-2 py-2 font-sans">
                           {new Date(d.date + 'T00:00:00Z').toLocaleDateString('en-US', {
@@ -209,16 +269,16 @@ export default function PnLPage() {
                   <tfoot>
                     <tr className="border-t-2 border-gray-700">
                       <td className="px-2 py-2 text-gray-400 font-semibold">Total</td>
-                      <td className={`px-2 py-2 text-right font-mono font-bold ${clrFor(data.totals.polymarket_pnl)}`}>
-                        {fmt$(data.totals.polymarket_pnl)}
+                      <td className={`px-2 py-2 text-right font-mono font-bold ${clrFor(filtered.totals.polymarket_pnl)}`}>
+                        {fmt$(filtered.totals.polymarket_pnl)}
                       </td>
-                      <td className="px-2 py-2 text-right text-gray-500 font-mono">{data.totals.polymarket_trades}</td>
-                      <td className={`px-2 py-2 text-right font-mono font-bold ${clrFor(data.totals.kalshi_pnl)}`}>
-                        {fmt$(data.totals.kalshi_pnl)}
+                      <td className="px-2 py-2 text-right text-gray-500 font-mono">{filtered.totals.polymarket_trades}</td>
+                      <td className={`px-2 py-2 text-right font-mono font-bold ${clrFor(filtered.totals.kalshi_pnl)}`}>
+                        {fmt$(filtered.totals.kalshi_pnl)}
                       </td>
-                      <td className="px-2 py-2 text-right text-gray-500 font-mono">{data.totals.kalshi_trades}</td>
-                      <td className={`px-2 py-2 text-right font-mono font-extrabold text-lg border-l border-gray-800 ${clrFor(data.totals.total_pnl)}`}>
-                        {fmt$(data.totals.total_pnl)}
+                      <td className="px-2 py-2 text-right text-gray-500 font-mono">{filtered.totals.kalshi_trades}</td>
+                      <td className={`px-2 py-2 text-right font-mono font-extrabold text-lg border-l border-gray-800 ${clrFor(filtered.totals.total_pnl)}`}>
+                        {fmt$(filtered.totals.total_pnl)}
                       </td>
                     </tr>
                   </tfoot>
@@ -229,7 +289,7 @@ export default function PnLPage() {
             {/* Cumulative sparkline since start_date */}
             {cum.length > 0 && (
               <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-                <h2 className="text-lg font-semibold text-gray-100 mb-1">Cumulative PnL — since {data.start_date}</h2>
+                <h2 className="text-lg font-semibold text-gray-100 mb-1">Cumulative PnL — {range === 'all' ? `since ${data.start_date}` : range === 'model_era' ? `since ${modelEraStart} (post-model)` : range === '90d' ? 'last 90 days' : 'last 30 days'}</h2>
                 <p className="text-xs text-gray-500 mb-4">
                   {`${cum[0].date} → ${cum[cum.length-1].date} · ${cum.length} days`}
                 </p>

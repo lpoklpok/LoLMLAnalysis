@@ -42,7 +42,8 @@ EXCLUDED_CIDS = {
     '0x9be6eece606031076710039492dbef046237321699a8129e263ee6b1190b7fa2',
 }
 KALSHI_PREFIXES = ['KXLOL']
-START_DATE = pd.Timestamp('2026-05-18', tz=None)  # window starts here, grows as days pass
+START_DATE = pd.Timestamp('2026-02-01', tz=None)  # cover all historical LoL activity; UI filters by post-model-era (2026-05-18+)
+MODEL_ERA_START = pd.Timestamp('2026-05-18', tz=None)  # the "I built a model" cutoff — used as a label/preset on the UI
 OUT_PATH = Path(__file__).resolve().parent.parent / 'web' / 'public' / 'pnl_daily.json'
 
 DATA_API  = 'https://data-api.polymarket.com'
@@ -385,6 +386,7 @@ def main():
         'wallet':           WALLET,
         'kalshi_available': kalshi_available,
         'start_date':       START_DATE.strftime('%Y-%m-%d'),
+        'model_era_start':  MODEL_ERA_START.strftime('%Y-%m-%d'),
         'days':             days,
         'totals':           totals,
         'cumulative':       cumulative,
