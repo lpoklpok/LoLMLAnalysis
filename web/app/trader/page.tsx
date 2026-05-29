@@ -1638,16 +1638,48 @@ function LadderModal({
   const bestBidC = thisBook.best_bid != null ? Math.round(thisBook.best_bid * 100) / 100 : null
   const bestAskC = thisBook.best_ask != null ? Math.round(thisBook.best_ask * 100) / 100 : null
 
-  // Anchor: use mid if both sides known; else best ask; else best bid; else 0.5
-  const midApprox =
-    bestBidC != null && bestAskC != null ? (bestBidC + bestAskC) / 2 :
-    bestAskC != null ? bestAskC :
-    bestBidC != null ? bestBidC : 0.5
-  const midC = Math.max(1, Math.min(99, Math.round(midApprox * 100)))
+  // Pre-compute Kalshi combined best bid/ask so the ladder anchor can span both
+  // venues. Without this, the ladder anchored on PM mid and skipped Kalshi
+  // levels entirely whenever the two venues disagreed (e.g. PM resolved, Kalshi
+  // still trading). Mirrors the combine logic in the Kalshi render below.
+  let kalshiBestBidC: number | null = null
+  let kalshiBestAskC: number | null = null
+  if (kalshiSide) {
+    const t1 = kalshiThis ?? { bids: new Map<number, number>(), asks: new Map<number, number>(), updated: 0 }
+    const t2 = kalshiOpp  ?? { bids: new Map<number, number>(), asks: new Map<number, number>(), updated: 0 }
+    let bb = -Infinity, ba = Infinity
+    for (const [p] of t1.bids) if (p > bb) bb = p
+    for (const [q] of t2.asks) { const p = 1 - q; if (p > bb) bb = p }
+    for (const [p] of t1.asks) if (p < ba) ba = p
+    for (const [q] of t2.bids) { const p = 1 - q; if (p < ba) ba = p }
+    if (bb !== -Infinity) kalshiBestBidC = Math.round(bb * 100) / 100
+    if (ba !==  Infinity) kalshiBestAskC = Math.round(ba * 100) / 100
+  }
+
+  // Anchor: use mid if both sides known. When both PM and Kalshi have mids,
+  // span both — that way the ladder shows the active range on both venues
+  // even if they disagree massively (resolved vs trading, e.g.).
+  const pmMid = bestBidC != null && bestAskC != null ? (bestBidC + bestAskC) / 2 : null
+  const ksMid = kalshiBestBidC != null && kalshiBestAskC != null ? (kalshiBestBidC + kalshiBestAskC) / 2 : null
+  const fallback = bestAskC ?? bestBidC ?? kalshiBestAskC ?? kalshiBestBidC ?? 0.5
+  const center = pmMid != null && ksMid != null ? (pmMid + ksMid) / 2
+               : pmMid ?? ksMid ?? fallback
+  const midC = Math.max(1, Math.min(99, Math.round(center * 100)))
+
+  // Window: widen to cover both venues' tops-of-book when they diverge, so
+  // the ladder includes the active price on whichever venue you intend to trade.
+  let halfWidth = LADDER_LEVELS_EACH_SIDE
+  if (pmMid != null && ksMid != null) {
+    const divergenceC = Math.round(Math.abs(pmMid - ksMid) * 100)
+    // Need at least half the divergence + a few extra rows on each side.
+    halfWidth = Math.max(halfWidth, Math.ceil(divergenceC / 2) + 5)
+  }
+  // Cap so the modal stays usable. 40 rows each side = 81-row ladder.
+  halfWidth = Math.min(halfWidth, 40)
 
   // Build N ticks above + N below + center (rendered top-down: asks high → bids low)
   const sortedPrices: number[] = []
-  for (let offset = LADDER_LEVELS_EACH_SIDE; offset >= -LADDER_LEVELS_EACH_SIDE; offset--) {
+  for (let offset = halfWidth; offset >= -halfWidth; offset--) {
     const c = midC + offset
     if (c >= 1 && c <= 99) sortedPrices.push(c / 100)
   }
