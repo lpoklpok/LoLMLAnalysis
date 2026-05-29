@@ -78,25 +78,60 @@ function StatCard({ label, value, sub, valueColor = 'text-white' }: {
   )
 }
 
-function SparkLine({ data, color = '#3b82f6', height = 36 }: {
-  data: number[]; color?: string; height?: number
+function SparkLine({ data, dates, color = '#3b82f6', height = 36 }: {
+  data: number[]; dates?: string[]; color?: string; height?: number
 }) {
+  const [hover, setHover] = useState<number | null>(null)
   if (data.length === 0) return null
   const min = Math.min(...data, 0)
   const max = Math.max(...data, 0)
   const range = max - min || 1
   const w = 100
-  const pts = data.map((v, i) => {
-    const x = (i / (data.length - 1 || 1)) * w
-    const y = height - ((v - min) / range) * height
-    return `${x},${y}`
-  }).join(' ')
+  const xy = data.map((v, i) => ({
+    x: (i / (data.length - 1 || 1)) * w,
+    y: height - ((v - min) / range) * height,
+    v,
+    date: dates?.[i] ?? null,
+  }))
+  const pts = xy.map(p => `${p.x},${p.y}`).join(' ')
   const zeroY = height - ((0 - min) / range) * height
+  const hp = hover != null ? xy[hover] : null
+
+  function onMove(e: React.MouseEvent<SVGSVGElement>) {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const xPct = ((e.clientX - rect.left) / rect.width) * w
+    let best = 0; let bestDist = Infinity
+    for (let i = 0; i < xy.length; i++) {
+      const d = Math.abs(xy[i].x - xPct)
+      if (d < bestDist) { bestDist = d; best = i }
+    }
+    setHover(best)
+  }
+
   return (
-    <svg width="100%" height={height} viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none">
-      <line x1="0" y1={zeroY} x2={w} y2={zeroY} stroke="#374151" strokeDasharray="2,2" strokeWidth="0.5" />
-      <polyline fill="none" stroke={color} strokeWidth="1.4" points={pts} />
-    </svg>
+    <div className="relative">
+      <svg width="100%" height={height} viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none"
+           onMouseMove={onMove} onMouseLeave={() => setHover(null)}
+           className="cursor-crosshair">
+        <line x1="0" y1={zeroY} x2={w} y2={zeroY} stroke="#374151" strokeDasharray="2,2" strokeWidth="0.5" />
+        <polyline fill="none" stroke={color} strokeWidth="1.4" points={pts} />
+        {hp && (
+          <>
+            <line x1={hp.x} y1="0" x2={hp.x} y2={height} stroke={color} strokeOpacity="0.4" strokeWidth="0.5" />
+            <circle cx={hp.x} cy={hp.y} r="1.6" fill={color} />
+          </>
+        )}
+      </svg>
+      {hp && (
+        <div className="absolute top-1 pointer-events-none bg-gray-950/95 border border-gray-700 rounded px-2 py-1 text-[11px] font-mono whitespace-nowrap"
+             style={{ left: `${Math.min(Math.max(hp.x, 8), 92)}%`, transform: `translateX(${hp.x > 50 ? '-100%' : '0%'})` }}>
+          {hp.date && <div className="text-gray-400">{hp.date}</div>}
+          <div className={hp.v >= 0 ? 'text-green-400 font-bold' : 'text-red-400 font-bold'}>
+            {hp.v >= 0 ? '+' : '−'}${Math.abs(hp.v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -294,7 +329,8 @@ export default function PnLPage() {
                   {`${cum[0].date} → ${cum[cum.length-1].date} · ${cum.length} days`}
                 </p>
                 <div className="bg-gray-950 rounded p-3 border border-gray-800">
-                  <SparkLine data={cum.map(c => c.cum_pnl)} color={cum[cum.length-1].cum_pnl >= 0 ? '#34d399' : '#f87171'} height={120} />
+                  <SparkLine data={cum.map(c => c.cum_pnl)} dates={cum.map(c => c.date)}
+                             color={cum[cum.length-1].cum_pnl >= 0 ? '#34d399' : '#f87171'} height={120} />
                   <div className="flex justify-between text-xs text-gray-500 mt-2 font-mono">
                     <span>{cum[0].date}</span>
                     <span className={clrFor(cum[cum.length-1].cum_pnl)}>
