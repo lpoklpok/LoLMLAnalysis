@@ -1054,14 +1054,34 @@ export default function ScannerPage() {
                              normName(blueName).includes(normName(ev.team1))
             pLiveT1 = t1IsBlue ? liveSnap.p_adj : 1 - liveSnap.p_adj
           }
-          // V1 scope: handle only the case where the LIVE GAME IS GAME 1
-          // (series score 0-0). For game 2+ live we'd need to infer prior
-          // game winners from PM mids — TODO. Falls back to static dist.
-          const isLiveG1 = liveSnap?.state === 'in_game' && liveSnap?.game_number === 1
-          const adjDist     = adjGameT1 == null
+          // Infer series score from PM mids on prior Game-N Winner submarkets.
+          // Mids pinned ≥0.98 / ≤0.02 mean that game has settled. This lets us
+          // handle live G2+, not just G1.
+          let startT1Wins = 0, startT2Wins = 0
+          if (liveSnap?.state === 'in_game' && liveSnap.game_number > 1) {
+            for (const sm of ev.submarkets) {
+              const m = /Game (\d+) Winner/.exec(sm.market_label)
+              if (!m) continue
+              const n = parseInt(m[1], 10)
+              if (n >= liveSnap.game_number) continue
+              const o0 = sm.outcomes[0]
+              const tok = o0?.token_id
+              const book = tok ? pmBooks.get(tok) : null
+              const bid = book?.bids[0]?.price
+              const ask = book?.asks[0]?.price
+              const mid = bid != null && ask != null ? (bid + ask) / 2 : (bid ?? ask)
+              if (mid == null) continue
+              const out0IsT1 = outcomeIsTeam(o0?.outcome ?? '', ev.team1, ev.team2)
+              const t1Pin = out0IsT1 ? mid : 1 - mid
+              if (t1Pin >= 0.98) startT1Wins++
+              else if (t1Pin <= 0.02) startT2Wins++
+            }
+          }
+          const hasLiveOverlay = liveSnap?.state === 'in_game' && pLiveT1 != null && adjGameT1 != null
+          const adjDist = adjGameT1 == null
             ? null
-            : (isLiveG1 && pLiveT1 != null
-              ? seriesDistributionLive(adjGameT1, ev.best_of, 0, 0, 1, pLiveT1)
+            : (hasLiveOverlay
+              ? seriesDistributionLive(adjGameT1, ev.best_of, startT1Wins, startT2Wins, liveSnap!.game_number, pLiveT1!)
               : seriesDistribution(adjGameT1, ev.best_of))
           // Find team1's PM match-winner midpoint to enable Snap-to-market.
           const mwSm = ev.submarkets.find(sm => sm.market_label === 'Match Winner')
@@ -1097,8 +1117,8 @@ export default function ScannerPage() {
                 <span className="text-sm font-medium text-gray-100">{ev.team1} <span className="text-gray-600 mx-1">vs</span> {ev.team2}</span>
                 {liveSnap && (
                   <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-red-900/60 text-red-300 border border-red-700/40 font-bold"
-                        title={`Live: G${liveSnap.game_number}, p_adj=${(liveSnap.p_adj*100).toFixed(1)}% on ${liveSnap.team_a_name === ev.team1 || liveSnap.team_b_name === ev.team1 ? 'blue side' : 'opp side'}`}>
-                    🔴 LIVE G{liveSnap.game_number}
+                        title={`Live G${liveSnap.game_number}, series ${startT1Wins}-${startT2Wins}, p_adj=${(liveSnap.p_adj*100).toFixed(1)}% (blue)`}>
+                    🔴 LIVE G{liveSnap.game_number} {startT1Wins+startT2Wins > 0 && <span className="font-mono">({startT1Wins}-{startT2Wins})</span>}
                   </span>
                 )}
                 <span className="ml-auto flex items-center gap-3 text-[11px]">
@@ -1182,10 +1202,9 @@ export default function ScannerPage() {
                         //   - ELO slider is shifted (delta != 0), OR
                         //   - A live game is in progress (pLiveT1 set via SSE)
                         // adjDist already reflects live distribution when isLiveG1.
-                        const hasLive = pLiveT1 != null && isLiveG1
-                        const overrideFair = ((delta !== 0 || hasLive) && adjGameT1 != null && adjDist != null)
+                        const overrideFair = ((delta !== 0 || hasLiveOverlay) && adjGameT1 != null && adjDist != null)
                           ? adjustedFair(sm, oIdx, ev.team1, ev.team2, ev.best_of, adjGameT1, adjDist,
-                                         hasLive ? liveSnap!.game_number : null, pLiveT1)
+                                         hasLiveOverlay ? liveSnap!.game_number : null, pLiveT1)
                           : null
                         const fairDisp = overrideFair ?? o.fair
                         return (
