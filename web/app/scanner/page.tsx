@@ -211,6 +211,9 @@ export default function ScannerPage() {
   const [search, setSearch] = useState<string>('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [venueFilter, setVenueFilter] = useState<'all' | 'pm' | 'kalshi'>('all')
+  // Min-size for the "Substantial Edge" panel — defaults to 100 shares to
+  // cut out the tiny resting orders that aren't actionable for real positions.
+  const [minTradeSize, setMinTradeSize] = useState<number>(100)
 
   // ── Initial snapshot from /api/scanner ──────────────────────────────
   useEffect(() => {
@@ -414,6 +417,16 @@ export default function ScannerPage() {
       .slice(0, 30),
     [allEdges, venueFilter, minEdge],
   )
+  // Substantial Edges: trades with meaningful size for real position sizing.
+  // Sorted by total $ edge so the biggest $-capturable opportunities surface.
+  const substantialEdges = useMemo(
+    () => allEdges
+      .filter(e => e.size >= minTradeSize)
+      .filter(e => venueFilter === 'all' || e.venue === venueFilter)
+      .filter(e => e.total_edge_usd >= minEdge)
+      .slice(0, 30),
+    [allEdges, minTradeSize, venueFilter, minEdge],
+  )
   const filteredLiquidity = useMemo(
     () => allLiquidity.filter(r => venueFilter === 'all' || r.venue === venueFilter).slice(0, 30),
     [allLiquidity, venueFilter],
@@ -482,7 +495,7 @@ export default function ScannerPage() {
       {err && <div className="m-4 p-3 bg-red-900/30 border border-red-700 rounded text-sm text-red-200">{err}</div>}
 
       {/* Top rankings */}
-      <div className="grid md:grid-cols-2 gap-3 p-3 md:p-4">
+      <div className="grid md:grid-cols-3 gap-3 p-3 md:p-4">
         <div className="bg-gray-900 border border-amber-700/30 rounded-lg overflow-hidden">
           <div className="px-3 py-2 border-b border-gray-800 flex items-baseline gap-2">
             <span className="text-xs uppercase tracking-wide text-amber-300 font-semibold">Top Edge ($)</span>
@@ -565,6 +578,61 @@ export default function ScannerPage() {
                     </td>
                     <td className="px-2 py-1.5 text-right font-mono text-gray-500">{fmtSize(r.plus1_size)}</td>
                     <td className="px-2 py-1.5 text-right font-mono font-semibold text-blue-300">{fmtUsd(r.notional_usd)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Substantial Edges: filtered to size ≥ N */}
+        <div className="bg-gray-900 border border-emerald-700/30 rounded-lg overflow-hidden">
+          <div className="px-3 py-2 border-b border-gray-800 flex items-baseline gap-2">
+            <span className="text-xs uppercase tracking-wide text-emerald-300 font-semibold">Substantial Edge</span>
+            <span className="text-[10px] text-gray-500">size ≥</span>
+            <input type="number" value={minTradeSize}
+                   onChange={e => setMinTradeSize(Math.max(1, parseInt(e.target.value || '1') || 1))}
+                   className="w-16 px-1.5 py-0.5 bg-gray-800 border border-gray-700 rounded text-emerald-200 font-mono text-[10px]" />
+            <span className="text-[10px] text-gray-600">{substantialEdges.length} hits</span>
+          </div>
+          <div className="max-h-[380px] overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-900 text-gray-500 sticky top-0 z-10">
+                <tr className="border-b border-gray-800">
+                  <th className="px-2 py-1.5 text-left font-normal">Event · Market · Outcome</th>
+                  <th className="px-2 py-1.5 text-right font-normal">Venue</th>
+                  <th className="px-2 py-1.5 text-right font-normal">Side @ Px</th>
+                  <th className="px-2 py-1.5 text-right font-normal">Sz</th>
+                  <th className="px-2 py-1.5 text-right font-normal text-amber-300">¢/sh</th>
+                  <th className="px-2 py-1.5 text-right font-normal">Edge $</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-900">
+                {substantialEdges.length === 0 && (
+                  <tr><td colSpan={6} className="px-2 py-4 text-center text-gray-600">
+                    No edges with size ≥ {minTradeSize}. Lower the threshold or wait for thicker books.
+                  </td></tr>
+                )}
+                {substantialEdges.map((e, i) => (
+                  <tr key={i} className="hover:bg-gray-900/60 transition">
+                    <td className="px-2 py-1.5">
+                      <div className="text-gray-300 truncate max-w-[220px]" title={e.event_title}>{e.event_title.replace('LoL: ', '')}</div>
+                      <div className="text-[10px] text-gray-500">{e.market_label} · {e.outcome}</div>
+                    </td>
+                    <td className="px-2 py-1.5 text-right">
+                      <span className={`text-[10px] uppercase font-semibold ${e.venue === 'pm' ? 'text-blue-300' : 'text-purple-300'}`}>{e.venue}</span>
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-mono">
+                      <span className={e.side === 'bid' ? 'text-green-400' : 'text-red-400'}>{e.side.toUpperCase()}</span>{' '}
+                      <span className="text-gray-300">{fmtCent(e.price)}</span>
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-mono text-gray-300 font-semibold">{fmtSize(e.size)}</td>
+                    <td className={`px-2 py-1.5 text-right font-mono ${epsBgClass(e.edge_per_share)}`}>
+                      {(e.edge_per_share * 100).toFixed(1)}c
+                    </td>
+                    <td className={`px-2 py-1.5 text-right font-mono font-semibold ${edgeBgClass(e.total_edge_usd)}`}>
+                      {fmtUsd(e.total_edge_usd)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
