@@ -229,36 +229,105 @@ def _paginate(path: str, list_key: str, key_id: str, pem: str) -> list:
     return rows
 
 
-def _fetch_kalshi_realized_from_csv() -> pd.DataFrame:
-    """Read closed (realized) Kalshi LoL trades from the manually-exported
-    transactions CSV. Source of truth for historical PnL since the API's
-    /portfolio/fills caps at ~200 most-recent fills and can't reach back
-    to Feb. Realized PnL is signed cents (incl fees); attribute to the
-    close timestamp's UTC date.
+# Cutoff: CSV is frozen baseline for everything up to (and including) Apr 30 2026.
+# Anything closed on May 1 or later comes from the live API so the user doesn't
+# have to keep re-downloading the CSV.
+CSV_CUTOFF = pd.Timestamp('2026-05-01', tz='UTC')
 
-    Re-download from Kalshi UI → Activity → Download CSV when new trades
-    close, and replace data/kalshi/transactions.csv.
-    """
+
+def _fetch_kalshi_realized_from_csv() -> pd.DataFrame:
+    """Read closed Kalshi LoL trades from the one-time historical CSV.
+    Returns only rows whose close_timestamp is BEFORE CSV_CUTOFF — May+
+    comes from the API so the CSV is a never-updates baseline."""
     from pathlib import Path
     csv_path = Path(__file__).resolve().parent.parent / 'data' / 'kalshi' / 'transactions.csv'
     if not csv_path.exists():
-        print(f'  Kalshi CSV missing at {csv_path} — falling back to API only')
+        print(f'  Kalshi CSV missing at {csv_path} — skipping pre-May baseline')
         return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
     df = pd.read_csv(csv_path)
-    # Only completed trades (skip deposits/withdrawals/etc.)
     df = df[df['type'] == 'trade']
-    # LoL only
     df = df[df['market_ticker'].astype(str).str.startswith(tuple(KALSHI_PREFIXES))]
     if df.empty:
         return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
-    df['close_dt']  = pd.to_datetime(df['close_timestamp'], utc=True)
-    df['date']      = df['close_dt'].dt.date
-    df['pnl']       = df['realized_pnl_with_fees_cents'].astype(float) / 100.0
-    daily = df.groupby('date').agg(
+    df['close_dt'] = pd.to_datetime(df['close_timestamp'], utc=True)
+    df = df[df['close_dt'] < CSV_CUTOFF]
+    if df.empty:
+        return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
+    df['date'] = df['close_dt'].dt.date
+    df['pnl']  = df['realized_pnl_with_fees_cents'].astype(float) / 100.0
+    print(f"  CSV baseline: {len(df)} closed trades through {df['date'].max()}, net ${df['pnl'].sum():+,.0f}")
+    return df.groupby('date').agg(
         kalshi_pnl=('pnl', 'sum'),
         kalshi_trades=('pnl', 'size'),
     ).reset_index()
-    return daily
+
+
+def _fetch_kalshi_realized_from_api() -> pd.DataFrame:
+    """Realized PnL on closed trades from /portfolio/fills, for May 1 onwards.
+
+    The endpoint caps at ~200 most-recent fills, so this window must stay
+    small enough to fit. For each TICKER, reconstruct realized PnL as
+    closed-position rounds: when total BUY size on a side equals total
+    SELL size on that side, the position round closed and the round's
+    PnL = SUM(sell prices) - SUM(buy prices) on that side.
+
+    Attributed to the close-time of the LAST closing fill of the round.
+
+    Fees are NOT subtracted here (we don't have access to the same canonical
+    realized_pnl_with_fees_cents the CSV has). Slight overcount vs canonical
+    but only by Kalshi's modest fee schedule (~7% × p × (1-p), $0.01 floor).
+    """
+    key_id = os.environ.get('KALSHI_API_KEY', '').strip()
+    pem    = _load_kalshi_pem()
+    if not (key_id and pem):
+        return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
+    min_ts = int(CSV_CUTOFF.timestamp())
+    fills = []
+    for f in _paginate(f'/portfolio/fills?min_ts={min_ts}', 'fills', key_id, pem):
+        ticker = f.get('ticker') or f.get('market_ticker', '')
+        if not any(ticker.startswith(p) for p in KALSHI_PREFIXES):
+            continue
+        side  = (f.get('side') or '').upper()  # YES or NO
+        act   = (f.get('action') or '').upper()  # BUY or SELL
+        price = float((f.get('yes_price_dollars') if side == 'YES'
+                       else f.get('no_price_dollars')) or 0)
+        count = float(f.get('count_fp', 0) or 0)
+        fee   = float(f.get('fee_cost', 0) or 0)
+        ts    = pd.to_datetime(f.get('created_time', ''), utc=True)
+        if pd.isna(ts) or count == 0: continue
+        fills.append({'ticker': ticker, 'ts': ts, 'side': side, 'action': act,
+                      'price': price, 'count': count, 'fee': fee})
+
+    if not fills:
+        return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
+
+    # Per-ticker, per-side round-trip PnL: when realised (BUY+SELL balance),
+    # attribute round PnL to the last fill's date.
+    fills_df = pd.DataFrame(fills).sort_values('ts')
+    rows = []
+    for (tk, side), g in fills_df.groupby(['ticker', 'side']):
+        buys  = g[g['action'] == 'BUY']
+        sells = g[g['action'] == 'SELL']
+        buy_units  = float(buys['count'].sum())
+        sell_units = float(sells['count'].sum())
+        buy_cost   = float((buys['price'] * buys['count']).sum())
+        sell_proc  = float((sells['price'] * sells['count']).sum())
+        fees       = float(g['fee'].sum())
+        # Closed round only if buys and sells are balanced (within rounding)
+        if buy_units > 0 and abs(buy_units - sell_units) < 0.01:
+            pnl = sell_proc - buy_cost - fees
+            last_close = pd.to_datetime(sells['ts'].max(), utc=True)
+            rows.append({'date': last_close.date(), 'pnl': pnl, 'n': 1})
+        # Otherwise it's an open position — handled by _fetch_kalshi_unrealized_mtm
+    if not rows:
+        return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
+    realized = pd.DataFrame(rows)
+    print(f"  API realized (May+): {realized['n'].sum()} closed rounds, "
+          f"net ${realized['pnl'].sum():+,.0f}")
+    return realized.groupby('date').agg(
+        kalshi_pnl=('pnl', 'sum'),
+        kalshi_trades=('n', 'sum'),
+    ).reset_index()
 
 
 def _fetch_kalshi_unrealized_mtm() -> pd.DataFrame:
@@ -332,15 +401,20 @@ def _fetch_kalshi_unrealized_mtm() -> pd.DataFrame:
 
 
 def _fetch_kalshi() -> pd.DataFrame:
-    """Combined Kalshi PnL: historical realized from CSV + current open MTM
-    from API. Realized PnL is the canonical Kalshi number with fees; MTM
-    reflects today's mark on open positions.
+    """Combined Kalshi PnL:
+      - CSV (Feb 1 → Apr 30): canonical Kalshi-with-fees realized PnL.
+        Frozen baseline; user doesn't need to keep re-downloading.
+      - API (May 1 → today): realized PnL from /portfolio/fills (still
+        within the ~200-fill window). Approximate fees but close.
+      - API (today): mark-to-market on currently-open positions.
     """
-    realized = _fetch_kalshi_realized_from_csv()
+    pre_may  = _fetch_kalshi_realized_from_csv()
+    may_plus = _fetch_kalshi_realized_from_api()
     open_mtm = _fetch_kalshi_unrealized_mtm()
-    if realized.empty and open_mtm.empty:
+    parts = [df for df in (pre_may, may_plus, open_mtm) if not df.empty]
+    if not parts:
         return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
-    combined = pd.concat([realized, open_mtm], ignore_index=True)
+    combined = pd.concat(parts, ignore_index=True)
     return combined.groupby('date').agg(
         kalshi_pnl=('kalshi_pnl', 'sum'),
         kalshi_trades=('kalshi_trades', 'sum'),
