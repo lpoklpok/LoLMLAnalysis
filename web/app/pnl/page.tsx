@@ -222,7 +222,7 @@ export default function PnLPage() {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([ym, v]) => ({
         month: ym,
-        label: new Date(ym + '-01T00:00:00Z').toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+        label: new Date(ym + '-01T00:00:00Z').toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' }),
         ...v,
       }))
   }, [filtered])
@@ -328,7 +328,7 @@ export default function PnLPage() {
                       <tr key={d.date} className="border-b border-gray-800/60">
                         <td className="px-2 py-2 font-sans">
                           {new Date(d.date + 'T00:00:00Z').toLocaleDateString('en-US', {
-                            month: 'short', day: 'numeric', weekday: 'short',
+                            month: 'short', day: 'numeric', weekday: 'short', timeZone: 'UTC',
                           })}
                         </td>
                         <td className={`px-2 py-2 text-right ${clrFor(d.polymarket_pnl)} ${bgFor(d.polymarket_pnl, maxAbs)}`}>
