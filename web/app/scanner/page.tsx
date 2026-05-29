@@ -37,15 +37,16 @@ interface ScannerResponse {
   ms_elapsed:       number
 }
 interface EdgeRow {
-  event_title:    string
-  market_label:   string
-  outcome:        string
-  venue:          'pm' | 'kalshi'
-  side:           'bid' | 'ask'
-  price:          number
-  size:           number
-  fair:           number
-  total_edge_usd: number
+  event_title:     string
+  market_label:    string
+  outcome:         string
+  venue:           'pm' | 'kalshi'
+  side:            'bid' | 'ask'
+  price:           number
+  size:            number
+  fair:            number
+  edge_per_share:  number
+  total_edge_usd:  number
 }
 interface LiquidityRow {
   event_title:    string
@@ -141,6 +142,15 @@ function edgeBgClass(usd: number): string {
   if (usd >= 100) return 'bg-emerald-700/25 text-emerald-300'
   if (usd >= 25)  return 'bg-emerald-900/40 text-emerald-400'
   if (usd > 0)   return 'text-emerald-500'
+  return 'text-gray-700'
+}
+
+// Per-share edge color band, in DOLLARS per share. 5c+ is great, 2c+ visible.
+function epsBgClass(eps: number): string {
+  if (eps >= 0.10) return 'bg-amber-500/30 text-amber-100 ring-1 ring-amber-400/60 font-bold'
+  if (eps >= 0.05) return 'bg-amber-700/30 text-amber-200 font-semibold'
+  if (eps >= 0.02) return 'bg-amber-900/40 text-amber-300'
+  if (eps > 0)    return 'text-amber-400'
   return 'text-gray-700'
 }
 
@@ -336,6 +346,8 @@ export default function ScannerPage() {
           const fair = o.fair
           let pmEdgeUsd = 0
           let kalshiEdgeUsd = 0
+          let pmBestEps = 0       // best per-share edge on PM (in $)
+          let kalshiBestEps = 0   // best per-share edge on Kalshi (fee-net)
           const venues: Array<['pm' | 'kalshi', OutcomeBook | null]> = [['pm', pm], ['kalshi', kalshi]]
           for (const [venue, book] of venues) {
             if (!book) continue
@@ -345,15 +357,17 @@ export default function ScannerPage() {
                 const eps = fair - l.price - feeFor(l.price)
                 if (eps <= 0) break
                 const totalUsd = eps * l.size
-                allEdges.push({ event_title: ev.title, market_label: sm.market_label, outcome: o.outcome, venue, side: 'ask', price: l.price, size: l.size, fair, total_edge_usd: totalUsd })
-                if (venue === 'pm') pmEdgeUsd += totalUsd; else kalshiEdgeUsd += totalUsd
+                allEdges.push({ event_title: ev.title, market_label: sm.market_label, outcome: o.outcome, venue, side: 'ask', price: l.price, size: l.size, fair, edge_per_share: eps, total_edge_usd: totalUsd })
+                if (venue === 'pm') { pmEdgeUsd += totalUsd; if (eps > pmBestEps) pmBestEps = eps }
+                else                 { kalshiEdgeUsd += totalUsd; if (eps > kalshiBestEps) kalshiBestEps = eps }
               }
               for (const l of book.bids) {
                 const eps = l.price - fair - feeFor(l.price)
                 if (eps <= 0) break
                 const totalUsd = eps * l.size
-                allEdges.push({ event_title: ev.title, market_label: sm.market_label, outcome: o.outcome, venue, side: 'bid', price: l.price, size: l.size, fair, total_edge_usd: totalUsd })
-                if (venue === 'pm') pmEdgeUsd += totalUsd; else kalshiEdgeUsd += totalUsd
+                allEdges.push({ event_title: ev.title, market_label: sm.market_label, outcome: o.outcome, venue, side: 'bid', price: l.price, size: l.size, fair, edge_per_share: eps, total_edge_usd: totalUsd })
+                if (venue === 'pm') { pmEdgeUsd += totalUsd; if (eps > pmBestEps) pmBestEps = eps }
+                else                 { kalshiEdgeUsd += totalUsd; if (eps > kalshiBestEps) kalshiBestEps = eps }
               }
             }
             const bid = book.bids[0]
@@ -372,6 +386,7 @@ export default function ScannerPage() {
             pm_best: pm ? { bid: pm.bids[0] ?? null, ask: pm.asks[0] ?? null } : null,
             kalshi_best: kalshi ? { bid: kalshi.bids[0] ?? null, ask: kalshi.asks[0] ?? null } : null,
             pm_edge_usd: pmEdgeUsd, kalshi_edge_usd: kalshiEdgeUsd,
+            pm_best_eps: pmBestEps, kalshi_best_eps: kalshiBestEps,
           }
         })
         return { ...sm, outcomes }
@@ -482,12 +497,13 @@ export default function ScannerPage() {
                   <th className="px-2 py-1.5 text-right font-normal">Side @ Px</th>
                   <th className="px-2 py-1.5 text-right font-normal">Sz</th>
                   <th className="px-2 py-1.5 text-right font-normal">Fair</th>
+                  <th className="px-2 py-1.5 text-right font-normal text-amber-300">¢/sh</th>
                   <th className="px-2 py-1.5 text-right font-normal">Edge $</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-900">
                 {filteredEdges.length === 0 && (
-                  <tr><td colSpan={6} className="px-2 py-4 text-center text-gray-600">No edge above filter. Lower the Min edge threshold.</td></tr>
+                  <tr><td colSpan={7} className="px-2 py-4 text-center text-gray-600">No edge above filter. Lower the Min edge threshold.</td></tr>
                 )}
                 {filteredEdges.map((e, i) => (
                   <tr key={i} className="hover:bg-gray-900/60 transition">
@@ -504,6 +520,9 @@ export default function ScannerPage() {
                     </td>
                     <td className="px-2 py-1.5 text-right font-mono text-gray-400">{fmtSize(e.size)}</td>
                     <td className="px-2 py-1.5 text-right font-mono text-amber-300">{fmtCent(e.fair)}</td>
+                    <td className={`px-2 py-1.5 text-right font-mono ${epsBgClass(e.edge_per_share)}`}>
+                      {(e.edge_per_share * 100).toFixed(1)}c
+                    </td>
                     <td className={`px-2 py-1.5 text-right font-mono font-semibold ${edgeBgClass(e.total_edge_usd)}`}>
                       {fmtUsd(e.total_edge_usd)}
                     </td>
@@ -587,10 +606,10 @@ export default function ScannerPage() {
                       <th className="px-3 py-2 text-left font-normal">Market</th>
                       <th className="px-3 py-2 text-left font-normal">Outcome</th>
                       <th className="px-3 py-2 text-right font-normal">Fair</th>
-                      <th className="px-3 py-2 text-right font-normal border-l border-gray-800" colSpan={3}>
+                      <th className="px-3 py-2 text-right font-normal border-l border-gray-800" colSpan={4}>
                         <span className="text-blue-300">Polymarket</span>
                       </th>
-                      <th className="px-3 py-2 text-right font-normal border-l border-gray-800" colSpan={3}>
+                      <th className="px-3 py-2 text-right font-normal border-l border-gray-800" colSpan={4}>
                         <span className="text-purple-300">Kalshi</span> <span className="text-gray-600 normal-case text-[10px]">(combined, fee-net)</span>
                       </th>
                     </tr>
@@ -598,9 +617,11 @@ export default function ScannerPage() {
                       <th></th><th></th><th></th>
                       <th className="px-3 pb-1.5 text-right font-normal"><span className="text-green-500">BID</span></th>
                       <th className="px-3 pb-1.5 text-right font-normal"><span className="text-red-400">ASK</span></th>
+                      <th className="px-3 pb-1.5 text-right font-normal text-amber-300">Edge ¢/sh</th>
                       <th className="px-3 pb-1.5 text-right font-normal text-emerald-400">Edge $</th>
                       <th className="px-3 pb-1.5 text-right font-normal border-l border-gray-800"><span className="text-green-500">BID</span></th>
                       <th className="px-3 pb-1.5 text-right font-normal"><span className="text-red-400">ASK</span></th>
+                      <th className="px-3 pb-1.5 text-right font-normal text-amber-300">Edge ¢/sh</th>
                       <th className="px-3 pb-1.5 text-right font-normal text-emerald-400">Edge $</th>
                     </tr>
                   </thead>
@@ -609,6 +630,8 @@ export default function ScannerPage() {
                       sm.outcomes.map((o, oIdx) => {
                         const pmEdge = (o as { pm_edge_usd?: number }).pm_edge_usd ?? 0
                         const ksEdge = (o as { kalshi_edge_usd?: number }).kalshi_edge_usd ?? 0
+                        const pmEps  = (o as { pm_best_eps?: number }).pm_best_eps ?? 0
+                        const ksEps  = (o as { kalshi_best_eps?: number }).kalshi_best_eps ?? 0
                         const hasKalshiTicker = !!o.kalshi_ticker || !!o.kalshi_opp_ticker
                         return (
                         <tr key={`${smIdx}-${oIdx}`} className={oIdx === 0 ? 'bg-gray-900/40' : ''}>
@@ -621,6 +644,9 @@ export default function ScannerPage() {
                           <td className="px-3 py-2 text-right">
                             <BookCell best={o.pm_best} fair={o.fair} side="ask" venue="pm" hasTicker={true} />
                           </td>
+                          <td className={`px-3 py-2 text-right font-mono ${epsBgClass(pmEps)}`}>
+                            {pmEps > 0 ? `${(pmEps * 100).toFixed(1)}c` : '—'}
+                          </td>
                           <td className={`px-3 py-2 text-right font-mono ${edgeBgClass(pmEdge)}`}>
                             {pmEdge > 0 ? fmtUsd(pmEdge) : '—'}
                           </td>
@@ -629,6 +655,9 @@ export default function ScannerPage() {
                           </td>
                           <td className="px-3 py-2 text-right">
                             <BookCell best={o.kalshi_best} fair={o.fair} side="ask" venue="kalshi" hasTicker={hasKalshiTicker} />
+                          </td>
+                          <td className={`px-3 py-2 text-right font-mono ${epsBgClass(ksEps)}`}>
+                            {hasKalshiTicker ? (ksEps > 0 ? `${(ksEps * 100).toFixed(1)}c` : '—') : <span className="text-gray-700 italic text-[10px]">n/a</span>}
                           </td>
                           <td className={`px-3 py-2 text-right font-mono ${edgeBgClass(ksEdge)}`}>
                             {hasKalshiTicker ? (ksEdge > 0 ? fmtUsd(ksEdge) : '—') : <span className="text-gray-700 italic text-[10px]">n/a</span>}
