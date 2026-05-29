@@ -2151,7 +2151,15 @@ export default function TraderPage() {
         .sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''))
 
       setEvents(merged)
-      if (merged.length > 0) setSelectedSlug(merged[0].poly_event_slug ?? null)
+      // Honor ?slug= URL param if present and that slug is in the loaded list;
+      // otherwise default to the first (earliest) event. Lets scanner alerts /
+      // /predict / other pages deep-link straight to a specific matchup.
+      let initial: string | null = merged[0]?.poly_event_slug ?? null
+      try {
+        const urlSlug = new URLSearchParams(window.location.search).get('slug')
+        if (urlSlug && merged.some(e => e.poly_event_slug === urlSlug)) initial = urlSlug
+      } catch { /* no window — ignore */ }
+      if (initial) setSelectedSlug(initial)
       setLoadingList(false)
     }
     load()
