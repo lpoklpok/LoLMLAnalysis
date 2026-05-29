@@ -147,6 +147,36 @@ const leagueClass = (l: string) => LEAGUE_COLORS[l] ?? 'bg-gray-800 text-gray-40
 // model has thin signal there so fair values are unreliable.
 const MAJOR_LEAGUES = new Set(['LCK', 'LPL', 'LEC', 'LCS', 'EWC', 'MSI', 'Worlds', 'First Stand'])
 
+// ELO-shift helpers for the per-event slider on event cards. Mirrors the
+// /predict snap math: logit shift in 400-point ELO space, then re-derive
+// series probability via the Bo3/Bo5 polynomial. Approximate because the
+// model has many features beyond ELO, but a useful sanity check.
+const sigmoid = (z: number) => 1 / (1 + Math.exp(-z))
+const logit   = (p: number) => Math.log(Math.max(1e-6, p) / Math.max(1e-6, 1 - p))
+
+function applyEloShift(pGame: number, deltaElo: number): number {
+  return sigmoid(logit(pGame) + deltaElo * Math.log(10) / 400)
+}
+
+function pSeriesFromGame(pGame: number, bestOf: number): number {
+  if (bestOf <= 1) return pGame
+  const p = pGame
+  if (bestOf === 3) return p * p * (3 - 2 * p)
+  if (bestOf === 5) return p * p * p * (10 - 15 * p + 6 * p * p)
+  return p
+}
+
+// Inverse: solve pGame such that seriesProb(pGame, bestOf) == target.
+function pGameFromSeries(target: number, bestOf: number): number {
+  if (bestOf <= 1) return target
+  let lo = 0.0001, hi = 0.9999
+  for (let i = 0; i < 50; i++) {
+    const mid = (lo + hi) / 2
+    if (pSeriesFromGame(mid, bestOf) < target) lo = mid; else hi = mid
+  }
+  return (lo + hi) / 2
+}
+
 function edgeBgClass(usd: number): string {
   if (usd >= 500) return 'bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-400/50'
   if (usd >= 100) return 'bg-emerald-700/25 text-emerald-300'
@@ -257,6 +287,10 @@ export default function ScannerPage() {
   const [minEdge, setMinEdge] = useState<number>(0)
   const [leagueFilter, setLeagueFilter] = useState<Set<string>>(new Set())
   const [majorOnly, setMajorOnly] = useState(true)
+  // Per-event relative ELO delta on team1 (in 400-point ELO units).
+  // Positive = team1 stronger than model thinks. Affects the Match Winner
+  // fair only (other submarkets keep the API fair).
+  const [eloAdj, setEloAdj] = useState<Record<string, number>>({})
   const [search, setSearch] = useState<string>('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [venueFilter, setVenueFilter] = useState<'all' | 'pm' | 'kalshi'>('all')
@@ -706,6 +740,23 @@ export default function ScannerPage() {
         )}
         {visibleEvents.map(ev => {
           const isCollapsed = collapsed.has(ev.slug)
+          // Per-event ELO shift (Δ on team1 in 400-point units). Affects Match Winner only.
+          const delta = eloAdj[ev.slug] ?? 0
+          // Base per-game prob from team1's perspective.
+          const baseGameT1 = ev.pred_blue_win == null
+            ? null
+            : (ev.pred_blue_team === ev.team1 ? ev.pred_blue_win : 1 - ev.pred_blue_win)
+          const adjGameT1   = baseGameT1 == null ? null : applyEloShift(baseGameT1, delta)
+          const adjSeriesT1 = adjGameT1   == null ? null : pSeriesFromGame(adjGameT1, ev.best_of)
+          // Find team1's PM match-winner midpoint to enable Snap-to-market.
+          const mwSm = ev.submarkets.find(sm => sm.market_label === 'Match Winner')
+          const mwT1Out = mwSm?.outcomes?.[0]  // outcome[0] is team1
+          const pmBid = mwT1Out?.pm_best?.bid?.price
+          const pmAsk = mwT1Out?.pm_best?.ask?.price
+          const pmMidT1 = pmBid != null && pmAsk != null ? (pmBid + pmAsk) / 2 : (pmBid ?? pmAsk ?? null)
+          const snapDelta = (baseGameT1 != null && pmMidT1 != null)
+            ? Math.round(((400 / Math.log(10)) * (logit(pGameFromSeries(pmMidT1, ev.best_of)) - logit(baseGameT1))))
+            : null
           return (
             <div key={ev.slug} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
               <button onClick={() => toggleCollapsed(ev.slug)} className="w-full px-4 py-3 border-b border-gray-800 flex items-center gap-3 hover:bg-gray-900/80 transition">
@@ -714,7 +765,15 @@ export default function ScannerPage() {
                 <span className="text-[10px] text-gray-500">Bo{ev.best_of}</span>
                 <span className="text-sm font-medium text-gray-100">{ev.team1} <span className="text-gray-600 mx-1">vs</span> {ev.team2}</span>
                 <span className="ml-auto flex items-center gap-3 text-[11px]">
-                  <span className="text-gray-500">G1 prior <span className="text-gray-300 font-mono">{fmtCent(ev.pred_blue_win)}</span></span>
+                  <span className="text-gray-500">
+                    G1 prior <span className="text-gray-300 font-mono">{fmtCent(baseGameT1)}</span>
+                    {delta !== 0 && adjGameT1 != null && (
+                      <> <span className="text-amber-300">→ {fmtCent(adjGameT1)}</span></>
+                    )}
+                  </span>
+                  {pmMidT1 != null && (
+                    <span className="text-gray-500">PM mid <span className="text-blue-300 font-mono">{fmtCent(pmMidT1)}</span></span>
+                  )}
                   {ev.total_edge_usd > 0 && (
                     <span className={`px-2 py-0.5 rounded-md font-semibold font-mono ${edgeBgClass(ev.total_edge_usd)}`}>
                       Total edge {fmtUsd(ev.total_edge_usd)}
@@ -722,6 +781,31 @@ export default function ScannerPage() {
                   )}
                 </span>
               </button>
+
+              {/* ELO slider strip — only render when expanded to save vertical space */}
+              {!isCollapsed && (
+                <div className="px-4 py-2 border-b border-gray-800 bg-gray-900/40 flex items-center gap-3 text-[11px]">
+                  <span className="text-gray-500 uppercase tracking-wide text-[10px]">ELO Δ {ev.team1} (vs {ev.team2}):</span>
+                  <input type="range" min={-300} max={300} step={10} value={delta}
+                         onChange={e => setEloAdj(s => ({ ...s, [ev.slug]: parseInt(e.target.value) }))}
+                         className="flex-1 accent-emerald-500" />
+                  <input type="number" step={10} value={delta}
+                         onChange={e => setEloAdj(s => ({ ...s, [ev.slug]: parseInt(e.target.value) || 0 }))}
+                         className="w-16 bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 font-mono text-right text-gray-200" />
+                  {delta !== 0 && (
+                    <button onClick={() => setEloAdj(s => { const n = { ...s }; delete n[ev.slug]; return n })}
+                            className="text-[10px] text-gray-500 hover:text-gray-300">reset</button>
+                  )}
+                  {snapDelta != null && Math.abs(snapDelta - delta) > 2 && (
+                    <button onClick={() => setEloAdj(s => ({ ...s, [ev.slug]: snapDelta }))}
+                            className="text-[10px] uppercase tracking-wide px-2 py-1 rounded bg-amber-600/20 text-amber-300 hover:bg-amber-600/30 border border-amber-700/40"
+                            title={`Apply ${snapDelta >= 0 ? '+' : ''}${snapDelta} ELO to ${ev.team1} so Match Winner fair matches the PM midpoint (${(pmMidT1!*100).toFixed(1)}%). Approximation.`}>
+                      Snap → PM ({snapDelta >= 0 ? '+' : ''}{snapDelta})
+                    </button>
+                  )}
+                  <span className="text-gray-600 text-[10px]">match winner fair only</span>
+                </div>
+              )}
 
               {!isCollapsed && (
                 <table className="w-full text-xs">
@@ -757,16 +841,27 @@ export default function ScannerPage() {
                         const pmEps  = (o as { pm_best_eps?: number }).pm_best_eps ?? 0
                         const ksEps  = (o as { kalshi_best_eps?: number }).kalshi_best_eps ?? 0
                         const hasKalshiTicker = !!o.kalshi_ticker || !!o.kalshi_opp_ticker
+                        // Override Match Winner fair if user has shifted ELO. Other submarkets
+                        // keep their API fair (V1 — see commit msg).
+                        const overrideFair = (delta !== 0 && sm.market_label === 'Match Winner' && adjSeriesT1 != null)
+                          ? (oIdx === 0 ? adjSeriesT1 : 1 - adjSeriesT1)
+                          : null
+                        const fairDisp = overrideFair ?? o.fair
                         return (
                         <tr key={`${smIdx}-${oIdx}`} className={oIdx === 0 ? 'bg-gray-900/40' : ''}>
                           <td className="px-3 py-2 text-gray-400">{oIdx === 0 ? sm.market_label : ''}</td>
                           <td className="px-3 py-2 text-gray-200">{o.outcome}</td>
-                          <td className="px-3 py-2 text-right font-mono text-amber-300 font-semibold">{fmtCent(o.fair)}</td>
+                          <td className="px-3 py-2 text-right font-mono text-amber-300 font-semibold">
+                            {fmtCent(fairDisp)}
+                            {overrideFair != null && o.fair != null && (
+                              <span className="ml-1 text-[9px] text-gray-500">(was {fmtCent(o.fair)})</span>
+                            )}
+                          </td>
                           <td className="px-3 py-2 text-right border-l border-gray-800">
-                            <BookCell best={o.pm_best} fair={o.fair} side="bid" venue="pm" hasTicker={true} />
+                            <BookCell best={o.pm_best} fair={fairDisp} side="bid" venue="pm" hasTicker={true} />
                           </td>
                           <td className="px-3 py-2 text-right">
-                            <BookCell best={o.pm_best} fair={o.fair} side="ask" venue="pm" hasTicker={true} />
+                            <BookCell best={o.pm_best} fair={fairDisp} side="ask" venue="pm" hasTicker={true} />
                           </td>
                           <td className={`px-3 py-2 text-right font-mono ${epsBgClass(pmEps)}`}>
                             {pmEps > 0 ? `${(pmEps * 100).toFixed(1)}c` : '—'}
@@ -775,10 +870,10 @@ export default function ScannerPage() {
                             {pmEdge > 0 ? fmtUsd(pmEdge) : '—'}
                           </td>
                           <td className="px-3 py-2 text-right border-l border-gray-800">
-                            <BookCell best={o.kalshi_best} fair={o.fair} side="bid" venue="kalshi" hasTicker={hasKalshiTicker} />
+                            <BookCell best={o.kalshi_best} fair={fairDisp} side="bid" venue="kalshi" hasTicker={hasKalshiTicker} />
                           </td>
                           <td className="px-3 py-2 text-right">
-                            <BookCell best={o.kalshi_best} fair={o.fair} side="ask" venue="kalshi" hasTicker={hasKalshiTicker} />
+                            <BookCell best={o.kalshi_best} fair={fairDisp} side="ask" venue="kalshi" hasTicker={hasKalshiTicker} />
                           </td>
                           <td className={`px-3 py-2 text-right font-mono ${epsBgClass(ksEps)}`}>
                             {hasKalshiTicker ? (ksEps > 0 ? `${(ksEps * 100).toFixed(1)}c` : '—') : <span className="text-gray-700 italic text-[10px]">n/a</span>}
