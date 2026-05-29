@@ -551,9 +551,9 @@ function MainPanel({
     .map(t => ({ ...t, pos: positionByToken.get(t.token_id) }))
     .filter(t => t.pos && Math.abs(num(t.pos.size)) > 0.0001)
 
-  // Kalshi positions per ticker — for delta calc on Kalshi side. SSE-driven
-  // instant updates on fill events, plus a 2s safety-net poll.
-  const [kalshiPositions, setKalshiPositions] = useState<Record<string, number>>({})
+  // Kalshi positions per ticker. position is signed (+ = long YES, − = long NO);
+  // exposure is $ cost basis (lets us derive avg cost / share for MTM PnL).
+  const [kalshiPositions, setKalshiPositions] = useState<Record<string, { position: number; exposure_usd: number; realized_pnl: number; fees: number }>>({})
   useEffect(() => {
     // Only fetch if event has any Kalshi tickers
     const hasKalshi = detail?.submarkets?.some(s => s.kalshi_sides?.some(k => k?.ticker))
@@ -563,15 +563,28 @@ function MainPanel({
       try {
         const r = await fetch('/api/kalshi/positions', { cache: 'no-store' })
         if (!r.ok) return
-        const d = await r.json() as { market_positions?: Array<{ ticker: string; position_fp?: string; position?: number }> }
+        const d = await r.json() as {
+          market_positions?: Array<{
+            ticker: string
+            position_fp?: string
+            position?: number
+            market_exposure_dollars?: string
+            realized_pnl_dollars?: string
+            fees_paid_dollars?: string
+          }>
+        }
         if (cancelled) return
-        const m: Record<string, number> = {}
+        const m: Record<string, { position: number; exposure_usd: number; realized_pnl: number; fees: number }> = {}
         for (const p of d.market_positions ?? []) {
-          // Kalshi field is `position_fp` (signed string, e.g. "2.00" = long YES, "-3.50" = long NO).
-          // Fall back to `position` for forward compat if API ever returns number.
           const raw = p.position_fp != null ? parseFloat(p.position_fp) :
                        p.position    != null ? Number(p.position) : 0
-          if (Number.isFinite(raw)) m[p.ticker] = raw
+          if (!Number.isFinite(raw)) continue
+          m[p.ticker] = {
+            position:     raw,
+            exposure_usd: parseFloat(p.market_exposure_dollars ?? '0') || 0,
+            realized_pnl: parseFloat(p.realized_pnl_dollars     ?? '0') || 0,
+            fees:         parseFloat(p.fees_paid_dollars        ?? '0') || 0,
+          }
         }
         setKalshiPositions(m)
       } catch { /* ignore */ }
@@ -676,8 +689,8 @@ function MainPanel({
       const kT2Ticker = sm.kalshi_sides[1 - t1Idx]?.ticker
       // Long team1 = +YES on t1 ticker, -NO on t1 ticker, -YES on t2 ticker, +NO on t2 ticker
       // Equivalent to: kT1Pos - kT2Pos  (where pos = yes count - no count)
-      const kT1 = kT1Ticker ? (kalshiPositions[kT1Ticker] ?? 0) : 0
-      const kT2 = kT2Ticker ? (kalshiPositions[kT2Ticker] ?? 0) : 0
+      const kT1 = kT1Ticker ? (kalshiPositions[kT1Ticker]?.position ?? 0) : 0
+      const kT2 = kT2Ticker ? (kalshiPositions[kT2Ticker]?.position ?? 0) : 0
       return (pmT1 - pmT2) + (kT1 - kT2)
     }
 
@@ -699,7 +712,7 @@ function MainPanel({
         direct_pm = (t1Tok ? num(positionByToken.get(t1Tok)?.size) : 0) - (t2Tok ? num(positionByToken.get(t2Tok)?.size) : 0)
         const kT1 = gw.kalshi_sides[t1Idx]?.ticker
         const kT2 = gw.kalshi_sides[1 - t1Idx]?.ticker
-        direct_kalshi = (kT1 ? (kalshiPositions[kT1] ?? 0) : 0) - (kT2 ? (kalshiPositions[kT2] ?? 0) : 0)
+        direct_kalshi = (kT1 ? (kalshiPositions[kT1]?.position ?? 0) : 0) - (kT2 ? (kalshiPositions[kT2]?.position ?? 0) : 0)
       }
       const mw_contrib = mwNetT1 * deltaPS
       const total_t1 = mw_contrib + direct_pm + direct_kalshi
@@ -739,14 +752,72 @@ function MainPanel({
         </button>
       </div>
 
-      {/* Positions banner — only renders if there are open positions in this event */}
-      {eventPositions.length > 0 && (
+      {/* Open positions banner — PM + Kalshi positions for this event. */}
+      {(() => {
+        // Indexed lookup by ticker for the rows on this event (kalshi_mid + outcome label).
+        type KalshiInfo = { yes_mid: number | null; outcome_label: string; market_label: string }
+        const ksByTicker = new Map<string, KalshiInfo>()
+        for (const r of rows) {
+          if (!r.kalshi_bid && !r.kalshi_ask && !r.kalshi_mid) continue
+          // detail.submarkets has the matching kalshi tickers via kalshi_sides;
+          // find the ticker that pairs with this row's outcome.
+          for (const sm of detail?.submarkets ?? []) {
+            if (sm.market_type !== r.market_type) continue
+            const idx = sm.outcomes.findIndex(o => o === r.outcome_label)
+            if (idx < 0) continue
+            const ticker = sm.kalshi_sides?.[idx]?.ticker
+            if (ticker) ksByTicker.set(ticker, { yes_mid: r.kalshi_mid, outcome_label: r.outcome_label, market_label: r.market_label })
+          }
+        }
+        // Build Kalshi position items for this event's tickers (non-zero only).
+        type KalshiPosItem = {
+          key: string
+          ticker: string
+          side: 'YES' | 'NO'
+          contracts: number       // absolute count
+          avgCost: number         // avg cost per contract
+          currentValue: number    // contracts * (yes_mid or 1-yes_mid)
+          costBasis: number       // contracts * avgCost
+          mtm: number             // currentValue - costBasis
+          realized: number
+          fees: number
+          outcome_label: string
+          market_label: string
+        }
+        const ksItems: KalshiPosItem[] = []
+        for (const [ticker, info] of ksByTicker) {
+          const p = kalshiPositions[ticker]
+          if (!p || p.position === 0) continue
+          const contracts = Math.abs(p.position)
+          const avgCost = contracts > 0 ? p.exposure_usd / contracts : 0
+          const isLongYes = p.position > 0
+          const ysMid = info.yes_mid ?? avgCost  // fall back to avg cost if no mid (assume break-even)
+          const mid = isLongYes ? ysMid : (1 - ysMid)
+          const currentValue = contracts * mid
+          const costBasis = p.exposure_usd
+          ksItems.push({
+            key: `k-${ticker}`,
+            ticker,
+            side: isLongYes ? 'YES' : 'NO',
+            contracts, avgCost,
+            currentValue, costBasis,
+            mtm: currentValue - costBasis,
+            realized: p.realized_pnl,
+            fees: p.fees,
+            outcome_label: info.outcome_label,
+            market_label: info.market_label,
+          })
+        }
+        const hasAny = eventPositions.length > 0 || ksItems.length > 0
+        if (!hasAny) return null
+        return (
         <div className="bg-gradient-to-r from-blue-950/60 to-purple-950/60 border border-blue-900/60 rounded-xl p-4">
           <div className="text-xs uppercase tracking-wide text-blue-300 mb-2 flex items-baseline gap-3">
-            <span>Open positions in this event</span>
-            <span className="text-[10px] text-gray-500 normal-case">live · refreshes every 5s</span>
+            <span>Open positions in this event ({eventPositions.length + ksItems.length})</span>
+            <span className="text-[10px] text-gray-500 normal-case">PM + Kalshi · live · refreshes every 5s</span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+            {/* Polymarket rows */}
             {eventPositions.map(t => {
               const size = num(t.pos!.size)
               const avg  = num(t.pos!.avgPrice)
@@ -787,9 +858,39 @@ function MainPanel({
                 </div>
               )
             })}
+            {/* Kalshi rows */}
+            {ksItems.map(k => {
+              const mtmColor = k.mtm >= 0 ? 'text-green-400' : 'text-red-400'
+              const totalPnl = k.mtm + k.realized - k.fees
+              const totalColor = totalPnl >= 0 ? 'text-green-500' : 'text-red-500'
+              return (
+                <div key={k.key} className="bg-gray-900/60 border border-purple-900/60 rounded-md px-3 py-2">
+                  <div className="flex items-baseline justify-between">
+                    <div className="font-medium text-gray-100">
+                      <span className="text-[10px] uppercase tracking-wide text-purple-300 mr-1.5">kalshi</span>
+                      {k.outcome_label} · {k.side}
+                    </div>
+                    <div className="text-[10px] text-gray-500">{k.market_label}</div>
+                  </div>
+                  <div className="flex items-baseline gap-3 mt-1 text-xs font-mono">
+                    <span className="text-gray-400">{k.contracts.toFixed(0)} @ {k.avgCost.toFixed(3)}</span>
+                    <span className={mtmColor}>
+                      mtm {k.mtm >= 0 ? '+' : ''}${k.mtm.toFixed(2)}
+                    </span>
+                    {(k.realized !== 0 || k.fees !== 0) && (
+                      <span className={totalColor}>
+                        net {totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}
+                        <span className="text-gray-500 ml-1">(rl ${k.realized.toFixed(2)} − fees ${k.fees.toFixed(2)})</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
           </div>
         </div>
-      )}
+        )
+      })()}
 
       {/* Game-level delta tracker */}
       {gameDeltas && (gameDeltas.mwNetT1 !== 0 || gameDeltas.rows.some(r => r.direct_pm !== 0 || r.direct_kalshi !== 0)) && (
