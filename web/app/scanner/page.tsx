@@ -36,6 +36,22 @@ interface ScannerResponse {
   generated_at:     number
   ms_elapsed:       number
 }
+// Snapshot from kw-lol-live-predictor (one entry per active game). Used to
+// override the static pre-match fair while a game is in progress.
+interface LiveSnapshot {
+  game_id: string
+  team_a_name: string
+  team_b_name: string
+  blue_team_id: string | null
+  red_team_id: string | null
+  team_a_id: string
+  team_b_id: string
+  game_number: number
+  state: string
+  p_adj: number              // adjusted in-game win prob for blue team
+  updated_ts: number
+}
+
 interface EventRef {
   team1: string
   team2: string
@@ -220,6 +236,37 @@ function seriesDistribution(pG1: number, bestOf: number): Map<string, number> {
   return dist
 }
 
+// Like seriesDistribution but overrides game `liveGameNum` with `pLive` (the
+// in-game team1 win prob from the live model). Other games use the static
+// G2-shrinkage formula. Use when a specific game in the series is live and
+// you want fairs to reflect the current in-game state.
+function seriesDistributionLive(
+  pStatic: number, bestOf: number,
+  startT1Wins: number, startT2Wins: number,
+  liveGameNum: number, pLive: number,
+): Map<string, number> {
+  const dist = new Map<string, number>()
+  if (bestOf <= 1) { dist.set('t1_1', pLive); dist.set('t2_1', 1 - pLive); return dist }
+  const z = Math.log(pStatic / (1 - pStatic))
+  const g2_t1won = 1 / (1 + Math.exp(-(ALPHA_G2 * z - BETA_DA)))
+  const g2_t2won = 1 / (1 + Math.exp(-(ALPHA_G2 * z + BETA_DA)))
+  const needed = Math.ceil(bestOf / 2)
+  function walk(t1w: number, t2w: number, prob: number, prev: 't1' | 't2' | null) {
+    if (t1w === needed) { const k = `t1_${t1w + t2w}`; dist.set(k, (dist.get(k) ?? 0) + prob); return }
+    if (t2w === needed) { const k = `t2_${t1w + t2w}`; dist.set(k, (dist.get(k) ?? 0) + prob); return }
+    const gnum = t1w + t2w + 1
+    let p: number
+    if      (gnum === liveGameNum) p = pLive
+    else if (gnum === 1)           p = pStatic
+    else if (gnum === 2)           p = prev === 't1' ? g2_t1won : g2_t2won
+    else                           p = pStatic
+    walk(t1w + 1, t2w, prob * p,       't1')
+    walk(t1w, t2w + 1, prob * (1 - p), 't2')
+  }
+  walk(startT1Wins, startT2Wins, 1, null)
+  return dist
+}
+
 function pHandicap(dist: Map<string, number>, bestOf: number, handicapTeam1: number): number {
   const neededT1 = Math.ceil(bestOf / 2)
   let p = 0
@@ -272,6 +319,8 @@ function adjustedFair(
   bestOf: number,
   adjPGameT1: number,
   adjDist: Map<string, number>,
+  liveGameNum: number | null = null,
+  pLiveT1: number | null = null,
 ): number | null {
   const label = sm.market_label
   const out0  = sm.outcomes[0]?.outcome ?? ''
@@ -283,7 +332,13 @@ function adjustedFair(
     return oIdx === 0 ? f0 : 1 - f0
   }
   if (label.startsWith('Game ') && label.endsWith(' Winner')) {
-    const f0 = out0IsT1 ? adjPGameT1 : 1 - adjPGameT1
+    // For the in-progress game, use the live per-game prob; for other games,
+    // the static (ELO-adjusted) prob.
+    const gameNumMatch = /Game (\d+) Winner/.exec(label)
+    const gnum = gameNumMatch ? parseInt(gameNumMatch[1], 10) : null
+    const useLive = liveGameNum != null && pLiveT1 != null && gnum === liveGameNum
+    const pT1 = useLive ? pLiveT1 : adjPGameT1
+    const f0 = out0IsT1 ? pT1 : 1 - pT1
     return oIdx === 0 ? f0 : 1 - f0
   }
   if (label.startsWith('Game Handicap')) {
@@ -421,6 +476,8 @@ export default function ScannerPage() {
   // Positive = team1 stronger than model thinks. Affects the Match Winner
   // fair only (other submarkets keep the API fair).
   const [eloAdj, setEloAdj] = useState<Record<string, number>>({})
+  // Live snapshots keyed by game_id, populated by SSE from kw-lol-live-predictor.
+  const [liveSnaps, setLiveSnaps] = useState<Map<string, LiveSnapshot>>(new Map())
   const [search, setSearch] = useState<string>('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [venueFilter, setVenueFilter] = useState<'all' | 'pm' | 'kalshi'>('all')
@@ -544,6 +601,58 @@ export default function ScannerPage() {
     return () => { es.close() }
   }, [events.length])
 
+  // ── LoL live predictor SSE ──────────────────────────────────────────
+  // Subscribes to /api/lol/live-stream → kw-lol-live-predictor /stream.
+  // Each message is a GameSnapshot for one active game. We index by game_id
+  // so we can look up the live state for an event in render.
+  useEffect(() => {
+    const es = new EventSource('/api/lol/live-stream')
+    es.onmessage = (ev) => {
+      try {
+        const d = JSON.parse(ev.data) as LiveSnapshot
+        if (!d.game_id) return
+        setLiveSnaps(prev => { const n = new Map(prev); n.set(d.game_id, d); return n })
+      } catch { /* swallow */ }
+    }
+    es.onerror = () => {}
+    // Safety: also pull /live-state every 30s in case SSE quietly disconnects.
+    let stopped = false
+    const safety = setInterval(async () => {
+      if (stopped) return
+      try {
+        const r = await fetch('/api/lol/live-state', { cache: 'no-store' })
+        if (!r.ok) return
+        const d = await r.json() as { games: Record<string, LiveSnapshot> }
+        const m = new Map<string, LiveSnapshot>()
+        for (const [k, v] of Object.entries(d.games ?? {})) m.set(k, v)
+        if (!stopped) setLiveSnaps(m)
+      } catch { /* swallow */ }
+    }, 30_000)
+    return () => { stopped = true; es.close(); clearInterval(safety) }
+  }, [])
+
+  // Match an event to its live snapshot by team-pair (normalize names since
+  // lolesports / Polymarket / OE all have slightly different spellings).
+  const liveForEvent = useMemo(() => {
+    const out = new Map<string, LiveSnapshot>()
+    if (liveSnaps.size === 0) return out
+    for (const ev of events) {
+      const e1 = normName(ev.team1); const e2 = normName(ev.team2)
+      // Pick the freshest snapshot matching this team-pair.
+      let best: LiveSnapshot | null = null
+      for (const s of liveSnaps.values()) {
+        if (s.state !== 'in_game') continue
+        const a = normName(s.team_a_name); const b = normName(s.team_b_name)
+        const matches =
+          (a.includes(e1) && b.includes(e2)) || (b.includes(e1) && a.includes(e2)) ||
+          (e1.includes(a) && e2.includes(b)) || (e1.includes(b) && e2.includes(a))
+        if (matches && (!best || s.updated_ts > best.updated_ts)) best = s
+      }
+      if (best) out.set(ev.slug, best)
+    }
+    return out
+  }, [liveSnaps, events])
+
   // ── Derive everything client-side ───────────────────────────────────
   const { rendered, allEdges, allLiquidity, leagues } = useMemo(() => {
     const allEdges: EdgeRow[] = []
@@ -628,14 +737,20 @@ export default function ScannerPage() {
   }, [events, pmBooks, kalshiBooks])
 
   // ── Apply filters ───────────────────────────────────────────────────
-  // Already-started events clog up the view with markets that are mid-game
-  // (or sometimes resolved) — pre-match model fair values are unreliable
-  // once a game is in progress. Filter them out everywhere.
-  const isPreMatch = (date?: string) => !date || new Date(date).getTime() > Date.now()
+  // Already-started events with NO live data clog up the view (pre-match
+  // model fair is unreliable once a game starts). Keep them only when we
+  // have a live snapshot for the matchup — then fairs come from the live
+  // predictor and the event is still actionable.
+  const isPreMatchOrLive = (slug: string | undefined, date?: string) => {
+    if (!date) return true
+    if (new Date(date).getTime() > Date.now()) return true
+    return slug != null && liveForEvent.has(slug)
+  }
+  const isPreMatch = (date?: string) => isPreMatchOrLive(undefined, date)
 
   const visibleEvents = useMemo(() => {
     return rendered
-      .filter(ev => isPreMatch(ev.date))
+      .filter(ev => isPreMatchOrLive(ev.slug, ev.date))
       .filter(ev => !majorOnly || MAJOR_LEAGUES.has(ev.league))
       .filter(ev => leagueFilter.size === 0 || leagueFilter.has(ev.league))
       .filter(ev => !search || ev.title.toLowerCase().includes(search.toLowerCase()))
@@ -925,8 +1040,29 @@ export default function ScannerPage() {
             : (ev.pred_blue_team === ev.team1 ? ev.pred_blue_win : 1 - ev.pred_blue_win)
           const adjGameT1   = baseGameT1 == null ? null : applyEloShift(baseGameT1, delta)
           const adjSeriesT1 = adjGameT1   == null ? null : pSeriesFromGame(adjGameT1, ev.best_of)
-          // Full distribution — used to recompute Game N / Handicap / O/U fairs.
-          const adjDist     = adjGameT1   == null ? null : seriesDistribution(adjGameT1, ev.best_of)
+          // Live overlay: if there's a matching live game from kw-lol-live-predictor,
+          // substitute its in-game prob for the current game in the series
+          // distribution. Other games (G2+, or G1 if live game is G2/3) use the
+          // static (ELO-adjusted) per-game prob.
+          const liveSnap = liveForEvent.get(ev.slug)
+          let pLiveT1: number | null = null
+          if (liveSnap && adjGameT1 != null) {
+            const blueId = liveSnap.blue_team_id
+            const blueIsA = blueId !== null ? blueId === liveSnap.team_a_id : true
+            const blueName = blueIsA ? liveSnap.team_a_name : liveSnap.team_b_name
+            const t1IsBlue = normName(ev.team1).includes(normName(blueName)) ||
+                             normName(blueName).includes(normName(ev.team1))
+            pLiveT1 = t1IsBlue ? liveSnap.p_adj : 1 - liveSnap.p_adj
+          }
+          // V1 scope: handle only the case where the LIVE GAME IS GAME 1
+          // (series score 0-0). For game 2+ live we'd need to infer prior
+          // game winners from PM mids — TODO. Falls back to static dist.
+          const isLiveG1 = liveSnap?.state === 'in_game' && liveSnap?.game_number === 1
+          const adjDist     = adjGameT1 == null
+            ? null
+            : (isLiveG1 && pLiveT1 != null
+              ? seriesDistributionLive(adjGameT1, ev.best_of, 0, 0, 1, pLiveT1)
+              : seriesDistribution(adjGameT1, ev.best_of))
           // Find team1's PM match-winner midpoint to enable Snap-to-market.
           const mwSm = ev.submarkets.find(sm => sm.market_label === 'Match Winner')
           const mwT1Out = mwSm?.outcomes?.[0]  // outcome[0] is team1
@@ -959,6 +1095,12 @@ export default function ScannerPage() {
                   )
                 })()}
                 <span className="text-sm font-medium text-gray-100">{ev.team1} <span className="text-gray-600 mx-1">vs</span> {ev.team2}</span>
+                {liveSnap && (
+                  <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-red-900/60 text-red-300 border border-red-700/40 font-bold"
+                        title={`Live: G${liveSnap.game_number}, p_adj=${(liveSnap.p_adj*100).toFixed(1)}% on ${liveSnap.team_a_name === ev.team1 || liveSnap.team_b_name === ev.team1 ? 'blue side' : 'opp side'}`}>
+                    🔴 LIVE G{liveSnap.game_number}
+                  </span>
+                )}
                 <span className="ml-auto flex items-center gap-3 text-[11px]">
                   <span className="text-gray-500">
                     G1 prior <span className="text-gray-300 font-mono">{fmtCent(baseGameT1)}</span>
@@ -1036,11 +1178,14 @@ export default function ScannerPage() {
                         const pmEps  = (o as { pm_best_eps?: number }).pm_best_eps ?? 0
                         const ksEps  = (o as { kalshi_best_eps?: number }).kalshi_best_eps ?? 0
                         const hasKalshiTicker = !!o.kalshi_ticker || !!o.kalshi_opp_ticker
-                        // ELO slider override: recompute fair for ALL submarket types from
-                        // the adjusted series distribution. Falls back to API fair for
-                        // unrecognized submarkets.
-                        const overrideFair = (delta !== 0 && adjGameT1 != null && adjDist != null)
-                          ? adjustedFair(sm, oIdx, ev.team1, ev.team2, ev.best_of, adjGameT1, adjDist)
+                        // Recompute fair when EITHER:
+                        //   - ELO slider is shifted (delta != 0), OR
+                        //   - A live game is in progress (pLiveT1 set via SSE)
+                        // adjDist already reflects live distribution when isLiveG1.
+                        const hasLive = pLiveT1 != null && isLiveG1
+                        const overrideFair = ((delta !== 0 || hasLive) && adjGameT1 != null && adjDist != null)
+                          ? adjustedFair(sm, oIdx, ev.team1, ev.team2, ev.best_of, adjGameT1, adjDist,
+                                         hasLive ? liveSnap!.game_number : null, pLiveT1)
                           : null
                         const fairDisp = overrideFair ?? o.fair
                         return (
