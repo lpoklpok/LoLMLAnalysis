@@ -36,8 +36,13 @@ interface ScannerResponse {
   generated_at:     number
   ms_elapsed:       number
 }
-interface EdgeRow {
-  event_title:     string
+interface EventRef {
+  team1: string
+  team2: string
+  best_of: number
+  league: string
+}
+interface EdgeRow extends EventRef {
   market_label:    string
   outcome:         string
   venue:           'pm' | 'kalshi'
@@ -48,8 +53,7 @@ interface EdgeRow {
   edge_per_share:  number
   total_edge_usd:  number
 }
-interface LiquidityRow {
-  event_title:    string
+interface LiquidityRow extends EventRef {
   market_label:   string
   outcome:        string
   venue:          'pm' | 'kalshi'
@@ -360,7 +364,7 @@ export default function ScannerPage() {
                 const eps = fair - l.price - feeFor(l.price)
                 if (eps <= 0) break
                 const totalUsd = eps * l.size
-                allEdges.push({ event_title: ev.title, market_label: sm.market_label, outcome: o.outcome, venue, side: 'ask', price: l.price, size: l.size, fair, edge_per_share: eps, total_edge_usd: totalUsd })
+                allEdges.push({ team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, market_label: sm.market_label, outcome: o.outcome, venue, side: 'ask', price: l.price, size: l.size, fair, edge_per_share: eps, total_edge_usd: totalUsd })
                 if (venue === 'pm') { pmEdgeUsd += totalUsd; if (eps > pmBestEps) pmBestEps = eps }
                 else                 { kalshiEdgeUsd += totalUsd; if (eps > kalshiBestEps) kalshiBestEps = eps }
               }
@@ -368,7 +372,7 @@ export default function ScannerPage() {
                 const eps = l.price - fair - feeFor(l.price)
                 if (eps <= 0) break
                 const totalUsd = eps * l.size
-                allEdges.push({ event_title: ev.title, market_label: sm.market_label, outcome: o.outcome, venue, side: 'bid', price: l.price, size: l.size, fair, edge_per_share: eps, total_edge_usd: totalUsd })
+                allEdges.push({ team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, market_label: sm.market_label, outcome: o.outcome, venue, side: 'bid', price: l.price, size: l.size, fair, edge_per_share: eps, total_edge_usd: totalUsd })
                 if (venue === 'pm') { pmEdgeUsd += totalUsd; if (eps > pmBestEps) pmBestEps = eps }
                 else                 { kalshiEdgeUsd += totalUsd; if (eps > kalshiBestEps) kalshiBestEps = eps }
               }
@@ -376,12 +380,12 @@ export default function ScannerPage() {
             const bid = book.bids[0]
             if (bid) {
               const plus1 = book.bids.find(l => Math.abs(l.price - (bid.price - 0.01)) < 0.005)
-              allLiquidity.push({ event_title: ev.title, market_label: sm.market_label, outcome: o.outcome, venue, side: 'bid', best_price: bid.price, best_size: bid.size, plus1_size: plus1?.size ?? 0, notional_usd: bid.size * bid.price + (plus1?.size ?? 0) * (bid.price - 0.01) })
+              allLiquidity.push({ team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, market_label: sm.market_label, outcome: o.outcome, venue, side: 'bid', best_price: bid.price, best_size: bid.size, plus1_size: plus1?.size ?? 0, notional_usd: bid.size * bid.price + (plus1?.size ?? 0) * (bid.price - 0.01) })
             }
             const ask = book.asks[0]
             if (ask) {
               const plus1 = book.asks.find(l => Math.abs(l.price - (ask.price + 0.01)) < 0.005)
-              allLiquidity.push({ event_title: ev.title, market_label: sm.market_label, outcome: o.outcome, venue, side: 'ask', best_price: ask.price, best_size: ask.size, plus1_size: plus1?.size ?? 0, notional_usd: ask.size * ask.price + (plus1?.size ?? 0) * (ask.price + 0.01) })
+              allLiquidity.push({ team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, market_label: sm.market_label, outcome: o.outcome, venue, side: 'ask', best_price: ask.price, best_size: ask.size, plus1_size: plus1?.size ?? 0, notional_usd: ask.size * ask.price + (plus1?.size ?? 0) * (ask.price + 0.01) })
             }
           }
           eventTotalEdge += pmEdgeUsd + kalshiEdgeUsd
@@ -508,9 +512,8 @@ export default function ScannerPage() {
             <table className="w-full text-xs">
               <thead className="bg-gray-900 text-gray-500 sticky top-0 z-10">
                 <tr className="border-b border-gray-800">
-                  <th className="px-2 py-1.5 text-left font-normal">Event · Market · Outcome</th>
+                  <th className="px-2 py-1.5 text-left font-normal">Matchup · Bet</th>
                   <th className="px-2 py-1.5 text-right font-normal">Venue</th>
-                  <th className="px-2 py-1.5 text-right font-normal">Side @ Px</th>
                   <th className="px-2 py-1.5 text-right font-normal">Sz</th>
                   <th className="px-2 py-1.5 text-right font-normal">Fair</th>
                   <th className="px-2 py-1.5 text-right font-normal text-amber-300">¢/sh</th>
@@ -519,20 +522,26 @@ export default function ScannerPage() {
               </thead>
               <tbody className="divide-y divide-gray-900">
                 {filteredEdges.length === 0 && (
-                  <tr><td colSpan={7} className="px-2 py-4 text-center text-gray-600">No edge above filter. Lower the Min edge threshold.</td></tr>
+                  <tr><td colSpan={6} className="px-2 py-4 text-center text-gray-600">No edge above filter. Lower the Min edge threshold.</td></tr>
                 )}
                 {filteredEdges.map((e, i) => (
                   <tr key={i} className="hover:bg-gray-900/60 transition">
                     <td className="px-2 py-1.5">
-                      <div className="text-gray-300 truncate max-w-[220px]" title={e.event_title}>{e.event_title.replace('LoL: ', '')}</div>
-                      <div className="text-[10px] text-gray-500">{e.market_label} · {e.outcome}</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`text-[9px] uppercase px-1 py-0.5 rounded border ${leagueClass(e.league)}`}>{e.league}</span>
+                        <span className="text-gray-200 font-medium truncate max-w-[200px]" title={`${e.team1} vs ${e.team2} · Bo${e.best_of}`}>
+                          {e.team1} <span className="text-gray-600">vs</span> {e.team2}
+                        </span>
+                        <span className="text-[9px] text-gray-500">Bo{e.best_of}</span>
+                      </div>
+                      <div className="text-[10px] text-gray-400 mt-0.5 truncate max-w-[260px]">
+                        <span className="text-gray-500">{e.market_label}:</span>{' '}
+                        <span className="text-gray-300">{e.outcome}</span>{' '}
+                        <span className={e.side === 'ask' ? 'text-red-400' : 'text-green-400'}>· {e.side === 'ask' ? 'BUY' : 'SELL'} {fmtCent(e.price)}</span>
+                      </div>
                     </td>
                     <td className="px-2 py-1.5 text-right">
                       <span className={`text-[10px] uppercase font-semibold ${e.venue === 'pm' ? 'text-blue-300' : 'text-purple-300'}`}>{e.venue}</span>
-                    </td>
-                    <td className="px-2 py-1.5 text-right font-mono">
-                      <span className={e.side === 'bid' ? 'text-green-400' : 'text-red-400'}>{e.side.toUpperCase()}</span>{' '}
-                      <span className="text-gray-300">{fmtCent(e.price)}</span>
                     </td>
                     <td className="px-2 py-1.5 text-right font-mono text-gray-400">{fmtSize(e.size)}</td>
                     <td className="px-2 py-1.5 text-right font-mono text-amber-300">{fmtCent(e.fair)}</td>
@@ -558,7 +567,7 @@ export default function ScannerPage() {
             <table className="w-full text-xs">
               <thead className="bg-gray-900 text-gray-500 sticky top-0 z-10">
                 <tr className="border-b border-gray-800">
-                  <th className="px-2 py-1.5 text-left font-normal">Event · Market · Outcome</th>
+                  <th className="px-2 py-1.5 text-left font-normal">Matchup · Bet</th>
                   <th className="px-2 py-1.5 text-right font-normal">Venue · Side</th>
                   <th className="px-2 py-1.5 text-right font-normal">Best</th>
                   <th className="px-2 py-1.5 text-right font-normal">+1¢</th>
@@ -569,8 +578,17 @@ export default function ScannerPage() {
                 {filteredLiquidity.map((r, i) => (
                   <tr key={i} className="hover:bg-gray-900/60 transition">
                     <td className="px-2 py-1.5">
-                      <div className="text-gray-300 truncate max-w-[220px]" title={r.event_title}>{r.event_title.replace('LoL: ', '')}</div>
-                      <div className="text-[10px] text-gray-500">{r.market_label} · {r.outcome}</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`text-[9px] uppercase px-1 py-0.5 rounded border ${leagueClass(r.league)}`}>{r.league}</span>
+                        <span className="text-gray-200 font-medium truncate max-w-[200px]" title={`${r.team1} vs ${r.team2} · Bo${r.best_of}`}>
+                          {r.team1} <span className="text-gray-600">vs</span> {r.team2}
+                        </span>
+                        <span className="text-[9px] text-gray-500">Bo{r.best_of}</span>
+                      </div>
+                      <div className="text-[10px] text-gray-400 mt-0.5 truncate max-w-[260px]">
+                        <span className="text-gray-500">{r.market_label}:</span>{' '}
+                        <span className="text-gray-300">{r.outcome}</span>
+                      </div>
                     </td>
                     <td className="px-2 py-1.5 text-right">
                       <span className={`text-[10px] uppercase font-semibold ${r.venue === 'pm' ? 'text-blue-300' : 'text-purple-300'}`}>{r.venue}</span>
@@ -602,9 +620,8 @@ export default function ScannerPage() {
             <table className="w-full text-xs">
               <thead className="bg-gray-900 text-gray-500 sticky top-0 z-10">
                 <tr className="border-b border-gray-800">
-                  <th className="px-2 py-1.5 text-left font-normal">Event · Market · Outcome</th>
+                  <th className="px-2 py-1.5 text-left font-normal">Matchup · Bet</th>
                   <th className="px-2 py-1.5 text-right font-normal">Venue</th>
-                  <th className="px-2 py-1.5 text-right font-normal">Side @ Px</th>
                   <th className="px-2 py-1.5 text-right font-normal">Sz</th>
                   <th className="px-2 py-1.5 text-right font-normal text-amber-300">¢/sh</th>
                   <th className="px-2 py-1.5 text-right font-normal">Edge $</th>
@@ -612,22 +629,28 @@ export default function ScannerPage() {
               </thead>
               <tbody className="divide-y divide-gray-900">
                 {substantialEdges.length === 0 && (
-                  <tr><td colSpan={6} className="px-2 py-4 text-center text-gray-600">
+                  <tr><td colSpan={5} className="px-2 py-4 text-center text-gray-600">
                     No edges with size ≥ {minTradeSize}. Lower the threshold or wait for thicker books.
                   </td></tr>
                 )}
                 {substantialEdges.map((e, i) => (
                   <tr key={i} className="hover:bg-gray-900/60 transition">
                     <td className="px-2 py-1.5">
-                      <div className="text-gray-300 truncate max-w-[220px]" title={e.event_title}>{e.event_title.replace('LoL: ', '')}</div>
-                      <div className="text-[10px] text-gray-500">{e.market_label} · {e.outcome}</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`text-[9px] uppercase px-1 py-0.5 rounded border ${leagueClass(e.league)}`}>{e.league}</span>
+                        <span className="text-gray-200 font-medium truncate max-w-[200px]" title={`${e.team1} vs ${e.team2} · Bo${e.best_of}`}>
+                          {e.team1} <span className="text-gray-600">vs</span> {e.team2}
+                        </span>
+                        <span className="text-[9px] text-gray-500">Bo{e.best_of}</span>
+                      </div>
+                      <div className="text-[10px] text-gray-400 mt-0.5 truncate max-w-[260px]">
+                        <span className="text-gray-500">{e.market_label}:</span>{' '}
+                        <span className="text-gray-300">{e.outcome}</span>{' '}
+                        <span className={e.side === 'ask' ? 'text-red-400' : 'text-green-400'}>· {e.side === 'ask' ? 'BUY' : 'SELL'} {fmtCent(e.price)}</span>
+                      </div>
                     </td>
                     <td className="px-2 py-1.5 text-right">
                       <span className={`text-[10px] uppercase font-semibold ${e.venue === 'pm' ? 'text-blue-300' : 'text-purple-300'}`}>{e.venue}</span>
-                    </td>
-                    <td className="px-2 py-1.5 text-right font-mono">
-                      <span className={e.side === 'bid' ? 'text-green-400' : 'text-red-400'}>{e.side.toUpperCase()}</span>{' '}
-                      <span className="text-gray-300">{fmtCent(e.price)}</span>
                     </td>
                     <td className="px-2 py-1.5 text-right font-mono text-gray-300 font-semibold">{fmtSize(e.size)}</td>
                     <td className={`px-2 py-1.5 text-right font-mono ${epsBgClass(e.edge_per_share)}`}>
