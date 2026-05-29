@@ -120,6 +120,18 @@ const BETA_DA  = 0.0929
 // Returns full joint distribution: key = "<t1|t2>_<totalGames>",
 // value = probability of that exact ending. Used to derive series winner,
 // game-handicap fairs (=margin of victory), and Over/Under N-games fairs.
+// Marginal P(team1 wins game N) given the static per-game prob and Bo.
+// Game 2 uses the draft-swap shrinkage (loser of G1 picks blue side):
+//   P(t1 wins G2) = pG1 * g2_t1won + (1-pG1) * g2_t2won
+// G1 and G3+ both use pG1 unconditionally (no further shrinkage applied).
+function pGameMarginal(pG1: number, gnum: number): number {
+  if (gnum !== 2) return pG1
+  const z = Math.log(pG1 / (1 - pG1))
+  const g2_t1won = 1 / (1 + Math.exp(-(ALPHA_G2 * z - BETA_DA)))
+  const g2_t2won = 1 / (1 + Math.exp(-(ALPHA_G2 * z + BETA_DA)))
+  return pG1 * g2_t1won + (1 - pG1) * g2_t2won
+}
+
 function seriesDistribution(pG1: number, bestOf: number): Map<string, number> {
   const dist = new Map<string, number>()
   if (bestOf <= 1) {
@@ -410,7 +422,9 @@ export async function GET(): Promise<Response> {
       } else if (sm.market_type.startsWith('game_') && sm.market_type.endsWith('_winner') && pBlue != null) {
         const gnum = parseInt(sm.market_type.replace('game_','').replace('_winner',''), 10)
         label = `Game ${gnum} Winner`
-        fv1 = team1IsBlue ? pBlue : 1 - pBlue
+        const pT1Game = team1IsBlue ? pBlue : 1 - pBlue
+        // Game 2 has draft-swap shrinkage; G1 and G3+ are pG1 unchanged.
+        fv1 = pGameMarginal(pT1Game, gnum)
       } else if (sm.market_type === 'game_handicap' && seriesDist) {
         // Question is "Game Handicap: T1 (-1.5) vs BNK FEARX (+1.5)". The
         // handicap value is always in parentheses; without the paren-anchor

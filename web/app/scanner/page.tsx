@@ -199,6 +199,16 @@ function pSeriesFromGame(pGame: number, bestOf: number): number {
   return p
 }
 
+// Marginal P(team1 wins game N) — Game 2 uses draft-swap shrinkage,
+// G1 and G3+ pass through pG1 unchanged. Mirrors route.ts:pGameMarginal.
+function pGameMarginal(pG1: number, gnum: number): number {
+  if (gnum !== 2) return pG1
+  const z = Math.log(pG1 / (1 - pG1))
+  const g2_t1won = 1 / (1 + Math.exp(-(ALPHA_G2 * z - BETA_DA)))
+  const g2_t2won = 1 / (1 + Math.exp(-(ALPHA_G2 * z + BETA_DA)))
+  return pG1 * g2_t1won + (1 - pG1) * g2_t2won
+}
+
 // Inverse: solve pGame such that seriesProb(pGame, bestOf) == target.
 function pGameFromSeries(target: number, bestOf: number): number {
   if (bestOf <= 1) return target
@@ -333,11 +343,13 @@ function adjustedFair(
   }
   if (label.startsWith('Game ') && label.endsWith(' Winner')) {
     // For the in-progress game, use the live per-game prob; for other games,
-    // the static (ELO-adjusted) prob.
+    // the static (ELO-adjusted) prob — with G2 draft-swap shrinkage applied.
     const gameNumMatch = /Game (\d+) Winner/.exec(label)
     const gnum = gameNumMatch ? parseInt(gameNumMatch[1], 10) : null
     const useLive = liveGameNum != null && pLiveT1 != null && gnum === liveGameNum
-    const pT1 = useLive ? pLiveT1 : adjPGameT1
+    const pT1 = useLive
+      ? pLiveT1
+      : (gnum != null ? pGameMarginal(adjPGameT1, gnum) : adjPGameT1)
     const f0 = out0IsT1 ? pT1 : 1 - pT1
     return oIdx === 0 ? f0 : 1 - f0
   }
