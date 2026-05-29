@@ -199,6 +199,42 @@ function BookCell({ best, fair, side, venue, hasTicker }: {
   )
 }
 
+// ── Ranking table cell: matchup chip + bet line, team names link to /predict ─
+function MatchupCell({ row, bet }: {
+  row: EventRef & { market_label: string; outcome: string }
+  bet?: { side: 'bid' | 'ask'; price: number }
+}) {
+  const href =
+    `/predict?team1=${encodeURIComponent(row.team1)}` +
+    `&team2=${encodeURIComponent(row.team2)}` +
+    `&bo=${row.best_of}`
+  return (
+    <td className="px-2 py-1.5">
+      <div className="flex items-center gap-1.5">
+        <span className={`text-[9px] uppercase px-1 py-0.5 rounded border ${leagueClass(row.league)}`}>{row.league}</span>
+        <Link
+          href={href}
+          target="_blank"
+          className="text-gray-200 font-medium truncate max-w-[200px] hover:text-cyan-300 hover:underline"
+          title={`Open ${row.team1} vs ${row.team2} in /predict →`}
+        >
+          {row.team1} <span className="text-gray-600">vs</span> {row.team2}
+        </Link>
+        <span className="text-[9px] text-gray-500">Bo{row.best_of}</span>
+      </div>
+      <div className="text-[10px] text-gray-400 mt-0.5 truncate max-w-[260px]">
+        <span className="text-gray-500">{row.market_label}:</span>{' '}
+        <span className="text-gray-300">{row.outcome}</span>
+        {bet && (
+          <span className={bet.side === 'ask' ? 'text-red-400' : 'text-green-400'}>
+            {' '}· {bet.side === 'ask' ? 'BUY' : 'SELL'} {fmtCent(bet.price)}
+          </span>
+        )}
+      </div>
+    </td>
+  )
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────
 export default function ScannerPage() {
   const [events, setEvents] = useState<ScannerEvent[]>([])
@@ -526,20 +562,7 @@ export default function ScannerPage() {
                 )}
                 {filteredEdges.map((e, i) => (
                   <tr key={i} className="hover:bg-gray-900/60 transition">
-                    <td className="px-2 py-1.5">
-                      <div className="flex items-center gap-1.5">
-                        <span className={`text-[9px] uppercase px-1 py-0.5 rounded border ${leagueClass(e.league)}`}>{e.league}</span>
-                        <span className="text-gray-200 font-medium truncate max-w-[200px]" title={`${e.team1} vs ${e.team2} · Bo${e.best_of}`}>
-                          {e.team1} <span className="text-gray-600">vs</span> {e.team2}
-                        </span>
-                        <span className="text-[9px] text-gray-500">Bo{e.best_of}</span>
-                      </div>
-                      <div className="text-[10px] text-gray-400 mt-0.5 truncate max-w-[260px]">
-                        <span className="text-gray-500">{e.market_label}:</span>{' '}
-                        <span className="text-gray-300">{e.outcome}</span>{' '}
-                        <span className={e.side === 'ask' ? 'text-red-400' : 'text-green-400'}>· {e.side === 'ask' ? 'BUY' : 'SELL'} {fmtCent(e.price)}</span>
-                      </div>
-                    </td>
+                    <MatchupCell row={e} bet={{ side: e.side, price: e.price }} />
                     <td className="px-2 py-1.5 text-right">
                       <span className={`text-[10px] uppercase font-semibold ${e.venue === 'pm' ? 'text-blue-300' : 'text-purple-300'}`}>{e.venue}</span>
                     </td>
@@ -577,19 +600,7 @@ export default function ScannerPage() {
               <tbody className="divide-y divide-gray-900">
                 {filteredLiquidity.map((r, i) => (
                   <tr key={i} className="hover:bg-gray-900/60 transition">
-                    <td className="px-2 py-1.5">
-                      <div className="flex items-center gap-1.5">
-                        <span className={`text-[9px] uppercase px-1 py-0.5 rounded border ${leagueClass(r.league)}`}>{r.league}</span>
-                        <span className="text-gray-200 font-medium truncate max-w-[200px]" title={`${r.team1} vs ${r.team2} · Bo${r.best_of}`}>
-                          {r.team1} <span className="text-gray-600">vs</span> {r.team2}
-                        </span>
-                        <span className="text-[9px] text-gray-500">Bo{r.best_of}</span>
-                      </div>
-                      <div className="text-[10px] text-gray-400 mt-0.5 truncate max-w-[260px]">
-                        <span className="text-gray-500">{r.market_label}:</span>{' '}
-                        <span className="text-gray-300">{r.outcome}</span>
-                      </div>
-                    </td>
+                    <MatchupCell row={r} />
                     <td className="px-2 py-1.5 text-right">
                       <span className={`text-[10px] uppercase font-semibold ${r.venue === 'pm' ? 'text-blue-300' : 'text-purple-300'}`}>{r.venue}</span>
                       {' '}<span className={r.side === 'bid' ? 'text-green-400' : 'text-red-400'}>{r.side.toUpperCase()}</span>
@@ -635,20 +646,7 @@ export default function ScannerPage() {
                 )}
                 {substantialEdges.map((e, i) => (
                   <tr key={i} className="hover:bg-gray-900/60 transition">
-                    <td className="px-2 py-1.5">
-                      <div className="flex items-center gap-1.5">
-                        <span className={`text-[9px] uppercase px-1 py-0.5 rounded border ${leagueClass(e.league)}`}>{e.league}</span>
-                        <span className="text-gray-200 font-medium truncate max-w-[200px]" title={`${e.team1} vs ${e.team2} · Bo${e.best_of}`}>
-                          {e.team1} <span className="text-gray-600">vs</span> {e.team2}
-                        </span>
-                        <span className="text-[9px] text-gray-500">Bo{e.best_of}</span>
-                      </div>
-                      <div className="text-[10px] text-gray-400 mt-0.5 truncate max-w-[260px]">
-                        <span className="text-gray-500">{e.market_label}:</span>{' '}
-                        <span className="text-gray-300">{e.outcome}</span>{' '}
-                        <span className={e.side === 'ask' ? 'text-red-400' : 'text-green-400'}>· {e.side === 'ask' ? 'BUY' : 'SELL'} {fmtCent(e.price)}</span>
-                      </div>
-                    </td>
+                    <MatchupCell row={e} bet={{ side: e.side, price: e.price }} />
                     <td className="px-2 py-1.5 text-right">
                       <span className={`text-[10px] uppercase font-semibold ${e.venue === 'pm' ? 'text-blue-300' : 'text-purple-300'}`}>{e.venue}</span>
                     </td>

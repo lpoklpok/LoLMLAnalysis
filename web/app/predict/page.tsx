@@ -313,6 +313,14 @@ export default function PredictPage() {
         if (s.expandedGames     && typeof s.expandedGames === 'object')     setExpandedGames(s.expandedGames)
       }
     } catch { /* corrupt JSON — ignore */ }
+    // URL params override localStorage so deep-links from /scanner work even if
+    // there's a stale saved matchup.
+    try {
+      const sp = new URLSearchParams(window.location.search)
+      const t1 = sp.get('team1'); if (t1) setTeam1(t1)
+      const t2 = sp.get('team2'); if (t2) setTeam2(t2)
+      const bo = sp.get('bo');    if (bo === '1' || bo === '3' || bo === '5') setBestOf(parseInt(bo) as 1 | 3 | 5)
+    } catch { /* no window — ignore */ }
     setHydrated(true)
   }, [])
 
