@@ -1432,8 +1432,12 @@ function LadderModal({
     }
     es.onerror = () => { /* EventSource auto-reconnects */ }
 
-    // Safety-net fetch (worker also seeds on (re)connect, this just covers
-    // long-silent reconnects on a quiet market).
+    // Polling fallback — every 3s pull books via /api/kalshi-book → worker.
+    // SSE is the primary delivery (sub-second on active deltas); this poll
+    // covers cases where SSE silently drops (Vercel function reaching
+    // maxDuration, mobile tab throttling, network blips). 3s is aggressive
+    // enough that a "stuck ladder" can't persist for the seconds users
+    // notice. Each fetch is server-cached at 0 so we always get current.
     let stopped = false
     const safety = setInterval(async () => {
       if (stopped) return
@@ -1442,7 +1446,7 @@ function LadderModal({
         t2 ? fetchKalshiBook(t2) : Promise.resolve(null),
       ])
       if (!stopped) { setKalshiThis(tb); setKalshiOpp(ob) }
-    }, 30_000)
+    }, 3_000)
 
     return () => { stopped = true; es.close(); clearInterval(safety) }
   }, [kalshiSide?.ticker, kalshiOpposite?.ticker])
@@ -1902,11 +1906,24 @@ function LadderModal({
               return { bb: bb === -Infinity ? null : bb, ba: ba === Infinity ? null : ba }
             })()
             const hasData = k.bids.size > 0 || k.asks.size > 0
+            // Last-update age in seconds — visible so you can tell if SSE
+            // has silently died. Green = fresh, yellow = stale, red = stuck.
+            const ageS = k.updated > 0 ? Math.floor((Date.now() - k.updated) / 1000) : null
+            const ageCls = ageS == null  ? 'text-gray-600'
+                         : ageS < 5       ? 'text-green-400'
+                         : ageS < 15      ? 'text-yellow-400'
+                         :                  'text-red-400'
             return (
               <div>
                 <div className="text-xs uppercase text-gray-500 tracking-wide mb-2 flex items-baseline gap-2">
                   <span>Kalshi · {kalshiSide.team}</span>
                   <span className="text-gray-700 normal-case">YES book (sells = synth BUY NO)</span>
+                  {ageS != null && (
+                    <span className={`normal-case text-[10px] font-mono ${ageCls}`}
+                          title="Seconds since last book update (SSE push or 3s polling fallback)">
+                      · {ageS}s ago
+                    </span>
+                  )}
                   {hasData && kBest.bb != null && kBest.ba != null && (
                     <span className="ml-auto text-[10px] font-mono normal-case">
                       <span className="text-green-400">{kBest.bb.toFixed(2)}</span>
