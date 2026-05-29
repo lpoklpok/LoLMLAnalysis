@@ -16,7 +16,11 @@ interface OrderBody {
   no_price?:    number
   // Optional client-supplied id; we'll generate if absent
   client_order_id?: string
-  // Optional GTC; default to expiration_ts ~1h from now (Kalshi uses unix sec)
+  // Server-stamped from `mode` to avoid browser-clock-skew rejections from
+  // Kalshi. Clients should send `mode`, not raw expiration_ts.
+  mode?:        'IOC' | 'GTD'
+  // Deprecated: legacy clients can still send a raw timestamp. Ignored when
+  // `mode` is present.
   expiration_ts?: number
 }
 
@@ -58,7 +62,17 @@ export async function POST(req: Request) {
     type:            'limit',
     [body.side === 'yes' ? 'yes_price' : 'no_price']: px,
   }
-  if (body.expiration_ts) payload.expiration_ts = body.expiration_ts
+  // Stamp expiration_ts from server clock if mode supplied. Kalshi treats
+  // any expiration ≤ now+59s as IOC (immediate-or-cancel); we use +30s to
+  // tolerate network latency between here and Kalshi without crossing the
+  // boundary. GTD = 5 minutes.
+  if (body.mode === 'IOC') {
+    payload.expiration_ts = Math.floor(Date.now() / 1000) + 30
+  } else if (body.mode === 'GTD') {
+    payload.expiration_ts = Math.floor(Date.now() / 1000) + 300
+  } else if (body.expiration_ts) {
+    payload.expiration_ts = body.expiration_ts
+  }
 
   const { status, data } = await kalshiRequest('POST', '/trade-api/v2/portfolio/orders', payload)
   if (status >= 400) {

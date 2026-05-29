@@ -1499,26 +1499,22 @@ function LadderModal({
       return
     }
     const t0 = Date.now()
-    // Honor the IOC/GTD toggle from the top of the modal:
-    //   FAK (IOC): expiration_ts = now+5s → Kalshi treats any expiry ≤ now+59s as IOC
-    //              (match immediately, cancel any unfilled remainder). The +5s buffer
-    //              avoids "expiration in the past" rejections from clock skew or
-    //              network/proxy latency between browser → Vercel → Kalshi.
-    //   GTD     : expiration_ts 5min from now → rests on the book
-    const nowSec     = Math.floor(Date.now() / 1000)
-    const expiration = mode === 'FAK' ? nowSec + 5 : nowSec + 300
-    const modeTag    = mode === 'FAK' ? 'IOC' : 'GTD'
+    // Browser sends an intent; the /api/kalshi/order route stamps the
+    // expiration_ts from the server clock. This eliminates rejections caused
+    // by browser-clock skew or browser→Vercel network latency pushing a
+    // browser-computed expiration into the past by the time Kalshi sees it.
+    const modeTag = mode === 'FAK' ? 'IOC' : 'GTD'
     log(true, `→ ${args.label} ${args.count} @ ${args.px_cents}¢ (kalshi · ${modeTag})`)
     try {
       const r = await fetch('/api/kalshi/order', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ticker:         args.ticker,
-          side:           args.side,
-          action:         'buy',
-          count:          args.count,
-          expiration_ts:  expiration,
+          ticker:  args.ticker,
+          side:    args.side,
+          action:  'buy',
+          count:   args.count,
+          mode:    modeTag,    // 'IOC' or 'GTD' — server stamps expiration_ts
           [args.side === 'yes' ? 'yes_price' : 'no_price']: args.px_cents,
         }),
       })
