@@ -229,13 +229,127 @@ def _paginate(path: str, list_key: str, key_id: str, pem: str) -> list:
     return rows
 
 
-def _fetch_kalshi() -> pd.DataFrame:
-    """Trade-date mark-to-current PnL.
+def _fetch_kalshi_realized_from_csv() -> pd.DataFrame:
+    """Read closed (realized) Kalshi LoL trades from the manually-exported
+    transactions CSV. Source of truth for historical PnL since the API's
+    /portfolio/fills caps at ~200 most-recent fills and can't reach back
+    to Feb. Realized PnL is signed cents (incl fees); attribute to the
+    close timestamp's UTC date.
 
-    For each fill: value the position at the current Kalshi mid (or settle
-    if resolved), compute PnL from the entry price, attribute to the fill's
-    UTC date. BUY YES at $0.40 + current $0.55 → PnL = size * 0.15.
+    Re-download from Kalshi UI → Activity → Download CSV when new trades
+    close, and replace data/kalshi/transactions.csv.
     """
+    from pathlib import Path
+    csv_path = Path(__file__).resolve().parent.parent / 'data' / 'kalshi' / 'transactions.csv'
+    if not csv_path.exists():
+        print(f'  Kalshi CSV missing at {csv_path} — falling back to API only')
+        return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
+    df = pd.read_csv(csv_path)
+    # Only completed trades (skip deposits/withdrawals/etc.)
+    df = df[df['type'] == 'trade']
+    # LoL only
+    df = df[df['market_ticker'].astype(str).str.startswith(tuple(KALSHI_PREFIXES))]
+    if df.empty:
+        return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
+    df['close_dt']  = pd.to_datetime(df['close_timestamp'], utc=True)
+    df['date']      = df['close_dt'].dt.date
+    df['pnl']       = df['realized_pnl_with_fees_cents'].astype(float) / 100.0
+    daily = df.groupby('date').agg(
+        kalshi_pnl=('pnl', 'sum'),
+        kalshi_trades=('pnl', 'size'),
+    ).reset_index()
+    return daily
+
+
+def _fetch_kalshi_unrealized_mtm() -> pd.DataFrame:
+    """Mark-to-market PnL for currently-open Kalshi LoL positions, attributed
+    to today's date. Uses /portfolio/positions (returns current state) so it
+    doesn't depend on the /portfolio/fills history cap.
+    """
+    key_id = os.environ.get('KALSHI_API_KEY', '').strip()
+    pem    = _load_kalshi_pem()
+    if not (key_id and pem):
+        return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
+    try:
+        positions = list(_paginate('/portfolio/positions', 'market_positions', key_id, pem))
+    except Exception as e:
+        print(f'  Kalshi positions API error: {e}')
+        return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
+
+    # Filter to LoL with non-zero position
+    lol = [p for p in positions
+           if any(str(p.get('ticker','')).startswith(pfx) for pfx in KALSHI_PREFIXES)
+           and float(p.get('position_fp') or 0) != 0]
+    if not lol:
+        return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
+
+    # Mark each open position
+    from concurrent.futures import ThreadPoolExecutor
+    def _yes_mid(ticker):
+        try:
+            r = requests.get(f'{KALSHI_URL}/markets/{ticker}', timeout=8)
+            if r.status_code != 200: return ticker, None
+            m = r.json().get('market', {})
+            st = (m.get('status') or '').lower()
+            if st in ('finalized', 'settled', 'closed'):
+                res = (m.get('result') or '').lower()
+                if res == 'yes': return ticker, 1.0
+                if res == 'no':  return ticker, 0.0
+            def _f(v):
+                try: return float(v) if v is not None else None
+                except (ValueError, TypeError): return None
+            yb = _f(m.get('yes_bid_dollars')) or _f(m.get('yes_bid'))
+            ya = _f(m.get('yes_ask_dollars')) or _f(m.get('yes_ask'))
+            if yb is not None and yb > 1: yb /= 100
+            if ya is not None and ya > 1: ya /= 100
+            if yb is not None and ya is not None: return ticker, (yb + ya) / 2
+            return ticker, None
+        except Exception:
+            return ticker, None
+    tickers = sorted({p['ticker'] for p in lol})
+    mid: dict[str, float] = {}
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        for tk, px in ex.map(_yes_mid, tickers):
+            if px is not None: mid[tk] = px
+
+    total_unrealized = 0.0
+    for p in lol:
+        tk = p['ticker']
+        pos = float(p.get('position_fp') or 0)        # +YES / -NO contracts
+        cost = float(p.get('market_exposure_dollars') or 0)  # cost basis in $
+        ym = mid.get(tk)
+        if ym is None: continue
+        is_yes = pos > 0
+        contracts = abs(pos)
+        mid_for_side = ym if is_yes else (1 - ym)
+        current_value = contracts * mid_for_side
+        total_unrealized += current_value - cost
+
+    today = pd.Timestamp.utcnow().normalize().date()
+    if abs(total_unrealized) < 0.005:
+        return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
+    return pd.DataFrame([{'date': today, 'kalshi_pnl': round(total_unrealized, 2), 'kalshi_trades': 0}])
+
+
+def _fetch_kalshi() -> pd.DataFrame:
+    """Combined Kalshi PnL: historical realized from CSV + current open MTM
+    from API. Realized PnL is the canonical Kalshi number with fees; MTM
+    reflects today's mark on open positions.
+    """
+    realized = _fetch_kalshi_realized_from_csv()
+    open_mtm = _fetch_kalshi_unrealized_mtm()
+    if realized.empty and open_mtm.empty:
+        return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
+    combined = pd.concat([realized, open_mtm], ignore_index=True)
+    return combined.groupby('date').agg(
+        kalshi_pnl=('kalshi_pnl', 'sum'),
+        kalshi_trades=('kalshi_trades', 'sum'),
+    ).reset_index()
+
+
+def _fetch_kalshi_LEGACY() -> pd.DataFrame:
+    """[DEPRECATED — kept for reference only. /portfolio/fills caps at ~200
+    most-recent fills and can't see February.]"""
     key_id = os.environ.get('KALSHI_API_KEY', '').strip()
     pem    = _load_kalshi_pem()
     if not (key_id and pem):
