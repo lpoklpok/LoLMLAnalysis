@@ -476,6 +476,11 @@ export default function ScannerPage() {
   // Positive = team1 stronger than model thinks. Affects the Match Winner
   // fair only (other submarkets keep the API fair).
   const [eloAdj, setEloAdj] = useState<Record<string, number>>({})
+  // Per-event playoff override. undefined = use default (Bo5 on, Bo3 off),
+  // true/false = user explicitly toggled to that state.
+  const [playoffOverride, setPlayoffOverride] = useState<Record<string, boolean>>({})
+  // Team playoff adjustments from model_params.json (logit shift per team).
+  const [teamPoAdj, setTeamPoAdj] = useState<Record<string, number>>({})
   // Live snapshots keyed by game_id, populated by SSE from kw-lol-live-predictor.
   const [liveSnaps, setLiveSnaps] = useState<Map<string, LiveSnapshot>>(new Map())
   const [search, setSearch] = useState<string>('')
@@ -484,6 +489,16 @@ export default function ScannerPage() {
   // Min-size for the "Substantial Edge" panel — defaults to 100 shares to
   // cut out the tiny resting orders that aren't actionable for real positions.
   const [minTradeSize, setMinTradeSize] = useState<number>(100)
+
+  // ── Load TEAM_PO_ADJ once on mount ──────────────────────────────────
+  useEffect(() => {
+    fetch('/model_params.json', { cache: 'force-cache' })
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { team_po_adj?: Record<string, number> } | null) => {
+        if (d?.team_po_adj) setTeamPoAdj(d.team_po_adj)
+      })
+      .catch(() => { /* harmless — playoff toggle just won't shift fairs */ })
+  }, [])
 
   // ── Initial snapshot from /api/scanner ──────────────────────────────
   useEffect(() => {
@@ -1034,11 +1049,25 @@ export default function ScannerPage() {
           const isCollapsed = collapsed.has(ev.slug)
           // Per-event ELO shift (Δ on team1 in 400-point units). Affects Match Winner only.
           const delta = eloAdj[ev.slug] ?? 0
+          // Per-event playoff toggle. Default: Bo5 = playoffs ON, Bo3 = OFF
+          // (matches the upstream pipeline default in predict_upcoming.py).
+          const playoffDefault = ev.best_of >= 5
+          const playoffOn      = playoffOverride[ev.slug] ?? playoffDefault
+          // team_po_bonus in logit units: + favors team1 in playoffs.
+          const poBonusLogit = (teamPoAdj[ev.team1] ?? 0) - (teamPoAdj[ev.team2] ?? 0)
+          // If pipeline applied bonus (Bo5) but user turned playoffs OFF, subtract.
+          // If pipeline didn't apply (Bo3) but user turned playoffs ON, add.
+          const poLogitShift = (playoffOn ? 1 : 0) - (playoffDefault ? 1 : 0)  // -1, 0, or +1
+          const poShiftLogit = poLogitShift * poBonusLogit
           // Base per-game prob from team1's perspective.
           const baseGameT1 = ev.pred_blue_win == null
             ? null
             : (ev.pred_blue_team === ev.team1 ? ev.pred_blue_win : 1 - ev.pred_blue_win)
-          const adjGameT1   = baseGameT1 == null ? null : applyEloShift(baseGameT1, delta)
+          // Apply playoff logit shift first, then ELO shift on top.
+          const poAdjGameT1 = baseGameT1 == null
+            ? null
+            : (poShiftLogit === 0 ? baseGameT1 : sigmoid(logit(baseGameT1) + poShiftLogit))
+          const adjGameT1   = poAdjGameT1 == null ? null : applyEloShift(poAdjGameT1, delta)
           const adjSeriesT1 = adjGameT1   == null ? null : pSeriesFromGame(adjGameT1, ev.best_of)
           // Live overlay: if there's a matching live game from kw-lol-live-predictor,
           // substitute its in-game prob for the current game in the series
@@ -1142,6 +1171,23 @@ export default function ScannerPage() {
               {/* ELO slider strip — only render when expanded to save vertical space */}
               {!isCollapsed && (
                 <div className="px-4 py-2 border-b border-gray-800 bg-gray-900/40 flex items-center gap-3 text-[11px]">
+                  {/* Playoffs toggle */}
+                  <button onClick={() => setPlayoffOverride(s => {
+                            const n = { ...s }
+                            // Three states: undefined (default) → !default (override) → undefined (reset)
+                            if (s[ev.slug] === undefined)  n[ev.slug] = !playoffDefault
+                            else                            delete n[ev.slug]
+                            return n
+                          })}
+                          title={`Playoffs ${playoffOn ? 'ON' : 'OFF'} (${playoffOverride[ev.slug] !== undefined ? 'overridden — click to reset to default' : `default for Bo${ev.best_of}`}). Bonus: ${poBonusLogit >= 0 ? '+' : ''}${poBonusLogit.toFixed(3)} logit on ${ev.team1}.`}
+                          className={`px-2 py-0.5 rounded border text-[10px] uppercase tracking-wide font-semibold transition ${
+                            playoffOn
+                              ? (playoffOverride[ev.slug] !== undefined ? 'bg-amber-600/30 text-amber-200 border-amber-700/50' : 'bg-purple-900/40 text-purple-300 border-purple-700/50')
+                              : (playoffOverride[ev.slug] !== undefined ? 'bg-amber-600/10 text-amber-400 border-amber-700/40' : 'bg-transparent text-gray-500 border-gray-800')
+                          }`}>
+                    Playoffs {playoffOn ? '✓' : '✗'}{playoffOverride[ev.slug] !== undefined ? ' *' : ''}
+                  </button>
+                  <div className="h-4 w-px bg-gray-800" />
                   <span className="text-gray-500 uppercase tracking-wide text-[10px]">ELO Δ {ev.team1} (vs {ev.team2}):</span>
                   <input type="range" min={-300} max={300} step={10} value={delta}
                          onChange={e => setEloAdj(s => ({ ...s, [ev.slug]: parseInt(e.target.value) }))}
