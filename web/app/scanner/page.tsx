@@ -418,12 +418,15 @@ export default function ScannerPage() {
     [allEdges, venueFilter, minEdge],
   )
   // Substantial Edges: trades with meaningful size for real position sizing.
-  // Sorted by total $ edge so the biggest $-capturable opportunities surface.
+  // Ranked by per-share edge so the highest-rate opportunities surface first
+  // (independent of total notional). This is the "best rate" view — pair
+  // with the size filter to skip dust orders that have great rate but no capacity.
   const substantialEdges = useMemo(
-    () => allEdges
+    () => [...allEdges]
       .filter(e => e.size >= minTradeSize)
       .filter(e => venueFilter === 'all' || e.venue === venueFilter)
       .filter(e => e.total_edge_usd >= minEdge)
+      .sort((a, b) => b.edge_per_share - a.edge_per_share)
       .slice(0, 30),
     [allEdges, minTradeSize, venueFilter, minEdge],
   )
@@ -588,7 +591,7 @@ export default function ScannerPage() {
         {/* Substantial Edges: filtered to size ≥ N */}
         <div className="bg-gray-900 border border-emerald-700/30 rounded-lg overflow-hidden">
           <div className="px-3 py-2 border-b border-gray-800 flex items-baseline gap-2">
-            <span className="text-xs uppercase tracking-wide text-emerald-300 font-semibold">Substantial Edge</span>
+            <span className="text-xs uppercase tracking-wide text-emerald-300 font-semibold">Best ¢/sh</span>
             <span className="text-[10px] text-gray-500">size ≥</span>
             <input type="number" value={minTradeSize}
                    onChange={e => setMinTradeSize(Math.max(1, parseInt(e.target.value || '1') || 1))}
