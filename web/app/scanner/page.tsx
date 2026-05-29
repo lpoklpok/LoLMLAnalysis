@@ -42,6 +42,7 @@ interface EventRef {
   best_of: number
   league: string
   mkt_t1?: number | null  // PM match-winner midpoint for team1 (series price), used for /predict ?mkt= deep-link
+  date?: string           // ISO match start time — used to filter out already-started matches
 }
 interface EdgeRow extends EventRef {
   market_label:    string
@@ -563,7 +564,7 @@ export default function ScannerPage() {
         else if (bid != null) mktT1 = bid
         else if (ask != null) mktT1 = ask
       }
-      const evRef = { team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, mkt_t1: mktT1 }
+      const evRef = { team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, mkt_t1: mktT1, date: ev.date }
       const submarkets = ev.submarkets.map(sm => {
         const outcomes = sm.outcomes.map((o, oIdx) => {
           const pm     = o.token_id ? pmBooks.get(o.token_id) ?? null : null
@@ -627,8 +628,14 @@ export default function ScannerPage() {
   }, [events, pmBooks, kalshiBooks])
 
   // ── Apply filters ───────────────────────────────────────────────────
+  // Already-started events clog up the view with markets that are mid-game
+  // (or sometimes resolved) — pre-match model fair values are unreliable
+  // once a game is in progress. Filter them out everywhere.
+  const isPreMatch = (date?: string) => !date || new Date(date).getTime() > Date.now()
+
   const visibleEvents = useMemo(() => {
     return rendered
+      .filter(ev => isPreMatch(ev.date))
       .filter(ev => !majorOnly || MAJOR_LEAGUES.has(ev.league))
       .filter(ev => leagueFilter.size === 0 || leagueFilter.has(ev.league))
       .filter(ev => !search || ev.title.toLowerCase().includes(search.toLowerCase()))
@@ -643,6 +650,7 @@ export default function ScannerPage() {
   const cumulativeEdges = useMemo(() => {
     const groups = new Map<string, CumulativeEdgeRow>()
     for (const e of allEdges) {
+      if (!isPreMatch(e.date)) continue
       if (majorOnly && !MAJOR_LEAGUES.has(e.league)) continue
       if (venueFilter !== 'all' && e.venue !== venueFilter) continue
       const k = `${e.team1}|${e.team2}|${e.market_label}|${e.outcome}|${e.venue}|${e.side}`
@@ -679,6 +687,7 @@ export default function ScannerPage() {
   }, [allEdges, venueFilter, minEdge, majorOnly])
   const substantialEdges = useMemo(
     () => [...allEdges]
+      .filter(e => isPreMatch(e.date))
       .filter(e => !majorOnly || MAJOR_LEAGUES.has(e.league))
       .filter(e => e.size >= minTradeSize)
       .filter(e => venueFilter === 'all' || e.venue === venueFilter)
@@ -689,6 +698,7 @@ export default function ScannerPage() {
   )
   const filteredLiquidity = useMemo(
     () => allLiquidity
+      .filter(r => isPreMatch(r.date))
       .filter(r => !majorOnly || MAJOR_LEAGUES.has(r.league))
       .filter(r => venueFilter === 'all' || r.venue === venueFilter)
       .slice(0, 30),
