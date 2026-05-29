@@ -268,23 +268,48 @@ def _fetch_kalshi() -> pd.DataFrame:
     # For each ticker, fetch current YES price (or settle if closed).
     # Public endpoint — no auth needed for /markets.
     def _ticker_price(ticker):
+        """Return current YES-side price for a Kalshi market (or 1.0/0.0 if
+        resolved). Kalshi's current API uses *_dollars suffix (string dollars)
+        for prices; settlement uses status='finalized' + result in {yes,no}.
+        For void/other resolutions, fall back to settlement_value_dollars."""
         try:
             r = requests.get(f'{KALSHI_URL}/markets/{ticker}', timeout=8)
             if r.status_code != 200: return ticker, None
             m  = r.json().get('market', {})
-            st = m.get('status', '')
+            st = (m.get('status') or '').lower()
             if st in ('finalized', 'settled', 'closed'):
-                res = m.get('result', '')
+                res = (m.get('result') or '').lower()
                 if res == 'yes': return ticker, 1.0
                 if res == 'no':  return ticker, 0.0
-            # Open market — use yes_bid/yes_ask midpoint, or last_price
-            yb = m.get('yes_bid'); ya = m.get('yes_ask')
-            if yb and ya:
-                # Both are in cents
-                return ticker, (yb + ya) / 2 / 100
-            lp = m.get('last_price')
+                # Void / partial: try settlement_value_dollars (string in $)
+                sv = m.get('settlement_value_dollars')
+                if sv is not None:
+                    try: return ticker, float(sv)
+                    except (ValueError, TypeError): pass
+            # Open market — try yes_bid/ask midpoint with both modern (*_dollars
+            # string) and legacy (cents number) field names, then fall back to
+            # last_price.
+            def _f(v):
+                if v is None: return None
+                try: return float(v)
+                except (ValueError, TypeError): return None
+            yb = _f(m.get('yes_bid_dollars')) or _f(m.get('yes_bid'))
+            ya = _f(m.get('yes_ask_dollars')) or _f(m.get('yes_ask'))
+            # Legacy cents → dollars
+            if yb is not None and yb > 1: yb = yb / 100
+            if ya is not None and ya > 1: ya = ya / 100
+            if yb is not None and ya is not None:
+                return ticker, (yb + ya) / 2
+            lp = _f(m.get('last_price_dollars')) or _f(m.get('last_price'))
             if lp is not None:
-                return ticker, lp / 100
+                return ticker, lp / 100 if lp > 1 else lp
+            # Try inverse from no-side if yes-side empty
+            nb = _f(m.get('no_bid_dollars')) or _f(m.get('no_bid'))
+            na = _f(m.get('no_ask_dollars')) or _f(m.get('no_ask'))
+            if nb is not None and nb > 1: nb = nb / 100
+            if na is not None and na > 1: na = na / 100
+            if nb is not None and na is not None:
+                return ticker, 1 - (nb + na) / 2
             return ticker, None
         except Exception:
             return ticker, None
