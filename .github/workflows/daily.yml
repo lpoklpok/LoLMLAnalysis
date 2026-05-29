@@ -66,6 +66,17 @@ jobs:
       - name: Merge game + odds data
         run: python src/merge_data.py
 
+      - name: Pull Polymarket snapshots CSV (from kw-polymarket-snapshots commits)
+        run: |
+          # The Fly worker commits polymarket_submarket_snapshots.csv to this
+          # repo on a 1h cadence; just need to make sure we have it before the
+          # merge runs (already in the working tree after checkout above).
+          ls -l data/processed/polymarket_submarket_snapshots.csv || \
+            echo "No snapshots yet — merge_polymarket_data.py is a no-op"
+
+      - name: Merge Polymarket implied probs into games_with_odds.csv
+        run: python src/merge_polymarket_data.py
+
       - name: Build features + ELO state
         run: python src/feature_engineering.py
 

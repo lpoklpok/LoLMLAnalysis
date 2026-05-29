@@ -272,13 +272,28 @@ _ODDS_COLS = [
     'odd1_decimal', 'odd2_decimal',
     'implied_prob1_vigfree', 'implied_prob2_vigfree',
     'format', 'score_match', 'q_blue_win',
+    # Polymarket merge output (from merge_polymarket_data.py).
+    # These may be missing on first run before snapshots exist — the
+    # _patch_odds_columns reader gracefully handles missing columns.
+    'poly_blue_win_prob', 'poly_source',
 ]
 
 
 def _patch_odds_columns() -> None:
-    """Re-join odds columns from games_with_odds.csv into features files."""
+    """Re-join odds columns from games_with_odds.csv into features files.
+
+    Resilient to columns missing from games_with_odds.csv — early in the
+    Polymarket-snapshots pipeline they may not exist yet. We only `usecols`
+    what's actually present and the merge fills the rest with NaN."""
     gwo_path = PROCESSED_DIR / 'games_with_odds.csv'
-    gwo = pd.read_csv(gwo_path, low_memory=False, usecols=['gameid'] + _ODDS_COLS)
+    header = pd.read_csv(gwo_path, nrows=0).columns.tolist()
+    present = [c for c in _ODDS_COLS if c in header]
+    missing = [c for c in _ODDS_COLS if c not in header]
+    if missing:
+        print(f"Warning: games_with_odds.csv missing {missing} — will be NaN in features")
+    gwo = pd.read_csv(gwo_path, low_memory=False, usecols=['gameid'] + present)
+    for c in missing:
+        gwo[c] = pd.NA
     for path in [PROCESSED_DIR / 'features_all.csv', PROCESSED_DIR / 'features.csv']:
         if not path.exists():
             continue
@@ -286,8 +301,8 @@ def _patch_odds_columns() -> None:
         feat = feat.drop(columns=[c for c in _ODDS_COLS if c in feat.columns])
         feat = feat.merge(gwo, on='gameid', how='left')
         feat.to_csv(path, index=False)
-    n = gwo['q_blue_win'].notna().sum()
-    print(f"Odds patch applied: {n:,} games now have odds.")
+    n = gwo['q_blue_win'].notna().sum() if 'q_blue_win' in gwo.columns else 0
+    print(f"Odds patch applied: {n:,} games now have OddsPortal odds.")
 
 
 def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
@@ -667,7 +682,12 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
                 player_gd15[red_players[i]].append(-val)
 
         # Update outperformance histories (only when market odds available).
+        # Prefer OddsPortal (long history), fall back to Polymarket-derived
+        # implied prob (covers major-league games from 2026-05-22 onward
+        # that OddsPortal doesn't have).
         q = getattr(g, 'q_blue_win', None)
+        if q is None or pd.isna(q):
+            q = getattr(g, 'poly_blue_win_prob', None)
         if q is not None and not pd.isna(q):
             team_outperf[blue_team].append(blue_win - float(q))
             team_outperf[red_team].append((1 - blue_win) - (1 - float(q)))
