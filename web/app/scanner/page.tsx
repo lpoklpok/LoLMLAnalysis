@@ -632,7 +632,8 @@ export default function ScannerPage() {
       .filter(ev => leagueFilter.size === 0 || leagueFilter.has(ev.league))
       .filter(ev => !search || ev.title.toLowerCase().includes(search.toLowerCase()))
       .filter(ev => ev.total_edge_usd >= minEdge)
-      .sort((a, b) => b.total_edge_usd - a.total_edge_usd)
+      // Soonest first — the next match to play sits at the top of the page.
+      .sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''))
   }, [rendered, leagueFilter, search, minEdge, majorOnly])
 
   // Cumulative per (event, market, outcome, venue, side). One row per bucket,
@@ -930,6 +931,22 @@ export default function ScannerPage() {
                 <span className="text-gray-500 w-3 text-center">{isCollapsed ? '▸' : '▾'}</span>
                 <span className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${leagueClass(ev.league)}`}>{ev.league}</span>
                 <span className="text-[10px] text-gray-500">Bo{ev.best_of}</span>
+                {ev.date && (() => {
+                  const t = new Date(ev.date)
+                  const now = Date.now()
+                  const diffMs = t.getTime() - now
+                  const past = diffMs < 0
+                  const absMin = Math.round(Math.abs(diffMs) / 60000)
+                  const rel = absMin < 60   ? `${absMin}m`
+                            : absMin < 1440 ? `${Math.round(absMin / 60)}h`
+                            :                 `${Math.round(absMin / 1440)}d`
+                  const fmt = t.toLocaleString(undefined, { weekday: 'short', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+                  return (
+                    <span className="text-[10px] font-mono text-gray-500" title={fmt}>
+                      {past ? `${rel} ago` : `in ${rel}`}
+                    </span>
+                  )
+                })()}
                 <span className="text-sm font-medium text-gray-100">{ev.team1} <span className="text-gray-600 mx-1">vs</span> {ev.team2}</span>
                 <span className="ml-auto flex items-center gap-3 text-[11px]">
                   <span className="text-gray-500">
