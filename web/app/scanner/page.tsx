@@ -177,6 +177,118 @@ function pGameFromSeries(target: number, bestOf: number): number {
   return (lo + hi) / 2
 }
 
+// Series distribution math — must match route.ts:seriesDistribution so the
+// slider's adjusted fairs are on the same scale as the API's base fairs.
+const ALPHA_G2 = 0.897
+const BETA_DA  = 0.0929
+function seriesDistribution(pG1: number, bestOf: number): Map<string, number> {
+  const dist = new Map<string, number>()
+  if (bestOf <= 1) { dist.set('t1_1', pG1); dist.set('t2_1', 1 - pG1); return dist }
+  const z = Math.log(pG1 / (1 - pG1))
+  const g2_t1won = 1 / (1 + Math.exp(-(ALPHA_G2 * z - BETA_DA)))
+  const g2_t2won = 1 / (1 + Math.exp(-(ALPHA_G2 * z + BETA_DA)))
+  const needed = Math.ceil(bestOf / 2)
+  function walk(t1w: number, t2w: number, prob: number, prev: 't1' | 't2' | null) {
+    if (t1w === needed) { const k = `t1_${t1w + t2w}`; dist.set(k, (dist.get(k) ?? 0) + prob); return }
+    if (t2w === needed) { const k = `t2_${t1w + t2w}`; dist.set(k, (dist.get(k) ?? 0) + prob); return }
+    const gnum = t1w + t2w + 1
+    let p: number
+    if      (gnum === 1) p = pG1
+    else if (gnum === 2) p = prev === 't1' ? g2_t1won : g2_t2won
+    else                 p = pG1
+    walk(t1w + 1, t2w, prob * p,       't1')
+    walk(t1w, t2w + 1, prob * (1 - p), 't2')
+  }
+  walk(0, 0, 1, null)
+  return dist
+}
+
+function pHandicap(dist: Map<string, number>, bestOf: number, handicapTeam1: number): number {
+  const neededT1 = Math.ceil(bestOf / 2)
+  let p = 0
+  for (const [k, v] of dist) {
+    const [winner, gamesStr] = k.split('_')
+    const totalGames = parseInt(gamesStr, 10)
+    let margin: number
+    if (winner === 't1') {
+      const t1Wins = neededT1
+      const t2Wins = totalGames - t1Wins
+      margin = t1Wins - t2Wins
+    } else {
+      const t2Wins = neededT1
+      const t1Wins = totalGames - t2Wins
+      margin = t1Wins - t2Wins
+    }
+    if (margin + handicapTeam1 > 0) p += v
+  }
+  return p
+}
+
+function pOverGames(dist: Map<string, number>, n: number): number {
+  let p = 0
+  for (const [k, v] of dist) {
+    const games = parseInt(k.split('_')[1], 10)
+    if (games > n) p += v
+  }
+  return p
+}
+
+const normName = (s: string) => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+
+// Does this outcome name represent the given team? Handles plain names and
+// handicap-suffixed names like "JD Gaming (-1.5)". Uses otherTeam to break
+// ties when one team's name is a prefix of the other.
+function outcomeIsTeam(outcomeName: string, team: string, otherTeam: string): boolean {
+  const o = normName(outcomeName); const t = normName(team); const ot = normName(otherTeam)
+  if (o === t) return true
+  return o.includes(t) && !o.includes(ot)
+}
+
+// Compute the adjusted fair for outcome[oIdx] of submarket sm, given the
+// adjusted per-game prob (team1 perspective) and the resulting distribution.
+// Returns null if the submarket type isn't recognized (caller falls back to API fair).
+function adjustedFair(
+  sm: { market_label: string; outcomes: Array<{ outcome: string }> },
+  oIdx: number,
+  team1: string,
+  team2: string,
+  bestOf: number,
+  adjPGameT1: number,
+  adjDist: Map<string, number>,
+): number | null {
+  const label = sm.market_label
+  const out0  = sm.outcomes[0]?.outcome ?? ''
+  const out0IsT1 = outcomeIsTeam(out0, team1, team2)
+
+  if (label === 'Match Winner') {
+    let pT1 = 0; for (const [k, v] of adjDist) if (k.startsWith('t1_')) pT1 += v
+    const f0 = out0IsT1 ? pT1 : 1 - pT1
+    return oIdx === 0 ? f0 : 1 - f0
+  }
+  if (label.startsWith('Game ') && label.endsWith(' Winner')) {
+    const f0 = out0IsT1 ? adjPGameT1 : 1 - adjPGameT1
+    return oIdx === 0 ? f0 : 1 - f0
+  }
+  if (label === 'Game Handicap') {
+    const m = /\(([+-]?\d+\.?\d*)\)/.exec(out0)
+    const h0 = m ? parseFloat(m[1]) : (bestOf === 5 ? -2.5 : -1.5)
+    // h0 is outcome[0]'s handicap. Translate to team1's perspective for pHandicap.
+    const hT1 = out0IsT1 ? h0 : -h0
+    const pT1 = pHandicap(adjDist, bestOf, hT1)
+    const f0  = out0IsT1 ? pT1 : 1 - pT1
+    return oIdx === 0 ? f0 : 1 - f0
+  }
+  if (label.startsWith('Total Games O/U')) {
+    const m = /([\d.]+)/.exec(label)
+    const threshold = m ? parseFloat(m[1]) : (bestOf === 5 ? 3.5 : 2.5)
+    const pOver = pOverGames(adjDist, threshold)
+    const out0IsOver = out0.toLowerCase().includes('over')
+    const f0 = out0IsOver ? pOver : 1 - pOver
+    return oIdx === 0 ? f0 : 1 - f0
+  }
+  return null
+}
+
 function edgeBgClass(usd: number): string {
   if (usd >= 500) return 'bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-400/50'
   if (usd >= 100) return 'bg-emerald-700/25 text-emerald-300'
@@ -748,6 +860,8 @@ export default function ScannerPage() {
             : (ev.pred_blue_team === ev.team1 ? ev.pred_blue_win : 1 - ev.pred_blue_win)
           const adjGameT1   = baseGameT1 == null ? null : applyEloShift(baseGameT1, delta)
           const adjSeriesT1 = adjGameT1   == null ? null : pSeriesFromGame(adjGameT1, ev.best_of)
+          // Full distribution — used to recompute Game N / Handicap / O/U fairs.
+          const adjDist     = adjGameT1   == null ? null : seriesDistribution(adjGameT1, ev.best_of)
           // Find team1's PM match-winner midpoint to enable Snap-to-market.
           const mwSm = ev.submarkets.find(sm => sm.market_label === 'Match Winner')
           const mwT1Out = mwSm?.outcomes?.[0]  // outcome[0] is team1
@@ -803,7 +917,7 @@ export default function ScannerPage() {
                       Snap → PM ({snapDelta >= 0 ? '+' : ''}{snapDelta})
                     </button>
                   )}
-                  <span className="text-gray-600 text-[10px]">match winner fair only</span>
+                  <span className="text-gray-600 text-[10px]">recomputes all submarkets</span>
                 </div>
               )}
 
@@ -841,10 +955,11 @@ export default function ScannerPage() {
                         const pmEps  = (o as { pm_best_eps?: number }).pm_best_eps ?? 0
                         const ksEps  = (o as { kalshi_best_eps?: number }).kalshi_best_eps ?? 0
                         const hasKalshiTicker = !!o.kalshi_ticker || !!o.kalshi_opp_ticker
-                        // Override Match Winner fair if user has shifted ELO. Other submarkets
-                        // keep their API fair (V1 — see commit msg).
-                        const overrideFair = (delta !== 0 && sm.market_label === 'Match Winner' && adjSeriesT1 != null)
-                          ? (oIdx === 0 ? adjSeriesT1 : 1 - adjSeriesT1)
+                        // ELO slider override: recompute fair for ALL submarket types from
+                        // the adjusted series distribution. Falls back to API fair for
+                        // unrecognized submarkets.
+                        const overrideFair = (delta !== 0 && adjGameT1 != null && adjDist != null)
+                          ? adjustedFair(sm, oIdx, ev.team1, ev.team2, ev.best_of, adjGameT1, adjDist)
                           : null
                         const fairDisp = overrideFair ?? o.fair
                         return (
