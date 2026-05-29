@@ -41,6 +41,7 @@ interface EventRef {
   team2: string
   best_of: number
   league: string
+  mkt_t1?: number | null  // PM match-winner midpoint for team1 (series price), used for /predict ?mkt= deep-link
 }
 interface EdgeRow extends EventRef {
   market_label:    string
@@ -204,10 +205,12 @@ function MatchupCell({ row, bet }: {
   row: EventRef & { market_label: string; outcome: string }
   bet?: { side: 'bid' | 'ask'; price: number }
 }) {
+  const mkt = row.mkt_t1 != null && Number.isFinite(row.mkt_t1)
+    ? `&mkt=${row.mkt_t1.toFixed(4)}` : ''
   const href =
     `/predict?team1=${encodeURIComponent(row.team1)}` +
     `&team2=${encodeURIComponent(row.team2)}` +
-    `&bo=${row.best_of}`
+    `&bo=${row.best_of}${mkt}`
   return (
     <td className="px-2 py-1.5">
       <div className="flex items-center gap-1.5">
@@ -379,6 +382,19 @@ export default function ScannerPage() {
     const rendered = events.map(ev => {
       leagues.add(ev.league)
       let eventTotalEdge = 0
+      // Pre-compute team1's PM match-winner midpoint to deep-link into /predict ?mkt=
+      let mktT1: number | null = null
+      const mwSm = ev.submarkets.find(sm => sm.market_label === 'Match Winner')
+      const t1Tok = mwSm?.outcomes?.[0]?.token_id
+      const t1Book = t1Tok ? pmBooks.get(t1Tok) : null
+      if (t1Book) {
+        const bid = t1Book.bids[0]?.price
+        const ask = t1Book.asks[0]?.price
+        if (bid != null && ask != null) mktT1 = (bid + ask) / 2
+        else if (bid != null) mktT1 = bid
+        else if (ask != null) mktT1 = ask
+      }
+      const evRef = { team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, mkt_t1: mktT1 }
       const submarkets = ev.submarkets.map(sm => {
         const outcomes = sm.outcomes.map((o, oIdx) => {
           const pm     = o.token_id ? pmBooks.get(o.token_id) ?? null : null
@@ -400,7 +416,7 @@ export default function ScannerPage() {
                 const eps = fair - l.price - feeFor(l.price)
                 if (eps <= 0) break
                 const totalUsd = eps * l.size
-                allEdges.push({ team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, market_label: sm.market_label, outcome: o.outcome, venue, side: 'ask', price: l.price, size: l.size, fair, edge_per_share: eps, total_edge_usd: totalUsd })
+                allEdges.push({ ...evRef, market_label: sm.market_label, outcome: o.outcome, venue, side: 'ask', price: l.price, size: l.size, fair, edge_per_share: eps, total_edge_usd: totalUsd })
                 if (venue === 'pm') { pmEdgeUsd += totalUsd; if (eps > pmBestEps) pmBestEps = eps }
                 else                 { kalshiEdgeUsd += totalUsd; if (eps > kalshiBestEps) kalshiBestEps = eps }
               }
@@ -408,7 +424,7 @@ export default function ScannerPage() {
                 const eps = l.price - fair - feeFor(l.price)
                 if (eps <= 0) break
                 const totalUsd = eps * l.size
-                allEdges.push({ team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, market_label: sm.market_label, outcome: o.outcome, venue, side: 'bid', price: l.price, size: l.size, fair, edge_per_share: eps, total_edge_usd: totalUsd })
+                allEdges.push({ ...evRef, market_label: sm.market_label, outcome: o.outcome, venue, side: 'bid', price: l.price, size: l.size, fair, edge_per_share: eps, total_edge_usd: totalUsd })
                 if (venue === 'pm') { pmEdgeUsd += totalUsd; if (eps > pmBestEps) pmBestEps = eps }
                 else                 { kalshiEdgeUsd += totalUsd; if (eps > kalshiBestEps) kalshiBestEps = eps }
               }
@@ -416,12 +432,12 @@ export default function ScannerPage() {
             const bid = book.bids[0]
             if (bid) {
               const plus1 = book.bids.find(l => Math.abs(l.price - (bid.price - 0.01)) < 0.005)
-              allLiquidity.push({ team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, market_label: sm.market_label, outcome: o.outcome, venue, side: 'bid', best_price: bid.price, best_size: bid.size, plus1_size: plus1?.size ?? 0, notional_usd: bid.size * bid.price + (plus1?.size ?? 0) * (bid.price - 0.01) })
+              allLiquidity.push({ ...evRef, market_label: sm.market_label, outcome: o.outcome, venue, side: 'bid', best_price: bid.price, best_size: bid.size, plus1_size: plus1?.size ?? 0, notional_usd: bid.size * bid.price + (plus1?.size ?? 0) * (bid.price - 0.01) })
             }
             const ask = book.asks[0]
             if (ask) {
               const plus1 = book.asks.find(l => Math.abs(l.price - (ask.price + 0.01)) < 0.005)
-              allLiquidity.push({ team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, market_label: sm.market_label, outcome: o.outcome, venue, side: 'ask', best_price: ask.price, best_size: ask.size, plus1_size: plus1?.size ?? 0, notional_usd: ask.size * ask.price + (plus1?.size ?? 0) * (ask.price + 0.01) })
+              allLiquidity.push({ ...evRef, market_label: sm.market_label, outcome: o.outcome, venue, side: 'ask', best_price: ask.price, best_size: ask.size, plus1_size: plus1?.size ?? 0, notional_usd: ask.size * ask.price + (plus1?.size ?? 0) * (ask.price + 0.01) })
             }
           }
           eventTotalEdge += pmEdgeUsd + kalshiEdgeUsd

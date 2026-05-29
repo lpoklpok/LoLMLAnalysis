@@ -111,6 +111,30 @@ function teamGd15FromRoster(
 const sigmoid = (z: number): number => 1 / (1 + Math.exp(-z))
 const logit   = (p: number): number => Math.log(Math.max(1e-6, p) / Math.max(1e-6, 1 - p))
 
+// Invert series→game: given target series-winner prob and Bo, find the per-game
+// prob whose seriesProb(p, bo) equals the target. Bisection because the
+// polynomial is monotonic in p on [0,1].
+function pGameForSeries(targetSeries: number, bo: number): number {
+  if (bo <= 1) return targetSeries
+  const seriesOf = (p: number) =>
+    bo === 3 ? p * p * (3 - 2 * p) :
+    bo === 5 ? p * p * p * (10 - 15 * p + 6 * p * p) : p
+  let lo = 0.0001, hi = 0.9999
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2
+    if (seriesOf(mid) < targetSeries) lo = mid; else hi = mid
+  }
+  return (lo + hi) / 2
+}
+
+// Approx ELO delta to shift a logistic-style model from currentP to targetP.
+// Treats the model as locally logistic in ELO diff (standard 400-point scale).
+// In practice the predict model has many features so this is only approximate;
+// the user can fine-tune via the existing per-team ELO sliders.
+function eloDeltaToTarget(currentP: number, targetP: number): number {
+  return (400 / Math.log(10)) * (logit(targetP) - logit(currentP))
+}
+
 // Half-Kelly bet sizing for a binary market.
 // pModel  = your estimate that team1 wins
 // pMarket = market's price for team1 (= probability you must pay per $1 payout)
@@ -310,6 +334,11 @@ export default function PredictPage() {
       if (urlT1) setTeam1(urlT1)
       if (urlT2) setTeam2(urlT2)
       if (urlBo === '1' || urlBo === '3' || urlBo === '5') setBestOf(parseInt(urlBo) as 1 | 3 | 5)
+      const urlMkt = sp?.get('mkt')
+      if (urlMkt) {
+        const p = parseFloat(urlMkt)
+        if (Number.isFinite(p) && p > 0 && p < 1) setSeriesMarketT1(p)
+      }
     } else {
       try {
         const raw = window.localStorage.getItem(STORAGE_KEY)
@@ -1333,11 +1362,41 @@ export default function PredictPage() {
                     </div>
                     <div>
                       <div className="text-[11px] uppercase tracking-wide text-zinc-500 mb-1">Market p({team1}) — series</div>
-                      <input type="number" step={0.01} min={0} max={1}
-                        value={seriesMarketT1 ?? ''}
-                        onChange={e => setSeriesMarketT1(e.target.value === '' ? null : parseFloat(e.target.value))}
-                        className="w-24 bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm font-mono text-right"
-                        placeholder="0.55" />
+                      <div className="flex items-center gap-2">
+                        <input type="number" step={0.01} min={0} max={1}
+                          value={seriesMarketT1 ?? ''}
+                          onChange={e => setSeriesMarketT1(e.target.value === '' ? null : parseFloat(e.target.value))}
+                          className="w-24 bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-sm font-mono text-right"
+                          placeholder="0.55" />
+                        {seriesMarketT1 != null && Math.abs(seriesMarketT1 - predictions.p_series_t1) > 0.005 && (() => {
+                          // Approximate ELO delta to shift the model toward the market.
+                          // Convert series-target to per-game-target via Bo3/Bo5 inversion,
+                          // then logit-shift in 400-point ELO space.
+                          const currentGameP = pGameForSeries(predictions.p_series_t1, bestOf)
+                          const targetGameP  = pGameForSeries(seriesMarketT1, bestOf)
+                          const delta = eloDeltaToTarget(currentGameP, targetGameP)
+                          const half  = Math.round(delta / 2)
+                          // Apply split symmetrically: +half/2 on team1, -half/2 on team2.
+                          // Logistic in (elo_t1 - elo_t2), so adding +half to (t1 - t2) is
+                          // equivalent — we split it to keep neither team's ELO drifting alone.
+                          const snap = () => {
+                            const cur1 = eloAdjustments[team1] ?? 0
+                            const cur2 = eloAdjustments[team2] ?? 0
+                            setEloAdjustments({
+                              ...eloAdjustments,
+                              [team1]: cur1 + half,
+                              [team2]: cur2 - half,
+                            })
+                          }
+                          return (
+                            <button onClick={snap}
+                                    className="text-[10px] uppercase tracking-wide px-2 py-1 rounded bg-amber-600/20 text-amber-300 hover:bg-amber-600/30 border border-amber-700/40"
+                                    title={`Apply ${half > 0 ? '+' : ''}${half} ELO to ${team1} and ${-half > 0 ? '+' : ''}${-half} to ${team2} to bring model toward market. Logistic approximation — fine-tune via the per-team sliders.`}>
+                              Snap → market <span className="font-mono">({half >= 0 ? '+' : ''}{half})</span>
+                            </button>
+                          )
+                        })()}
+                      </div>
                     </div>
                     {sk && (
                       <div className="text-xs font-mono">
