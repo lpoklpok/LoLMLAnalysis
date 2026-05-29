@@ -340,7 +340,9 @@ export async function GET(): Promise<Response> {
 
   // 1. Pull upcoming predictions for the next 48h (skip far-future + past).
   const nowIso = new Date().toISOString()
-  const futureIso = new Date(Date.now() + 48 * 3600 * 1000).toISOString()
+  // Window: now-6h ... now+14d. Was 48h, widened so EWC/long-tail playoff
+  // markets surface as soon as they appear in upcoming_predictions.
+  const futureIso = new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString()
   const { data: preds } = await sb
     .from('upcoming_predictions')
     .select('blue_team,red_team,league,best_of,pred_blue_win,date,poly_event_slug')

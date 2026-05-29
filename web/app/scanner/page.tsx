@@ -142,6 +142,11 @@ const LEAGUE_COLORS: Record<string, string> = {
 }
 const leagueClass = (l: string) => LEAGUE_COLORS[l] ?? 'bg-gray-800 text-gray-400 border-gray-700/40'
 
+// Top-tier tournaments. Everything else (LCP, CBLOL, NACL, qualifiers,
+// academy/challengers) is treated as "minor" and hidden by default — the
+// model has thin signal there so fair values are unreliable.
+const MAJOR_LEAGUES = new Set(['LCK', 'LPL', 'LEC', 'LCS', 'EWC', 'MSI', 'Worlds', 'First Stand'])
+
 function edgeBgClass(usd: number): string {
   if (usd >= 500) return 'bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-400/50'
   if (usd >= 100) return 'bg-emerald-700/25 text-emerald-300'
@@ -251,6 +256,7 @@ export default function ScannerPage() {
   // ── Filter / view controls ──────────────────────────────────────────
   const [minEdge, setMinEdge] = useState<number>(0)
   const [leagueFilter, setLeagueFilter] = useState<Set<string>>(new Set())
+  const [majorOnly, setMajorOnly] = useState(true)
   const [search, setSearch] = useState<string>('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [venueFilter, setVenueFilter] = useState<'all' | 'pm' | 'kalshi'>('all')
@@ -460,35 +466,37 @@ export default function ScannerPage() {
   // ── Apply filters ───────────────────────────────────────────────────
   const visibleEvents = useMemo(() => {
     return rendered
+      .filter(ev => !majorOnly || MAJOR_LEAGUES.has(ev.league))
       .filter(ev => leagueFilter.size === 0 || leagueFilter.has(ev.league))
       .filter(ev => !search || ev.title.toLowerCase().includes(search.toLowerCase()))
       .filter(ev => ev.total_edge_usd >= minEdge)
       .sort((a, b) => b.total_edge_usd - a.total_edge_usd)
-  }, [rendered, leagueFilter, search, minEdge])
+  }, [rendered, leagueFilter, search, minEdge, majorOnly])
 
   const filteredEdges = useMemo(
     () => allEdges
+      .filter(e => !majorOnly || MAJOR_LEAGUES.has(e.league))
       .filter(e => venueFilter === 'all' || e.venue === venueFilter)
       .filter(e => e.total_edge_usd >= minEdge)
       .slice(0, 30),
-    [allEdges, venueFilter, minEdge],
+    [allEdges, venueFilter, minEdge, majorOnly],
   )
-  // Substantial Edges: trades with meaningful size for real position sizing.
-  // Ranked by per-share edge so the highest-rate opportunities surface first
-  // (independent of total notional). This is the "best rate" view — pair
-  // with the size filter to skip dust orders that have great rate but no capacity.
   const substantialEdges = useMemo(
     () => [...allEdges]
+      .filter(e => !majorOnly || MAJOR_LEAGUES.has(e.league))
       .filter(e => e.size >= minTradeSize)
       .filter(e => venueFilter === 'all' || e.venue === venueFilter)
       .filter(e => e.total_edge_usd >= minEdge)
       .sort((a, b) => b.edge_per_share - a.edge_per_share)
       .slice(0, 30),
-    [allEdges, minTradeSize, venueFilter, minEdge],
+    [allEdges, minTradeSize, venueFilter, minEdge, majorOnly],
   )
   const filteredLiquidity = useMemo(
-    () => allLiquidity.filter(r => venueFilter === 'all' || r.venue === venueFilter).slice(0, 30),
-    [allLiquidity, venueFilter],
+    () => allLiquidity
+      .filter(r => !majorOnly || MAJOR_LEAGUES.has(r.league))
+      .filter(r => venueFilter === 'all' || r.venue === venueFilter)
+      .slice(0, 30),
+    [allLiquidity, venueFilter, majorOnly],
   )
 
   const toggleLeague = (l: string) => {
@@ -515,8 +523,16 @@ export default function ScannerPage() {
 
       {/* Filter bar */}
       <div className="px-4 md:px-6 py-3 border-b border-gray-800 bg-gray-950 flex flex-wrap items-center gap-3 text-xs">
+        <button onClick={() => setMajorOnly(v => !v)}
+                className={`px-2 py-1 rounded border text-[10px] uppercase tracking-wide font-semibold transition ${
+                  majorOnly ? 'bg-emerald-900/40 text-emerald-300 border-emerald-700/50' : 'bg-transparent text-gray-500 border-gray-800'
+                }`}
+                title="Hide minor leagues (LCP, CBLOL, NACL, qualifiers, academy). Model has weak signal there.">
+          {majorOnly ? 'Major only ✓' : 'All leagues'}
+        </button>
+        <div className="h-5 w-px bg-gray-800 mx-1" />
         <span className="text-gray-500">League:</span>
-        {Array.from(leagues).sort().map(l => (
+        {Array.from(leagues).sort().filter(l => !majorOnly || MAJOR_LEAGUES.has(l)).map(l => (
           <button key={l} onClick={() => toggleLeague(l)}
                   className={`px-2 py-1 rounded border text-[10px] uppercase tracking-wide font-semibold transition ${leagueFilter.has(l) || leagueFilter.size === 0 ? leagueClass(l) : 'border-gray-800 text-gray-600 bg-transparent'}`}>
             {l}
