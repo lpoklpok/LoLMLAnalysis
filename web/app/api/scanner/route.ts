@@ -401,10 +401,11 @@ export async function GET(): Promise<Response> {
         label = `Game ${gnum} Winner`
         fv1 = team1IsBlue ? pBlue : 1 - pBlue
       } else if (sm.market_type === 'game_handicap' && seriesDist) {
-        // outcome[0] is "team_X (-1.5)" or similar. Extract handicap from
-        // the question, default to -1.5 for Bo3 if unparseable.
+        // Question is "Game Handicap: T1 (-1.5) vs BNK FEARX (+1.5)". The
+        // handicap value is always in parentheses; without the paren-anchor
+        // a naive `[+-]?\d+` regex grabs the "1" from "T1" instead of "-1.5".
         label = 'Game Handicap'
-        const m = /([+-]?\d+\.?\d*)/.exec(sm.question)
+        const m = /\(([+-]?\d+\.?\d*)\)/.exec(sm.question)
         const h0 = m ? parseFloat(m[1]) : (pred.best_of === 5 ? -2.5 : -1.5)
         // h0 is the handicap of outcome[0]. We need P(outcome[0] covers).
         // If outcome[0] is the original DB team1 (= our seriesDist team1), use directly.
