@@ -1425,6 +1425,62 @@ export default function PredictPage() {
                     )}
                   </div>
 
+                  {/* Derived markets: handicap + total games O/U, summed from the
+                      same outcome distribution as the series-winner price. */}
+                  {bestOf > 1 && predictions.distribution.length > 0 && (() => {
+                    const dist = predictions.distribution
+                    const sumIf = (f: (d: { t1_wins: number; t2_wins: number; prob: number }) => boolean) =>
+                      dist.filter(f).reduce((s, d) => s + d.prob, 0)
+                    // For Bo3: handicap ±1.5 (= sweep). For Bo5: ±1.5 (win by 2+) and ±2.5 (sweep).
+                    const handicaps = bestOf === 5 ? [1.5, 2.5] : [1.5]
+                    // Bo3: O/U 2.5 only. Bo5: 3.5 and 4.5.
+                    const thresholds = bestOf === 5 ? [3.5, 4.5] : [2.5]
+                    type Row = { label: string; sub?: string; prob: number }
+                    const rows: Row[] = []
+                    for (const h of handicaps) {
+                      rows.push({ label: `${team1} −${h}`, sub: `wins by ${Math.ceil(h)}+`,
+                                  prob: sumIf(d => (d.t1_wins - d.t2_wins) > h) })
+                      rows.push({ label: `${team2} −${h}`, sub: `wins by ${Math.ceil(h)}+`,
+                                  prob: sumIf(d => (d.t2_wins - d.t1_wins) > h) })
+                    }
+                    for (const n of thresholds) {
+                      rows.push({ label: `Over ${n} games`,  sub: `series goes ${Math.ceil(n)}+ games`,
+                                  prob: sumIf(d => d.t1_wins + d.t2_wins > n) })
+                      rows.push({ label: `Under ${n} games`, sub: `series ends in ≤${Math.floor(n)}`,
+                                  prob: sumIf(d => d.t1_wins + d.t2_wins < n) })
+                    }
+                    return (
+                      <div className="mt-4">
+                        <div className="text-[11px] uppercase tracking-wide text-zinc-500 mb-2">Derived markets</div>
+                        <table className="text-xs w-full max-w-2xl">
+                          <thead>
+                            <tr className="text-zinc-500">
+                              <th className="text-left pr-4 pb-1">market</th>
+                              <th className="text-left pr-4 pb-1 text-[10px] font-normal text-zinc-600">condition</th>
+                              <th className="text-right pr-4 pb-1 w-24">model</th>
+                              <th className="pb-1 w-48">visual</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rows.map(r => (
+                              <tr key={r.label} className="border-t border-zinc-800/40">
+                                <td className="py-1 pr-4 font-mono text-zinc-200">{r.label}</td>
+                                <td className="py-1 pr-4 text-[10px] text-zinc-500">{r.sub}</td>
+                                <td className="py-1 pr-4 font-mono text-right text-emerald-300">{(r.prob * 100).toFixed(1)}%</td>
+                                <td className="py-1">
+                                  <div className="h-2 bg-zinc-800 rounded-sm overflow-hidden w-48">
+                                    <div className="h-full bg-emerald-500/60"
+                                         style={{ width: `${Math.min(100, r.prob * 100)}%` }} />
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )
+                  })()}
+
                   {/* Outcome distribution */}
                   {bestOf > 1 && predictions.distribution.length > 0 && (
                     <div className="mt-4">
