@@ -290,43 +290,57 @@ export default function PredictPage() {
   // empty initial state would overwrite the saved values on first render).
   const STORAGE_KEY = 'predict_v1'
   const [hydrated, setHydrated] = useState(false)
+  // Deep-link visits (?team1=&team2=) are ephemeral — don't write back to
+  // localStorage, otherwise they'd clobber the user's saved exploration state.
+  const [isDeepLink, setIsDeepLink] = useState(false)
   useEffect(() => {
-    try {
-      const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEY) : null
-      if (raw) {
-        const s = JSON.parse(raw)
-        if (typeof s.team1     === 'string') setTeam1(s.team1)
-        if (typeof s.team2     === 'string') setTeam2(s.team2)
-        if ([1, 3, 5].includes(s.bestOf))    setBestOf(s.bestOf)
-        if (['symmetric', 'blue_t1', 'blue_t2'].includes(s.sideMode)) setSideMode(s.sideMode)
-        if (typeof s.playoffs  === 'boolean') setPlayoffs(s.playoffs)
-        if (typeof s.g2Shrink  === 'boolean') setG2Shrink(s.g2Shrink)
-        if (typeof s.poAdj     === 'boolean') setPoAdj(s.poAdj)
-        if (typeof s.coachAdj  === 'boolean') setCoachAdj(s.coachAdj)
-        if (typeof s.asOfDate  === 'string')  setAsOfDate(s.asOfDate)
-        if (s.rosters           && typeof s.rosters === 'object')           setRosters(s.rosters)
-        if (s.eloAdjustments    && typeof s.eloAdjustments === 'object')    setEloAdjustments(s.eloAdjustments)
-        if (s.gameResults       && typeof s.gameResults === 'object')       setGameResults(s.gameResults)
-        if (typeof s.bankroll  === 'number') setBankroll(s.bankroll)
-        if (typeof s.seriesMarketT1 === 'number' || s.seriesMarketT1 === null) setSeriesMarketT1(s.seriesMarketT1)
-        if (s.gameSideOverrides && typeof s.gameSideOverrides === 'object') setGameSideOverrides(s.gameSideOverrides)
-        if (s.expandedGames     && typeof s.expandedGames === 'object')     setExpandedGames(s.expandedGames)
-      }
-    } catch { /* corrupt JSON — ignore */ }
-    // URL params override localStorage so deep-links from /scanner work even if
-    // there's a stale saved matchup.
-    try {
-      const sp = new URLSearchParams(window.location.search)
-      const t1 = sp.get('team1'); if (t1) setTeam1(t1)
-      const t2 = sp.get('team2'); if (t2) setTeam2(t2)
-      const bo = sp.get('bo');    if (bo === '1' || bo === '3' || bo === '5') setBestOf(parseInt(bo) as 1 | 3 | 5)
-    } catch { /* no window — ignore */ }
+    // Deep-link from /scanner (or anywhere) carries ?team1=&team2=&bo=. When
+    // present, we treat it as a fresh evaluation of a specific matchup and
+    // skip localStorage entirely — playoffs/poAdj/eloAdjustments/etc all
+    // start at their useState defaults so prior /predict tweaks don't bleed
+    // across matchups. Direct /predict visits still get localStorage.
+    const sp = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
+    const urlT1 = sp?.get('team1') ?? null
+    const urlT2 = sp?.get('team2') ?? null
+    const urlBo = sp?.get('bo') ?? null
+    const fromDeepLink = !!(urlT1 || urlT2 || urlBo)
+
+    if (fromDeepLink) {
+      setIsDeepLink(true)
+      if (urlT1) setTeam1(urlT1)
+      if (urlT2) setTeam2(urlT2)
+      if (urlBo === '1' || urlBo === '3' || urlBo === '5') setBestOf(parseInt(urlBo) as 1 | 3 | 5)
+    } else {
+      try {
+        const raw = window.localStorage.getItem(STORAGE_KEY)
+        if (raw) {
+          const s = JSON.parse(raw)
+          if (typeof s.team1     === 'string') setTeam1(s.team1)
+          if (typeof s.team2     === 'string') setTeam2(s.team2)
+          if ([1, 3, 5].includes(s.bestOf))    setBestOf(s.bestOf)
+          if (['symmetric', 'blue_t1', 'blue_t2'].includes(s.sideMode)) setSideMode(s.sideMode)
+          if (typeof s.playoffs  === 'boolean') setPlayoffs(s.playoffs)
+          if (typeof s.g2Shrink  === 'boolean') setG2Shrink(s.g2Shrink)
+          if (typeof s.poAdj     === 'boolean') setPoAdj(s.poAdj)
+          if (typeof s.coachAdj  === 'boolean') setCoachAdj(s.coachAdj)
+          if (typeof s.asOfDate  === 'string')  setAsOfDate(s.asOfDate)
+          if (s.rosters           && typeof s.rosters === 'object')           setRosters(s.rosters)
+          if (s.eloAdjustments    && typeof s.eloAdjustments === 'object')    setEloAdjustments(s.eloAdjustments)
+          if (s.gameResults       && typeof s.gameResults === 'object')       setGameResults(s.gameResults)
+          if (typeof s.bankroll  === 'number') setBankroll(s.bankroll)
+          if (typeof s.seriesMarketT1 === 'number' || s.seriesMarketT1 === null) setSeriesMarketT1(s.seriesMarketT1)
+          if (s.gameSideOverrides && typeof s.gameSideOverrides === 'object') setGameSideOverrides(s.gameSideOverrides)
+          if (s.expandedGames     && typeof s.expandedGames === 'object')     setExpandedGames(s.expandedGames)
+        }
+      } catch { /* corrupt JSON — ignore */ }
+    }
     setHydrated(true)
   }, [])
 
   // Persist UI state to localStorage on any change (after hydration completes)
   useEffect(() => {
     if (!hydrated) return
+    if (isDeepLink) return  // deep-link sessions are ephemeral; don't clobber saved state
     try {
       const s = {
         team1, team2, bestOf, sideMode, playoffs, g2Shrink, poAdj, coachAdj,
@@ -336,7 +350,7 @@ export default function PredictPage() {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(s))
     } catch { /* quota / private mode — ignore */ }
   }, [
-    hydrated, team1, team2, bestOf, sideMode, playoffs, g2Shrink, poAdj, coachAdj,
+    hydrated, isDeepLink, team1, team2, bestOf, sideMode, playoffs, g2Shrink, poAdj, coachAdj,
     asOfDate, rosters, eloAdjustments, gameResults, bankroll,
     seriesMarketT1, gameSideOverrides, expandedGames,
   ])
