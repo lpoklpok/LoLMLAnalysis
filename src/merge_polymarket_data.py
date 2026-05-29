@@ -170,23 +170,46 @@ def _blue_prob_from_team1(prob_team1: float, snap_team1: str, blue: str) -> floa
 # ── Main merge ──────────────────────────────────────────────────────────────
 
 def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFrame:
-    """Add poly_blue_win_prob and poly_source columns to games (in-place return)."""
-    games = games.copy()
-    if 'best_of' not in games.columns:
-        # Fall back: infer best_of per series from max(game) observed.
-        # gameid format is "{series_id}-{series_id}_game_{N}", so the series_id
-        # is everything up to the "_game_N" suffix.
-        series_id = games['gameid'].astype(str).str.replace(r'_game_\d+$', '', regex=True)
-        max_game = games.groupby(series_id)['game'].transform('max')
-        games['best_of'] = np.where(max_game <= 1, 1, np.where(max_game <= 3, 3, 5))
+    """Add poly_blue_win_prob and poly_source columns to games (in-place return).
 
-    games['_date_ts']  = pd.to_datetime(games['date'], errors='coerce', utc=True)
-    games['_date_day'] = games['_date_ts'].dt.strftime('%Y-%m-%d')
-    games['_oe_series_key'] = games.apply(
+    Performance: snapshots only exist from when the snapshot worker was
+    deployed (2026-05-22 onward). We only need to recompute poly_* for games
+    whose date is within the snapshot window — about 1% of the 100k+ rows.
+    Pre-snapshot rows keep their existing values (NaN or whatever a prior
+    run wrote).
+    """
+    games = games.copy()
+    # Preserve existing poly columns; we'll only overwrite recent rows.
+    existing_prob   = games['poly_blue_win_prob'] if 'poly_blue_win_prob' in games.columns else pd.Series(pd.NA, index=games.index)
+    existing_source = games['poly_source']        if 'poly_source'        in games.columns else pd.Series(pd.NA, index=games.index)
+
+    # Filter the work set: games newer than (earliest snapshot - 1 day).
+    games['_date_ts'] = pd.to_datetime(games['date'], errors='coerce', utc=True)
+    earliest_snap_ts = pd.to_datetime(snaps['snapshot_time'], errors='coerce', utc=True).min()
+    if pd.notna(earliest_snap_ts):
+        cutoff = earliest_snap_ts - pd.Timedelta(days=1)
+        recent_mask = games['_date_ts'] >= cutoff
+        print(f'  performance: processing {recent_mask.sum():,} games newer than {cutoff.date()} '
+              f'(skipping {(~recent_mask).sum():,} older rows)')
+        # Subset the work, but stash the original index so we can re-merge.
+        work = games[recent_mask].copy()
+    else:
+        work = games.copy()
+        recent_mask = pd.Series(True, index=games.index)
+
+    if 'best_of' not in work.columns:
+        # Fall back: infer best_of per series from max(game) observed.
+        series_id = work['gameid'].astype(str).str.replace(r'_game_\d+$', '', regex=True)
+        max_game = work.groupby(series_id)['game'].transform('max')
+        work['best_of'] = np.where(max_game <= 1, 1, np.where(max_game <= 3, 3, 5))
+
+    # _date_ts already set above for filtering; just derive _date_day on work.
+    work['_date_day'] = work['_date_ts'].dt.strftime('%Y-%m-%d')
+    work['_oe_series_key'] = work.apply(
         lambda r: _oe_series_key(r['blue_team_teamname'], r['red_team_teamname'], r['_date_day']),
         axis=1
     )
-    games['_pair_key'] = games.apply(
+    work['_pair_key'] = work.apply(
         lambda r: _team_pair_key(r['blue_team_teamname'], r['red_team_teamname']),
         axis=1
     )
@@ -205,66 +228,14 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
     prob_by_gameid: dict[str, float | None] = {}
     source_by_gameid: dict[str, str | None] = {}
 
-    # Debug counters
-    snap_keys = set(snaps['_pair_key'].unique())
-    earliest_snap = snaps['snapshot_time_ts'].min()
-    print(f'  diag: {len(snap_keys):,} unique team-pair keys in snapshots; earliest snapshot at {earliest_snap}')
-
-    # Diagnostic: print 5 sample snapshot keys + 5 OE series keys from May 22 to compare
-    print('  diag: sample SNAPSHOT pair-keys (5):')
-    for k in list(snap_keys)[:5]:
-        print(f'    {k}')
-    games_recent = games[games['_date_day'] >= '2026-05-21']
-    print(f'  diag: OE games on/after 2026-05-21: {len(games_recent):,}')
-    # Show the latest OE date and any G2-vs-KC entries for explicit visibility
-    if not games_recent.empty:
-        max_dt = games_recent['_date_ts'].max()
-        print(f'  diag: max OE date in pulled file: {max_dt}')
-    if 'league' in games.columns:
-        league_counts = games_recent['league'].value_counts().head(10)
-        print('  diag: top leagues in recent OE games:')
-        for lg, ct in league_counts.items():
-            print(f'    {lg}: {ct}')
-    bk = games['blue_team_teamname'].astype(str)
-    rk = games['red_team_teamname'].astype(str)
-    g2kc = games[((bk.str.contains('G2', case=False, na=False) & rk.str.contains('Karmine', case=False, na=False)) |
-                   (rk.str.contains('G2', case=False, na=False) & bk.str.contains('Karmine', case=False, na=False))) &
-                  (games['_date_day'] >= '2026-05-20')]
-    print(f"  diag: G2-vs-KC OE games >=May 20 in pulled file: {len(g2kc)}")
-    for _, r in g2kc.iterrows():
-        print(f"    {r['gameid']} {r['_date_ts']} {r['blue_team_teamname']} vs {r['red_team_teamname']}")
-    print('  diag: sample OE pair-keys (recent, 5):')
-    seen = set()
-    for k in games_recent['_pair_key']:
-        if k in seen: continue
-        seen.add(k)
-        print(f'    {k}')
-        if len(seen) >= 5: break
-    print(f'  diag: intersection of snapshot/OE-recent pair-keys (5 sampled): {len(snap_keys & seen)}')
-    n_series = 0; n_series_with_any_snap = 0; n_series_with_pregame_snap = 0; n_series_merged = 0
-    sample_miss_no_snap: list = []
-    sample_miss_snap_post: list = []
-
+    n_series = n_series_merged = 0
     # Iterate each OE physical series (team-pair + same calendar day).
-    # For each, look up snapshots by team-pair only (Polymarket match_date
-    # may be on a different UTC day than OE date).
-    for series_key, series_games in games.groupby('_oe_series_key'):
+    for series_key, series_games in work.groupby('_oe_series_key'):
         n_series += 1
         first_game_ts = series_games['_date_ts'].min()
         pair_key      = series_games['_pair_key'].iloc[0]
         series_snaps  = snaps[snaps['_pair_key'] == pair_key]
-        if not series_snaps.empty: n_series_with_any_snap += 1
         picked        = _pick_snapshots(series_snaps, first_game_ts) if not series_snaps.empty else {}
-        if picked: n_series_with_pregame_snap += 1
-        # Sample recent missed matchups for diagnostics
-        if not picked and first_game_ts is not None and first_game_ts >= pd.Timestamp('2026-05-21', tz='UTC'):
-            if not series_snaps.empty:
-                # We have snapshots but all are post-game-start
-                if len(sample_miss_snap_post) < 6:
-                    sample_miss_snap_post.append((series_key, str(first_game_ts), len(series_snaps)))
-            else:
-                if len(sample_miss_no_snap) < 6:
-                    sample_miss_no_snap.append((series_key, str(first_game_ts)))
         # Derive best_of preferring Polymarket's submarkets (game_N_winner
         # markets that exist). A 3-0 Bo5 sweep would otherwise be misclassified
         # as a Bo3 by OE's max(game) alone, and we'd back-solve G3 from series
@@ -341,21 +312,17 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
             if p is not None:
                 n_series_merged += 1
 
-    print(f'  diag: {n_series:,} OE series total')
-    print(f'  diag:   {n_series_with_any_snap:,} have at least 1 snapshot (any time)')
-    print(f'  diag:   {n_series_with_pregame_snap:,} have a snapshot BEFORE first-game time')
-    if sample_miss_no_snap:
-        print(f'  diag: recent series with NO snapshot match (likely team-name or date mismatch):')
-        for k, t in sample_miss_no_snap: print(f'    {k}  first_game={t}')
-    if sample_miss_snap_post:
-        print(f'  diag: recent series with snapshots that all post-date first game:')
-        for k, t, n in sample_miss_snap_post: print(f'    {k}  first_game={t}  n_snaps={n}')
-    # Map by gameid (NOT positional assignment — see comment above)
-    games['poly_blue_win_prob'] = games['gameid'].map(prob_by_gameid)
-    games['poly_source']        = games['gameid'].map(source_by_gameid)
+    print(f'  merge: {n_series:,} recent series processed, {n_series_merged:,} game-fills written')
 
-    # Drop the helper columns
-    games = games.drop(columns=['_date_ts', '_date_day', '_oe_series_key', '_pair_key'])
+    # Build the new poly columns from the recent work, then COALESCE onto
+    # the existing values so pre-snapshot-era rows keep whatever was already
+    # there (NaN on first run, persisted values on subsequent runs).
+    new_prob   = games['gameid'].map(prob_by_gameid)
+    new_source = games['gameid'].map(source_by_gameid)
+    games['poly_blue_win_prob'] = new_prob.where(new_prob.notna(), existing_prob)
+    games['poly_source']        = new_source.where(new_source.notna(), existing_source)
+
+    games = games.drop(columns=['_date_ts'])
     return games
 
 
