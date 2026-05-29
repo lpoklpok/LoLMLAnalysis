@@ -98,8 +98,19 @@ interface ScannerResponse {
   events:         EventView[]
   top_edges:      EdgeRow[]
   top_liquidity:  LiquidityRow[]
+  // Raw per-ticker Kalshi books, so the client can seed kalshiBooks Map on
+  // first paint instead of waiting for SSE messages to arrive.
+  kalshi_raw_books: Record<string, OutcomeBook>
   generated_at:   number
   ms_elapsed:     number
+}
+
+// Kalshi fee per share (their published formula):
+//   fee = ceil(0.07 * size * price * (1 - price), nearest cent), floored at $0.01/contract
+// Per-share is just 0.07 * p * (1-p), floored at 0.01.
+export function kalshiFeePerShare(price: number): number {
+  if (price <= 0 || price >= 1) return 0
+  return Math.max(0.01, 0.07 * price * (1 - price))
 }
 
 // ── Math: series distribution with draft-aware shrinkage (matches /trader) ─
@@ -330,7 +341,7 @@ export async function GET(): Promise<Response> {
 
   const eventRows = (preds ?? []).filter(p => p.poly_event_slug)
   if (eventRows.length === 0) {
-    const empty: ScannerResponse = { events: [], top_edges: [], top_liquidity: [], generated_at: Date.now(), ms_elapsed: Date.now() - t0 }
+    const empty: ScannerResponse = { events: [], top_edges: [], top_liquidity: [], kalshi_raw_books: {}, generated_at: Date.now(), ms_elapsed: Date.now() - t0 }
     CACHE = { ts: Date.now(), data: empty }
     return NextResponse.json(empty)
   }
@@ -439,30 +450,33 @@ export async function GET(): Promise<Response> {
         }
 
         // Edge rows: for each level of each venue, compute the available $ edge
+        // Kalshi has trading fees (0.07 * p * (1-p) per share, $0.01/contract floor)
+        // — subtract that from the per-share edge.
         if (fair != null) {
           const pushEdges = (venue: Venue, book: OutcomeBook | null) => {
             if (!book) return
+            const feeFor = venue === 'kalshi' ? kalshiFeePerShare : () => 0
             for (const l of book.asks) {
-              // Buy here is +edge if fair > price
-              if (fair > l.price) {
-                const edge_per_share = fair - l.price
+              const fee = feeFor(l.price)
+              const eps = fair - l.price - fee   // buy at ask, net edge per share
+              if (eps > 0) {
                 edges.push({
                   event_slug:   pred.poly_event_slug!, event_title: d.title,
                   market_label: label, outcome: name,
                   venue, side: 'ask', price: l.price, size: l.size,
-                  fair, edge_per_share, total_edge_usd: edge_per_share * l.size,
+                  fair, edge_per_share: eps, total_edge_usd: eps * l.size,
                 })
-              } else break  // book is sorted; no more profitable asks above this
+              } else break  // book sorted ascending; deeper asks are worse
             }
             for (const l of book.bids) {
-              // Sell here is +edge if bid > fair
-              if (l.price > fair) {
-                const edge_per_share = l.price - fair
+              const fee = feeFor(l.price)
+              const eps = l.price - fair - fee   // sell at bid, net edge per share
+              if (eps > 0) {
                 edges.push({
                   event_slug:   pred.poly_event_slug!, event_title: d.title,
                   market_label: label, outcome: name,
                   venue, side: 'bid', price: l.price, size: l.size,
-                  fair, edge_per_share, total_edge_usd: edge_per_share * l.size,
+                  fair, edge_per_share: eps, total_edge_usd: eps * l.size,
                 })
               } else break
             }
@@ -536,12 +550,18 @@ export async function GET(): Promise<Response> {
   edges.sort((a, b) => b.total_edge_usd - a.total_edge_usd)
   liquidity.sort((a, b) => b.notional_usd - a.notional_usd)
 
+  // Convert the kalshiBooks Map (raw per-ticker) into a plain object so the
+  // client can use it as a seed for the EventSource-driven Map.
+  const kalshiRawObj: Record<string, OutcomeBook> = {}
+  for (const [ticker, book] of kalshiBooks) kalshiRawObj[ticker] = book
+
   const resp: ScannerResponse = {
     events,
-    top_edges:      edges.slice(0, 25),
-    top_liquidity:  liquidity.slice(0, 25),
-    generated_at:   Date.now(),
-    ms_elapsed:     Date.now() - t0,
+    top_edges:        edges.slice(0, 25),
+    top_liquidity:    liquidity.slice(0, 25),
+    kalshi_raw_books: kalshiRawObj,
+    generated_at:     Date.now(),
+    ms_elapsed:       Date.now() - t0,
   }
   CACHE = { ts: Date.now(), data: resp }
   return NextResponse.json(resp)

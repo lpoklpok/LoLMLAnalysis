@@ -34,9 +34,16 @@ interface ScannerEvent {
   submarkets:     ScannerSubmarket[]
 }
 interface ScannerResponse {
-  events:        ScannerEvent[]
-  generated_at:  number
-  ms_elapsed:    number
+  events:           ScannerEvent[]
+  kalshi_raw_books: Record<string, OutcomeBook>
+  generated_at:     number
+  ms_elapsed:       number
+}
+
+// Kalshi fee per share, matches server formula
+const kalshiFeePerShare = (price: number): number => {
+  if (price <= 0 || price >= 1) return 0
+  return Math.max(0.01, 0.07 * price * (1 - price))
 }
 
 interface EdgeRow {
@@ -164,9 +171,8 @@ export default function ScannerPage() {
         setErr(null)
         setLastFetched(Date.now())
         // Seed local books with what the server saw — gives the page
-        // something to render before WSS deltas start landing.
+        // something to render before WSS/SSE deltas start landing.
         const newPm = new Map<string, OutcomeBook>()
-        const newKalshi = new Map<string, OutcomeBook>()
         const tokens: string[] = []
         const tickers = new Set<string>()
         for (const ev of d.events) {
@@ -174,21 +180,23 @@ export default function ScannerPage() {
             for (const o of sm.outcomes) {
               if (o.token_id) {
                 tokens.push(o.token_id)
-                // The server-side route includes a `pm` field on the outcome
-                // — repackage as raw token book.
                 const raw = (o as unknown as { pm?: OutcomeBook }).pm
                 if (raw) newPm.set(o.token_id, raw)
               }
               if (o.kalshi_ticker) tickers.add(o.kalshi_ticker)
               if (o.kalshi_opp_ticker) tickers.add(o.kalshi_opp_ticker)
-              // Server also returns the COMBINED kalshi per outcome; we'll
-              // re-derive from per-ticker books once SSE updates land.
             }
           }
         }
         pmTokensRef.current = tokens
         kalshiTickersRef.current = [...tickers]
         setPmBooks(newPm)
+        // Seed Kalshi books from the server-returned raw per-ticker map so
+        // the page has real data on first paint (the EventSource will then
+        // keep them fresh).
+        const newKalshi = new Map<string, OutcomeBook>(
+          Object.entries(d.kalshi_raw_books ?? {})
+        )
         setKalshiBooks(newKalshi)
       } catch (e) { if (!cancelled) setErr(String(e)) }
     }
@@ -290,6 +298,9 @@ export default function ScannerPage() {
 
   // ── Derive everything client-side from { events, pmBooks, kalshiBooks } ─
   const { rendered, topEdges, topLiquidity } = useMemo(() => {
+    const edges: EdgeRow[] = []
+    const liquidity: LiquidityRow[] = []
+
     const rendered = events.map(ev => ({
       ...ev,
       submarkets: ev.submarkets.map(sm => ({
@@ -299,42 +310,39 @@ export default function ScannerPage() {
           const ksOwn  = o.kalshi_ticker ? kalshiBooks.get(o.kalshi_ticker) : undefined
           const ksOpp  = o.kalshi_opp_ticker ? kalshiBooks.get(o.kalshi_opp_ticker) : undefined
           const kalshi = ksOwn || ksOpp ? combineKalshi(ksOwn, ksOpp) : null
-          return {
-            ...o,
-            pm,
-            kalshi,
-            pm_best:     pm     ? { bid: pm.bids[0]     ?? null, ask: pm.asks[0]     ?? null } : null,
-            kalshi_best: kalshi ? { bid: kalshi.bids[0] ?? null, ask: kalshi.asks[0] ?? null } : null,
-          }
-        }),
-      })),
-    }))
-
-    const edges: EdgeRow[] = []
-    const liquidity: LiquidityRow[] = []
-    for (const ev of rendered) {
-      for (const sm of ev.submarkets) {
-        for (const o of sm.outcomes) {
           const fair = o.fair
-          const venues: Array<['pm' | 'kalshi', OutcomeBook | null]> = [['pm', o.pm], ['kalshi', o.kalshi]]
+
+          // Track the per-outcome $ edge totals for the submarket display.
+          let pmEdgeUsd     = 0
+          let kalshiEdgeUsd = 0
+
+          const venues: Array<['pm' | 'kalshi', OutcomeBook | null]> = [['pm', pm], ['kalshi', kalshi]]
           for (const [venue, book] of venues) {
             if (!book) continue
+            const feeFor = venue === 'kalshi' ? kalshiFeePerShare : () => 0
+
             if (fair != null) {
               for (const l of book.asks) {
-                if (fair <= l.price) break
+                const eps = fair - l.price - feeFor(l.price)
+                if (eps <= 0) break
+                const totalUsd = eps * l.size
                 edges.push({
                   event_title: ev.title, market_label: sm.market_label, outcome: o.outcome,
                   venue, side: 'ask', price: l.price, size: l.size, fair,
-                  total_edge_usd: (fair - l.price) * l.size,
+                  total_edge_usd: totalUsd,
                 })
+                if (venue === 'pm') pmEdgeUsd += totalUsd; else kalshiEdgeUsd += totalUsd
               }
               for (const l of book.bids) {
-                if (l.price <= fair) break
+                const eps = l.price - fair - feeFor(l.price)
+                if (eps <= 0) break
+                const totalUsd = eps * l.size
                 edges.push({
                   event_title: ev.title, market_label: sm.market_label, outcome: o.outcome,
                   venue, side: 'bid', price: l.price, size: l.size, fair,
-                  total_edge_usd: (l.price - fair) * l.size,
+                  total_edge_usd: totalUsd,
                 })
+                if (venue === 'pm') pmEdgeUsd += totalUsd; else kalshiEdgeUsd += totalUsd
               }
             }
             const bid = book.bids[0]
@@ -360,9 +368,21 @@ export default function ScannerPage() {
               })
             }
           }
-        }
-      }
-    }
+
+          return {
+            ...o,
+            pm,
+            kalshi,
+            pm_best:     pm     ? { bid: pm.bids[0]     ?? null, ask: pm.asks[0]     ?? null } : null,
+            kalshi_best: kalshi ? { bid: kalshi.bids[0] ?? null, ask: kalshi.asks[0] ?? null } : null,
+            pm_edge_usd:     pmEdgeUsd,
+            kalshi_edge_usd: kalshiEdgeUsd,
+            total_edge_usd:  pmEdgeUsd + kalshiEdgeUsd,
+          }
+        }),
+      })),
+    }))
+
     edges.sort((a, b) => b.total_edge_usd - a.total_edge_usd)
     liquidity.sort((a, b) => b.notional_usd - a.notional_usd)
     return { rendered, topEdges: edges.slice(0, 25), topLiquidity: liquidity.slice(0, 25) }
@@ -493,20 +513,25 @@ export default function ScannerPage() {
                   <th className="px-3 py-2 text-left font-normal">Market</th>
                   <th className="px-3 py-2 text-left font-normal">Outcome</th>
                   <th className="px-3 py-2 text-right font-normal">Fair</th>
-                  <th className="px-3 py-2 text-right font-normal border-l border-gray-800" colSpan={2}>Polymarket</th>
-                  <th className="px-3 py-2 text-right font-normal border-l border-gray-800" colSpan={2}>Kalshi (combined)</th>
+                  <th className="px-3 py-2 text-right font-normal border-l border-gray-800" colSpan={3}>Polymarket</th>
+                  <th className="px-3 py-2 text-right font-normal border-l border-gray-800" colSpan={3}>Kalshi (combined, fee-net)</th>
                 </tr>
                 <tr className="text-[10px] text-gray-600 border-b border-gray-800">
                   <th></th><th></th><th></th>
                   <th className="px-3 pb-1.5 text-right font-normal"><span className="text-green-500">BID (sz)</span></th>
                   <th className="px-3 pb-1.5 text-right font-normal"><span className="text-red-400">ASK (sz)</span></th>
+                  <th className="px-3 pb-1.5 text-right font-normal"><span className="text-emerald-400">Edge $</span></th>
                   <th className="px-3 pb-1.5 text-right font-normal border-l border-gray-800"><span className="text-green-500">BID (sz)</span></th>
                   <th className="px-3 pb-1.5 text-right font-normal"><span className="text-red-400">ASK (sz)</span></th>
+                  <th className="px-3 pb-1.5 text-right font-normal"><span className="text-emerald-400">Edge $</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800">
                 {ev.submarkets.flatMap((sm, smIdx) =>
-                  sm.outcomes.map((o, oIdx) => (
+                  sm.outcomes.map((o, oIdx) => {
+                    const pmEdge = (o as { pm_edge_usd?: number }).pm_edge_usd ?? 0
+                    const ksEdge = (o as { kalshi_edge_usd?: number }).kalshi_edge_usd ?? 0
+                    return (
                     <tr key={`${smIdx}-${oIdx}`} className={oIdx === 0 ? 'bg-gray-900/40' : ''}>
                       <td className="px-3 py-2 text-gray-400">{oIdx === 0 ? sm.market_label : ''}</td>
                       <td className="px-3 py-2 text-gray-200">{o.outcome}</td>
@@ -517,14 +542,21 @@ export default function ScannerPage() {
                       <td className="px-3 py-2 text-right">
                         <BookCell best={o.pm_best} fair={o.fair} side="ask" venue="pm" />
                       </td>
+                      <td className={`px-3 py-2 text-right font-mono ${pmEdge >= 100 ? 'text-emerald-300 font-bold' : pmEdge >= 10 ? 'text-emerald-400' : pmEdge > 0 ? 'text-emerald-500' : 'text-gray-700'}`}>
+                        {pmEdge > 0 ? fmtUsd(pmEdge) : '—'}
+                      </td>
                       <td className="px-3 py-2 text-right border-l border-gray-800">
                         <BookCell best={o.kalshi_best} fair={o.fair} side="bid" venue="kalshi" />
                       </td>
                       <td className="px-3 py-2 text-right">
                         <BookCell best={o.kalshi_best} fair={o.fair} side="ask" venue="kalshi" />
                       </td>
+                      <td className={`px-3 py-2 text-right font-mono ${ksEdge >= 100 ? 'text-emerald-300 font-bold' : ksEdge >= 10 ? 'text-emerald-400' : ksEdge > 0 ? 'text-emerald-500' : 'text-gray-700'}`}>
+                        {ksEdge > 0 ? fmtUsd(ksEdge) : '—'}
+                      </td>
                     </tr>
-                  ))
+                    )
+                  })
                 )}
               </tbody>
             </table>
