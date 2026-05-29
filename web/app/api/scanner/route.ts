@@ -318,6 +318,15 @@ function combineKalshi(team1Book: OutcomeBook | undefined, team2Book: OutcomeBoo
   }
 }
 
+// Invert YES → NO view of a single Kalshi contract (one ticker, two sides).
+function invertBook(book: OutcomeBook): OutcomeBook {
+  const r2 = (p: number) => Math.round(p * 100) / 100
+  return {
+    bids: book.asks.map(l => ({ price: r2(1 - l.price), size: l.size })).sort((a, b) => b.price - a.price),
+    asks: book.bids.map(l => ({ price: r2(1 - l.price), size: l.size })).sort((a, b) => a.price - b.price),
+  }
+}
+
 // ── Main handler ─────────────────────────────────────────────────────────
 export async function GET(): Promise<Response> {
   if (CACHE.data && Date.now() - CACHE.ts < CACHE_TTL_MS) {
@@ -446,7 +455,13 @@ export async function GET(): Promise<Response> {
         const ksOwn        = ksTicker ? kalshiBooks.get(ksTicker) : undefined
         const ksOpp        = ksOppTicker ? kalshiBooks.get(ksOppTicker) : undefined
         if (ksOwn || ksOpp) {
-          kalshiBook = combineKalshi(ksOwn, ksOpp)
+          // Single-ticker Y/N market (e.g. Total Maps O/U) — both outcomes
+          // share one ticker. Don't combine; outcome[0] = YES book, outcome[1] = invert.
+          if (ksTicker && ksTicker === ksOppTicker && ksOwn) {
+            kalshiBook = idx === 0 ? ksOwn : invertBook(ksOwn)
+          } else {
+            kalshiBook = combineKalshi(ksOwn, ksOpp)
+          }
           kalshiBest = { bid: kalshiBook.bids[0] ?? null, ask: kalshiBook.asks[0] ?? null }
         }
 
