@@ -188,6 +188,50 @@ export default function PnLPage() {
 
   const cum = filtered?.cumulative ?? []
 
+  // Aggregate filtered days by YYYY-MM for the monthly breakdown panel.
+  const monthly = useMemo(() => {
+    if (!filtered) return [] as Array<{
+      month: string;     // 'YYYY-MM'
+      label: string;     // e.g. 'Feb 2026'
+      polymarket_pnl: number;
+      kalshi_pnl: number;
+      total_pnl: number;
+      polymarket_trades: number;
+      kalshi_trades: number;
+      days: number;
+    }>
+    const acc = new Map<string, {
+      polymarket_pnl: number; kalshi_pnl: number; total_pnl: number;
+      polymarket_trades: number; kalshi_trades: number; days: number;
+    }>()
+    for (const d of filtered.days) {
+      const ym = d.date.slice(0, 7)
+      const cur = acc.get(ym) ?? {
+        polymarket_pnl: 0, kalshi_pnl: 0, total_pnl: 0,
+        polymarket_trades: 0, kalshi_trades: 0, days: 0,
+      }
+      cur.polymarket_pnl    += d.polymarket_pnl
+      cur.kalshi_pnl        += d.kalshi_pnl
+      cur.total_pnl         += d.total_pnl
+      cur.polymarket_trades += d.polymarket_trades
+      cur.kalshi_trades     += d.kalshi_trades
+      cur.days              += 1
+      acc.set(ym, cur)
+    }
+    return Array.from(acc.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([ym, v]) => ({
+        month: ym,
+        label: new Date(ym + '-01T00:00:00Z').toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+        ...v,
+      }))
+  }, [filtered])
+
+  const maxMonthAbs = useMemo(
+    () => Math.max(...monthly.flatMap(m => [Math.abs(m.polymarket_pnl), Math.abs(m.kalshi_pnl), Math.abs(m.total_pnl)]), 1),
+    [monthly],
+  )
+
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
       <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
@@ -320,6 +364,67 @@ export default function PnLPage() {
                 </table>
               </div>
             </div>
+
+            {/* Monthly breakdown */}
+            {monthly.length > 1 && (
+              <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                <h2 className="text-lg font-semibold text-gray-100 mb-1">Monthly breakdown</h2>
+                <p className="text-xs text-gray-500 mb-5">
+                  Same window as the daily table — just rolled up by calendar month (UTC).
+                </p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-xs text-gray-400 border-b border-gray-800">
+                        <th className="text-left  px-2 py-2">Month</th>
+                        <th className="text-right px-2 py-2">Days</th>
+                        <th className="text-right px-2 py-2">Polymarket PnL</th>
+                        <th className="text-right px-2 py-2">PM trades</th>
+                        <th className="text-right px-2 py-2">Kalshi PnL</th>
+                        <th className="text-right px-2 py-2">Kalshi trades</th>
+                        <th className="text-right px-2 py-2 border-l border-gray-800">Total PnL</th>
+                      </tr>
+                    </thead>
+                    <tbody className="font-mono">
+                      {monthly.map(m => (
+                        <tr key={m.month} className="border-b border-gray-800/60">
+                          <td className="px-2 py-2 font-sans">{m.label}</td>
+                          <td className="px-2 py-2 text-right text-gray-500">{m.days}</td>
+                          <td className={`px-2 py-2 text-right ${clrFor(m.polymarket_pnl)} ${bgFor(m.polymarket_pnl, maxMonthAbs)}`}>
+                            {m.polymarket_pnl === 0 ? '—' : fmt$(m.polymarket_pnl)}
+                          </td>
+                          <td className="px-2 py-2 text-right text-gray-500">{m.polymarket_trades || '—'}</td>
+                          <td className={`px-2 py-2 text-right ${clrFor(m.kalshi_pnl)} ${bgFor(m.kalshi_pnl, maxMonthAbs)}`}>
+                            {m.kalshi_pnl === 0 ? '—' : fmt$(m.kalshi_pnl)}
+                          </td>
+                          <td className="px-2 py-2 text-right text-gray-500">{m.kalshi_trades || '—'}</td>
+                          <td className={`px-2 py-2 text-right font-bold border-l border-gray-800 ${clrFor(m.total_pnl)} ${bgFor(m.total_pnl, maxMonthAbs)}`}>
+                            {m.total_pnl === 0 ? '—' : fmt$(m.total_pnl)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t-2 border-gray-700">
+                        <td className="px-2 py-2 text-gray-400 font-semibold">Total</td>
+                        <td className="px-2 py-2 text-right text-gray-500 font-mono">{monthly.reduce((s, m) => s + m.days, 0)}</td>
+                        <td className={`px-2 py-2 text-right font-mono font-bold ${clrFor(filtered.totals.polymarket_pnl)}`}>
+                          {fmt$(filtered.totals.polymarket_pnl)}
+                        </td>
+                        <td className="px-2 py-2 text-right text-gray-500 font-mono">{filtered.totals.polymarket_trades}</td>
+                        <td className={`px-2 py-2 text-right font-mono font-bold ${clrFor(filtered.totals.kalshi_pnl)}`}>
+                          {fmt$(filtered.totals.kalshi_pnl)}
+                        </td>
+                        <td className="px-2 py-2 text-right text-gray-500 font-mono">{filtered.totals.kalshi_trades}</td>
+                        <td className={`px-2 py-2 text-right font-mono font-extrabold text-lg border-l border-gray-800 ${clrFor(filtered.totals.total_pnl)}`}>
+                          {fmt$(filtered.totals.total_pnl)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {/* Cumulative sparkline since start_date */}
             {cum.length > 0 && (
