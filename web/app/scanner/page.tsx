@@ -285,10 +285,11 @@ function adjustedFair(
     const f0 = out0IsT1 ? adjPGameT1 : 1 - adjPGameT1
     return oIdx === 0 ? f0 : 1 - f0
   }
-  if (label === 'Game Handicap') {
+  if (label.startsWith('Game Handicap')) {
+    // outcome[0] now arrives as e.g. "JD Gaming (-1.5)" — paren-anchored regex
+    // pulls the handicap value belonging to outcome[0].
     const m = /\(([+-]?\d+\.?\d*)\)/.exec(out0)
     const h0 = m ? parseFloat(m[1]) : (bestOf === 5 ? -2.5 : -1.5)
-    // h0 is outcome[0]'s handicap. Translate to team1's perspective for pHandicap.
     const hT1 = out0IsT1 ? h0 : -h0
     const pT1 = pHandicap(adjDist, bestOf, hT1)
     const f0  = out0IsT1 ? pT1 : 1 - pT1

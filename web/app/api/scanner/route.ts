@@ -415,18 +415,23 @@ export async function GET(): Promise<Response> {
         // Question is "Game Handicap: T1 (-1.5) vs BNK FEARX (+1.5)". The
         // handicap value is always in parentheses; without the paren-anchor
         // a naive `[+-]?\d+` regex grabs the "1" from "T1" instead of "-1.5".
-        label = 'Game Handicap'
         const m = /\(([+-]?\d+\.?\d*)\)/.exec(sm.question)
         const h0 = m ? parseFloat(m[1]) : (pred.best_of === 5 ? -2.5 : -1.5)
-        // h0 is the handicap of outcome[0]. We need P(outcome[0] covers).
-        // If outcome[0] is the original DB team1 (= our seriesDist team1), use directly.
-        // Otherwise the handicap belongs to "other team" — translate.
+        const h1 = -h0
         const team1Side1 = _norm(sm.outcomes[0])
         const oeT1Side    = _norm(d.team1)
         const handicapForOurT1 = team1Side1 === oeT1Side ? h0 : -h0
         const pOurT1 = pHandicap(seriesDist, pred.best_of, handicapForOurT1)
-        // outcome[0]_is_our_t1 → fv1 = pOurT1; else fv1 = 1 - pOurT1
         fv1 = team1Side1 === oeT1Side ? pOurT1 : 1 - pOurT1
+        // Disambiguating label + handicap-suffixed outcome names so the client
+        // can (a) tell -1.5 apart from -2.5 in the UI, (b) parse the handicap
+        // value back out when the per-event ELO slider recomputes fairs.
+        const fmtH = (h: number) => `${h >= 0 ? '+' : ''}${h}`
+        label = `Game Handicap (${fmtH(h0)} / ${fmtH(h1)})`
+        sm.outcomes = [
+          `${sm.outcomes[0]} (${fmtH(h0)})`,
+          `${sm.outcomes[1]} (${fmtH(h1)})`,
+        ]
       } else if (sm.market_type.startsWith('games_total_') && seriesDist) {
         // Outcomes are typically ["Over", "Under"] for a stated threshold.
         const m = /(\d+\.?\d*)/.exec(sm.market_type.replace('games_total_', ''))
