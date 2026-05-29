@@ -877,10 +877,12 @@ def run():
         dt      = row['DateTime_UTC']
         best_of = int(row['BestOf'])
 
-        is_playoff = best_of >= 5
+        # Default no-playoffs to stay consistent with /predict (which defaults
+        # playoffs=false). User preference: don't bake the team_po_bonus into
+        # automated predictions; opt-in per matchup if you want it.
         pred = predict_game(blue, red, league, elo_map, roster_state, features, model, fim_inv,
                             player_h2h, player_gd15, team_outperf, team_outperf_staleness,
-                            draft_advantage=0, playoffs=is_playoff)
+                            draft_advantage=0, playoffs=False)
         if pred:
             pred['date']    = dt.isoformat()
             pred['best_of'] = best_of
