@@ -112,20 +112,20 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
 
-      - name: Rebuild player_elo_history server-side (from Supabase games table)
-        # PL/pgSQL replay over the games table. Self-healing: doesn't depend on
-        # local games_with_odds.csv being current. Function defined in
-        # supabase/migrations/20260530_player_elo_history_rebuild.sql.
-        # The Python upload_player_elo_history.py is kept as a fallback for
-        # local runs but no longer in the cron path.
+      - name: Refresh player_elo_history server-side (incremental from games table)
+        # Incremental PL/pgSQL refresh. Reads from the Supabase games table
+        # (kept fresh by the earlier "Upload full per-game stats" step), seeds
+        # in-memory Elo state from existing history rows, and walks only games
+        # newer than the watermark. Finishes in seconds.
+        # Function defined in supabase/migrations/20260530_player_elo_history_rebuild.sql.
         run: |
-          curl --fail --silent --show-error --max-time 600 \
+          response=$(curl --fail --silent --show-error --max-time 120 \
             -X POST \
             -H "apikey: $SUPABASE_SERVICE_KEY" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
             -H "Content-Type: application/json" \
-            "$SUPABASE_URL/rest/v1/rpc/rebuild_player_elo_history" \
-            && echo "  rebuild_player_elo_history complete"
+            "$SUPABASE_URL/rest/v1/rpc/refresh_player_elo_history")
+          echo "  refresh_player_elo_history inserted: $response rows"
         continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
