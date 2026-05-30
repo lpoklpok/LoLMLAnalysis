@@ -53,6 +53,7 @@ interface LiveSnapshot {
 }
 
 interface EventRef {
+  slug?:   string         // event slug — used to thread per-event adjustments (ELO, playoffs, live) into rankings
   team1: string
   team2: string
   best_of: number
@@ -700,7 +701,7 @@ export default function ScannerPage() {
         else if (bid != null) mktT1 = bid
         else if (ask != null) mktT1 = ask
       }
-      const evRef = { team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, mkt_t1: mktT1, date: ev.date }
+      const evRef = { slug: ev.slug, team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, mkt_t1: mktT1, date: ev.date }
       const submarkets = ev.submarkets.map(sm => {
         const outcomes = sm.outcomes.map((o, oIdx) => {
           const pm     = o.token_id ? pmBooks.get(o.token_id) ?? null : null
@@ -775,6 +776,92 @@ export default function ScannerPage() {
   }
   const isPreMatch = (date?: string) => isPreMatchOrLive(undefined, date)
 
+  // Per-event derived state — adjusted per-game prob and distribution after
+  // ELO slider / playoffs toggle / live overlay. Computed only for events
+  // with non-default adjustments so the work scales with active overrides,
+  // not the full event list.
+  const eventAdj = useMemo(() => {
+    const out = new Map<string, { adjGameT1: number; adjDist: Map<string, number>; liveGameNum: number | null; pLiveT1: number | null }>()
+    for (const ev of events) {
+      const delta = eloAdj[ev.slug] ?? 0
+      const playoffDefault = ev.best_of >= 5
+      const playoffOn = playoffOverride[ev.slug] ?? playoffDefault
+      const liveSnap = liveForEvent.get(ev.slug)
+      const playoffDiff = (playoffOn ? 1 : 0) - (playoffDefault ? 1 : 0)
+      const hasLive = liveSnap?.state === 'in_game'
+      if (delta === 0 && playoffDiff === 0 && !hasLive) continue
+
+      const baseGameT1 = ev.pred_blue_win == null
+        ? null
+        : (ev.pred_blue_team === ev.team1 ? ev.pred_blue_win : 1 - ev.pred_blue_win)
+      if (baseGameT1 == null) continue
+
+      const poBonusLogit = (teamPoAdj[ev.team1] ?? 0) - (teamPoAdj[ev.team2] ?? 0)
+      const poShiftLogit = playoffDiff * poBonusLogit
+      const poAdjGameT1  = poShiftLogit === 0 ? baseGameT1 : sigmoid(logit(baseGameT1) + poShiftLogit)
+      const adjGameT1    = applyEloShift(poAdjGameT1, delta)
+
+      let pLiveT1: number | null = null
+      if (liveSnap) {
+        const blueIsA = liveSnap.blue_team_id !== null ? liveSnap.blue_team_id === liveSnap.team_a_id : true
+        const blueName = blueIsA ? liveSnap.team_a_name : liveSnap.team_b_name
+        const t1IsBlue = normName(ev.team1).includes(normName(blueName)) || normName(blueName).includes(normName(ev.team1))
+        pLiveT1 = t1IsBlue ? liveSnap.p_adj : 1 - liveSnap.p_adj
+      }
+
+      // Series-score inference for live G2+ (mirror of the render-side logic).
+      let startT1Wins = 0, startT2Wins = 0
+      if (liveSnap?.state === 'in_game' && liveSnap.game_number > 1) {
+        for (const sm of ev.submarkets) {
+          const m = /Game (\d+) Winner/.exec(sm.market_label)
+          if (!m) continue
+          const n = parseInt(m[1], 10)
+          if (n >= liveSnap.game_number) continue
+          const o0 = sm.outcomes[0]
+          const book = o0?.token_id ? pmBooks.get(o0.token_id) : null
+          const bid = book?.bids[0]?.price
+          const ask = book?.asks[0]?.price
+          const mid = bid != null && ask != null ? (bid + ask) / 2 : (bid ?? ask)
+          if (mid == null) continue
+          const out0IsT1 = outcomeIsTeam(o0?.outcome ?? '', ev.team1, ev.team2)
+          const t1Pin = out0IsT1 ? mid : 1 - mid
+          if (t1Pin >= 0.98) startT1Wins++
+          else if (t1Pin <= 0.02) startT2Wins++
+        }
+      }
+      const adjDist = (hasLive && pLiveT1 != null)
+        ? seriesDistributionLive(adjGameT1, ev.best_of, startT1Wins, startT2Wins, liveSnap!.game_number, pLiveT1)
+        : seriesDistribution(adjGameT1, ev.best_of)
+      out.set(ev.slug, { adjGameT1, adjDist, liveGameNum: hasLive ? liveSnap!.game_number : null, pLiveT1: hasLive ? pLiveT1 : null })
+    }
+    return out
+  }, [events, eloAdj, playoffOverride, liveForEvent, teamPoAdj, pmBooks])
+
+  // Look up the adjusted fair for (event, market_label, outcome). Returns null
+  // if the event has no adjustments OR the submarket isn't recognized by
+  // adjustedFair(). Used to rescore ranking-panel rows when an event has been
+  // shifted via slider / playoffs toggle / live overlay.
+  const adjFairFor = (slug: string | undefined, marketLabel: string, outcome: string): number | null => {
+    if (!slug) return null
+    const state = eventAdj.get(slug)
+    if (!state) return null
+    const ev = events.find(e => e.slug === slug)
+    if (!ev) return null
+    const sm = ev.submarkets.find(s => s.market_label === marketLabel)
+    if (!sm) return null
+    const oIdx = sm.outcomes.findIndex(o => o.outcome === outcome)
+    if (oIdx < 0) return null
+    return adjustedFair(sm, oIdx, ev.team1, ev.team2, ev.best_of, state.adjGameT1, state.adjDist, state.liveGameNum, state.pLiveT1)
+  }
+
+  // Rescore a ranking row's per-share edge using the adjusted fair if any.
+  const adjEps = (row: EdgeRow): number => {
+    const af = adjFairFor(row.slug, row.market_label, row.outcome)
+    if (af == null) return row.edge_per_share
+    const fee = row.venue === 'kalshi' ? kalshiFeePerShare(row.price) : 0
+    return row.side === 'ask' ? (af - row.price - fee) : (row.price - af - fee)
+  }
+
   const visibleEvents = useMemo(() => {
     return rendered
       .filter(ev => isPreMatchOrLive(ev.slug, ev.date))
@@ -795,49 +882,107 @@ export default function ScannerPage() {
       if (!isPreMatch(e.date)) continue
       if (majorOnly && !MAJOR_LEAGUES.has(e.league)) continue
       if (venueFilter !== 'all' && e.venue !== venueFilter) continue
+      // Rescore with adjusted fair if the event has any override.
+      const eps = adjEps(e)
+      if (eps <= 0) continue
+      const usd = eps * e.size
       const k = `${e.team1}|${e.team2}|${e.market_label}|${e.outcome}|${e.venue}|${e.side}`
       const existing = groups.get(k)
       if (!existing) {
         groups.set(k, {
           team1: e.team1, team2: e.team2, best_of: e.best_of, league: e.league, mkt_t1: e.mkt_t1,
           market_label: e.market_label, outcome: e.outcome, venue: e.venue, side: e.side,
-          best_price: e.price, best_eps: e.edge_per_share,
+          best_price: e.price, best_eps: eps,
           worst_price: e.price,
-          cum_size: e.size, cum_edge_usd: e.total_edge_usd, avg_eps: e.edge_per_share, num_levels: 1,
+          cum_size: e.size, cum_edge_usd: usd, avg_eps: eps, num_levels: 1,
         })
       } else {
-        // For ASK (BUY): best = lowest price, worst = highest you'd still take.
-        // For BID (SELL): best = highest price, worst = lowest you'd still take.
         if (e.side === 'ask') {
-          if (e.price < existing.best_price) { existing.best_price = e.price; existing.best_eps = e.edge_per_share }
+          if (e.price < existing.best_price) { existing.best_price = e.price; existing.best_eps = eps }
           if (e.price > existing.worst_price) existing.worst_price = e.price
         } else {
-          if (e.price > existing.best_price) { existing.best_price = e.price; existing.best_eps = e.edge_per_share }
+          if (e.price > existing.best_price) { existing.best_price = e.price; existing.best_eps = eps }
           if (e.price < existing.worst_price) existing.worst_price = e.price
         }
         existing.cum_size     += e.size
-        existing.cum_edge_usd += e.total_edge_usd
+        existing.cum_edge_usd += usd
         existing.num_levels   += 1
       }
     }
-    // Compute blended avg ¢/sh per bucket, filter by minEdge, rank, cap at 30.
     return Array.from(groups.values())
       .map(g => ({ ...g, avg_eps: g.cum_size > 0 ? g.cum_edge_usd / g.cum_size : 0 }))
       .filter(g => g.cum_edge_usd >= minEdge)
       .sort((a, b) => b.cum_edge_usd - a.cum_edge_usd)
       .slice(0, 30)
-  }, [allEdges, venueFilter, minEdge, majorOnly])
+  }, [allEdges, venueFilter, minEdge, majorOnly, eventAdj])
   const substantialEdges = useMemo(
-    () => [...allEdges]
+    () => allEdges
       .filter(e => isPreMatch(e.date))
       .filter(e => !majorOnly || MAJOR_LEAGUES.has(e.league))
       .filter(e => e.size >= minTradeSize)
       .filter(e => venueFilter === 'all' || e.venue === venueFilter)
+      .map(e => ({ ...e, edge_per_share: adjEps(e), total_edge_usd: adjEps(e) * e.size }))
+      .filter(e => e.edge_per_share > 0)
       .filter(e => e.total_edge_usd >= minEdge)
       .sort((a, b) => b.edge_per_share - a.edge_per_share)
       .slice(0, 30),
-    [allEdges, minTradeSize, venueFilter, minEdge, majorOnly],
+    [allEdges, minTradeSize, venueFilter, minEdge, majorOnly, eventAdj],
   )
+
+  // ── NEW: Best Bid Edge ranking (passive market-making opportunities) ─────
+  // For every event × submarket × outcome × venue, consider the BEST bid.
+  // Edge = adjusted_fair − bid_price (PM) or − bid_price − fee (Kalshi).
+  // Top of book only — not cumulative. Reflects per-event adjustments via
+  // adjFairFor (slider, playoffs toggle, live overlay).
+  interface BidEdgeRow extends EventRef {
+    market_label: string
+    outcome:      string
+    venue:        'pm' | 'kalshi'
+    bid_price:    number
+    bid_size:     number
+    fair:         number
+    eps:          number
+  }
+  const bidEdges = useMemo(() => {
+    const rows: BidEdgeRow[] = []
+    for (const ev of rendered) {
+      if (!isPreMatchOrLive(ev.slug, ev.date)) continue
+      if (majorOnly && !MAJOR_LEAGUES.has(ev.league)) continue
+      for (const sm of ev.submarkets) {
+        for (let oIdx = 0; oIdx < sm.outcomes.length; oIdx++) {
+          const o = sm.outcomes[oIdx]
+          const adjF = adjFairFor(ev.slug, sm.market_label, o.outcome)
+          const fair = adjF ?? o.fair
+          if (fair == null) continue
+          // PM bid
+          if (venueFilter !== 'kalshi') {
+            const bid = o.pm_best?.bid
+            if (bid && bid.price != null && bid.size > 0) {
+              const eps = fair - bid.price
+              if (eps > 0) rows.push({
+                slug: ev.slug, team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, date: ev.date,
+                market_label: sm.market_label, outcome: o.outcome,
+                venue: 'pm', bid_price: bid.price, bid_size: bid.size, fair, eps,
+              })
+            }
+          }
+          // Kalshi bid (combined book already aggregates this-team-YES + opposite-team-NO routes)
+          if (venueFilter !== 'pm') {
+            const bid = o.kalshi_best?.bid
+            if (bid && bid.price != null && bid.size > 0) {
+              const eps = fair - bid.price - kalshiFeePerShare(bid.price)
+              if (eps > 0) rows.push({
+                slug: ev.slug, team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, date: ev.date,
+                market_label: sm.market_label, outcome: o.outcome,
+                venue: 'kalshi', bid_price: bid.price, bid_size: bid.size, fair, eps,
+              })
+            }
+          }
+        }
+      }
+    }
+    return rows.sort((a, b) => b.eps - a.eps).slice(0, 30)
+  }, [rendered, eventAdj, majorOnly, venueFilter])
   const filteredLiquidity = useMemo(
     () => allLiquidity
       .filter(r => isPreMatch(r.date))
@@ -918,7 +1063,49 @@ export default function ScannerPage() {
       {err && <div className="m-4 p-3 bg-red-900/30 border border-red-700 rounded text-sm text-red-200">{err}</div>}
 
       {/* Top rankings */}
-      <div className="grid md:grid-cols-3 gap-3 p-3 md:p-4">
+      <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-3 p-3 md:p-4">
+        {/* NEW: Best Bid Edge (passive market-making opportunities) */}
+        <div className="bg-gray-900 border border-cyan-700/30 rounded-lg overflow-hidden">
+          <div className="px-3 py-2 border-b border-gray-800 flex items-baseline gap-2">
+            <span className="text-xs uppercase tracking-wide text-cyan-300 font-semibold">Best Bid Edge ¢/sh</span>
+            <span className="text-[10px] text-gray-600">{bidEdges.length}</span>
+            <span className="text-[10px] text-gray-700 ml-auto" title="Passive: post your bid at the same price and get filled. Edge = fair − bid (− Kalshi fee). Respects per-event ELO / playoffs / live overrides.">
+              fair vs bid (passive)
+            </span>
+          </div>
+          <div className="max-h-[380px] overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-900 text-gray-500 sticky top-0 z-10">
+                <tr className="border-b border-gray-800">
+                  <th className="px-2 py-1.5 text-left font-normal">Matchup · Bet</th>
+                  <th className="px-2 py-1.5 text-right font-normal">Venue</th>
+                  <th className="px-2 py-1.5 text-right font-normal" title="Bid price you'd post at">Bid</th>
+                  <th className="px-2 py-1.5 text-right font-normal" title="Size at that bid">Sz</th>
+                  <th className="px-2 py-1.5 text-right font-normal" title="Adjusted fair (after ELO / playoffs / live overrides for this event)">Fair</th>
+                  <th className="px-2 py-1.5 text-right font-normal text-amber-300">¢/sh</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-900">
+                {bidEdges.length === 0 && (
+                  <tr><td colSpan={6} className="px-2 py-4 text-center text-gray-600">No positive bid-side edge above threshold.</td></tr>
+                )}
+                {bidEdges.map((e, i) => (
+                  <tr key={i} className="hover:bg-gray-900/60 transition">
+                    <MatchupCell row={e} bet={{ side: 'bid', price: e.bid_price }} />
+                    <td className="px-2 py-1.5 text-right">
+                      <span className={`text-[10px] uppercase font-semibold ${e.venue === 'pm' ? 'text-blue-300' : 'text-purple-300'}`}>{e.venue}</span>
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-mono text-gray-300">{fmtCent(e.bid_price)}</td>
+                    <td className="px-2 py-1.5 text-right font-mono text-gray-500">{fmtSize(e.bid_size)}</td>
+                    <td className="px-2 py-1.5 text-right font-mono text-amber-300">{fmtCent(e.fair)}</td>
+                    <td className={`px-2 py-1.5 text-right font-mono font-bold ${epsBgClass(e.eps)}`}>{(e.eps * 100).toFixed(1)}c</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <div className="bg-gray-900 border border-amber-700/30 rounded-lg overflow-hidden">
           <div className="px-3 py-2 border-b border-gray-800 flex items-baseline gap-2">
             <span className="text-xs uppercase tracking-wide text-amber-300 font-semibold">Top Edge ($) · cumulative</span>
