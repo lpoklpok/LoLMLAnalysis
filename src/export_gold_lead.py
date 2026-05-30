@@ -23,9 +23,9 @@ MAJOR_LEAGUES = {'LCK', 'LEC', 'LCS', 'LPL'}
 GOLD_STEP     = 500
 GOLD_EDGES    = list(range(0, 10001, 500))  # 0, 500, 1000, ..., 10000 then 10000+
 
-FEATS = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff']
+FEATS = ['elo_diff', 'rwr_diff', 'h2h_wr', 'gd15_diff', 'outperf_diff']
 FILL  = {'elo_diff': 0., 'rwr_diff': 0., 'h2h_wr': 0.5,
-         'playoffs': 0, 'gd15_diff': 0., 'outperf_diff': 0.}
+         'gd15_diff': 0., 'outperf_diff': 0.}
 
 ALPHA_G2 = 0.8970
 BETA_DA  = 0.0929

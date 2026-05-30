@@ -35,9 +35,9 @@ OUT        = ROOT / 'web' / 'public' / 'backtest.json'
 # ---------------------------------------------------------------------------
 # Model constants (must stay in sync with predict_upcoming.py)
 # ---------------------------------------------------------------------------
-FEATS = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff']
+FEATS = ['elo_diff', 'rwr_diff', 'h2h_wr', 'gd15_diff', 'outperf_diff']
 FILL  = {'elo_diff': 0.0, 'rwr_diff': 0.0, 'h2h_wr': 0.5,
-         'playoffs': 0, 'gd15_diff': 0.0, 'outperf_diff': 0.0}
+         'gd15_diff': 0.0, 'outperf_diff': 0.0}
 
 ALPHA_G2 = 0.8970
 BETA_DA  = 0.0929

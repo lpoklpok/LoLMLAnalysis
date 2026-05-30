@@ -32,19 +32,19 @@ GD15_R_FEATS = [f'{p}_gd15_diff' for p in POSITIONS]
 
 FEATURES_ELO       = ['elo_diff']
 FEATURES_ELO_SQ    = ['elo_diff', 'elo_diff_signed_sq']
-FEATURES_FULL      = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs']
-FEATURES_FULL_SQ   = ['elo_diff', 'elo_diff_signed_sq', 'rwr_diff', 'h2h_wr', 'playoffs']
-FEATURES_ROLE      = ROLE_FEATS + ['rwr_diff', 'h2h_wr', 'playoffs']
-FEATURES_ROLE_SQ   = ROLE_FEATS + ROLE_SQ_FEATS + ['rwr_diff', 'h2h_wr', 'playoffs']
-FEATURES_GD15      = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs'] + GD15_FEATS
-FEATURES_GD15_ROLE = ROLE_FEATS + ['rwr_diff', 'h2h_wr', 'playoffs'] + GD15_R_FEATS
-FEATURES_OUTPERF   = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'outperf_diff']
-FEATURES_KITCHEN   = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff']
-FEATURES_REST      = ['elo_diff', 'elo_diff_signed_sq', 'rwr_diff', 'h2h_wr', 'playoffs', 'days_since_diff']
+FEATURES_FULL      = ['elo_diff', 'rwr_diff', 'h2h_wr']
+FEATURES_FULL_SQ   = ['elo_diff', 'elo_diff_signed_sq', 'rwr_diff', 'h2h_wr']
+FEATURES_ROLE      = ROLE_FEATS + ['rwr_diff', 'h2h_wr']
+FEATURES_ROLE_SQ   = ROLE_FEATS + ROLE_SQ_FEATS + ['rwr_diff', 'h2h_wr']
+FEATURES_GD15      = ['elo_diff', 'rwr_diff', 'h2h_wr'] + GD15_FEATS
+FEATURES_GD15_ROLE = ROLE_FEATS + ['rwr_diff', 'h2h_wr'] + GD15_R_FEATS
+FEATURES_OUTPERF   = ['elo_diff', 'rwr_diff', 'h2h_wr', 'outperf_diff']
+FEATURES_KITCHEN   = ['elo_diff', 'rwr_diff', 'h2h_wr', 'gd15_diff', 'outperf_diff']
+FEATURES_REST      = ['elo_diff', 'elo_diff_signed_sq', 'rwr_diff', 'h2h_wr', 'days_since_diff']
 
 FILL_VALUES = {
     'elo_diff': 0.0, 'elo_diff_signed_sq': 0.0,
-    'rwr_diff': 0.0, 'h2h_wr': 0.5, 'playoffs': 0,
+    'rwr_diff': 0.0, 'h2h_wr': 0.5,
     'gd15_diff': 0.0, 'outperf_diff': 0.0,
     'days_since_diff': 0.0,
     **{f: 0.0 for f in ROLE_FEATS},

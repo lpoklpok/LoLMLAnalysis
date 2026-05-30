@@ -39,9 +39,9 @@ POSITIONS = ['top', 'jng', 'mid', 'bot', 'sup']
 _ELO_TIER = {'LCK': 1620, 'LPL': 1620, 'LEC': 1500,
               'LCS': 1380, 'LTA': 1380, 'LTA N': 1380, 'LTA S': 1380, 'LCKC': 1380}
 
-FEATS    = ['elo_diff', 'rwr_diff', 'h2h_wr', 'playoffs', 'gd15_diff', 'outperf_diff']
+FEATS    = ['elo_diff', 'rwr_diff', 'h2h_wr', 'gd15_diff', 'outperf_diff']
 FILL     = {'elo_diff': 0.0, 'rwr_diff': 0.0, 'h2h_wr': 0.5,
-            'playoffs': 0, 'gd15_diff': 0.0, 'outperf_diff': 0.0}
+            'gd15_diff': 0.0, 'outperf_diff': 0.0}
 MODEL_NAME = 'Logistic Regression'
 # G2 adjustment for 2025+: z_G2 = ALPHA_G2 * logodds + BETA_DA * draft_advantage
 ALPHA_G2 = 0.8970
@@ -812,7 +812,6 @@ def predict_game(blue_team: str, red_team: str, league: str,
         'elo_diff':     elo_diff,
         'rwr_diff':     rwr_diff,
         'h2h_wr':       h2h_wr,
-        'playoffs':     0,
         'gd15_diff':    gd15_diff,
         'outperf_diff': outperf_diff,
     }]).fillna(FILL)
