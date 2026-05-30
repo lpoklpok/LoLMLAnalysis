@@ -1459,20 +1459,46 @@ export default function ScannerPage() {
                   <tbody className="divide-y divide-gray-800">
                     {ev.submarkets.flatMap((sm, smIdx) =>
                       sm.outcomes.map((o, oIdx) => {
-                        const pmEdge = (o as { pm_edge_usd?: number }).pm_edge_usd ?? 0
-                        const ksEdge = (o as { kalshi_edge_usd?: number }).kalshi_edge_usd ?? 0
-                        const pmEps  = (o as { pm_best_eps?: number }).pm_best_eps ?? 0
-                        const ksEps  = (o as { kalshi_best_eps?: number }).kalshi_best_eps ?? 0
                         const hasKalshiTicker = !!o.kalshi_ticker || !!o.kalshi_opp_ticker
-                        // Recompute fair when EITHER:
-                        //   - ELO slider is shifted (delta != 0), OR
-                        //   - A live game is in progress (pLiveT1 set via SSE)
-                        // adjDist already reflects live distribution when isLiveG1.
                         const overrideFair = ((delta !== 0 || poShiftLogit !== 0 || hasLiveOverlay) && adjGameT1 != null && adjDist != null)
                           ? adjustedFair(sm, oIdx, ev.team1, ev.team2, ev.best_of, adjGameT1, adjDist,
                                          hasLiveOverlay ? liveSnap!.game_number : null, pLiveT1)
                           : null
                         const fairDisp = overrideFair ?? o.fair
+
+                        // Edge cents/sh + total $ per venue. When fair has been
+                        // adjusted (snap / ELO / playoff / live), recompute
+                        // against the displayed fair so the edge columns
+                        // reflect the snapped fair, not the server one.
+                        // Otherwise use the API's precomputed values.
+                        let pmEps  = (o as { pm_best_eps?: number }).pm_best_eps ?? 0
+                        let pmEdge = (o as { pm_edge_usd?: number }).pm_edge_usd ?? 0
+                        let ksEps  = (o as { kalshi_best_eps?: number }).kalshi_best_eps ?? 0
+                        let ksEdge = (o as { kalshi_edge_usd?: number }).kalshi_edge_usd ?? 0
+                        if (overrideFair != null) {
+                          const recompute = (book: OutcomeBook | null, applyFee: boolean) => {
+                            let bestEps = 0; let total = 0
+                            if (!book) return { bestEps, total }
+                            const fee = (p: number) => applyFee ? kalshiFeePerShare(p) : 0
+                            for (const l of book.asks) {
+                              const e = overrideFair - l.price - fee(l.price)
+                              if (e <= 0) break
+                              if (e > bestEps) bestEps = e
+                              total += e * l.size
+                            }
+                            for (const l of book.bids) {
+                              const e = l.price - overrideFair - fee(l.price)
+                              if (e <= 0) break
+                              if (e > bestEps) bestEps = e
+                              total += e * l.size
+                            }
+                            return { bestEps, total }
+                          }
+                          const pm = recompute(o.pm, false)
+                          const ks = recompute(o.kalshi, true)
+                          pmEps  = pm.bestEps; pmEdge = pm.total
+                          ksEps  = ks.bestEps; ksEdge = ks.total
+                        }
                         // Best bid-side passive edge across PM and Kalshi.
                         // Edge = fair − bid_price (PM has no fee, Kalshi fee-net).
                         // For Kalshi the combined bid already aggregates this-team-YES + opposite-team-NO so it captures both routes.
