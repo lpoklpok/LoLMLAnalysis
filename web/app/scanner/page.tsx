@@ -1468,7 +1468,7 @@ export default function ScannerPage() {
                         //   - ELO slider is shifted (delta != 0), OR
                         //   - A live game is in progress (pLiveT1 set via SSE)
                         // adjDist already reflects live distribution when isLiveG1.
-                        const overrideFair = ((delta !== 0 || hasLiveOverlay) && adjGameT1 != null && adjDist != null)
+                        const overrideFair = ((delta !== 0 || poShiftLogit !== 0 || hasLiveOverlay) && adjGameT1 != null && adjDist != null)
                           ? adjustedFair(sm, oIdx, ev.team1, ev.team2, ev.best_of, adjGameT1, adjDist,
                                          hasLiveOverlay ? liveSnap!.game_number : null, pLiveT1)
                           : null
