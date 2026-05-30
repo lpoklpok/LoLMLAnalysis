@@ -1229,6 +1229,9 @@ export default function ScannerPage() {
                       <th className="px-3 py-2 text-left font-normal">Market</th>
                       <th className="px-3 py-2 text-left font-normal">Outcome</th>
                       <th className="px-3 py-2 text-right font-normal">Fair</th>
+                      <th className="px-3 py-2 text-right font-normal border-l border-gray-800" title="Best passive edge: post a bid at the same price on whichever venue gives the higher fair − bid. Kalshi fee netted in.">
+                        <span className="text-cyan-300">Best Bid Edge ¢/sh</span>
+                      </th>
                       <th className="px-3 py-2 text-right font-normal border-l border-gray-800" colSpan={4}>
                         <span className="text-blue-300">Polymarket</span>
                       </th>
@@ -1238,6 +1241,7 @@ export default function ScannerPage() {
                     </tr>
                     <tr className="text-[10px] text-gray-600 border-b border-gray-800">
                       <th></th><th></th><th></th>
+                      <th className="border-l border-gray-800"></th>
                       <th className="px-3 pb-1.5 text-right font-normal"><span className="text-green-500">BID</span></th>
                       <th className="px-3 pb-1.5 text-right font-normal"><span className="text-red-400">ASK</span></th>
                       <th className="px-3 pb-1.5 text-right font-normal text-amber-300">Edge ¢/sh</th>
@@ -1265,6 +1269,18 @@ export default function ScannerPage() {
                                          hasLiveOverlay ? liveSnap!.game_number : null, pLiveT1)
                           : null
                         const fairDisp = overrideFair ?? o.fair
+                        // Best bid-side passive edge across PM and Kalshi.
+                        // Edge = fair − bid_price (PM has no fee, Kalshi fee-net).
+                        // For Kalshi the combined bid already aggregates this-team-YES + opposite-team-NO so it captures both routes.
+                        const pmBidPx     = o.pm_best?.bid?.price
+                        const ksBidPx     = o.kalshi_best?.bid?.price
+                        const pmBidEps    = (fairDisp != null && pmBidPx != null) ? fairDisp - pmBidPx                                       : null
+                        const ksBidEps    = (fairDisp != null && ksBidPx != null) ? fairDisp - ksBidPx - kalshiFeePerShare(ksBidPx) : null
+                        const bestBidEps  = pmBidEps != null && ksBidEps != null
+                          ? (pmBidEps >= ksBidEps ? { eps: pmBidEps, venue: 'pm' as const } : { eps: ksBidEps, venue: 'kalshi' as const })
+                          : pmBidEps != null ? { eps: pmBidEps, venue: 'pm' as const }
+                          : ksBidEps != null ? { eps: ksBidEps, venue: 'kalshi' as const }
+                          : null
                         return (
                         <tr key={`${smIdx}-${oIdx}`} className={oIdx === 0 ? 'bg-gray-900/40' : ''}>
                           <td className="px-3 py-2 text-gray-400">{oIdx === 0 ? sm.market_label : ''}</td>
@@ -1274,6 +1290,11 @@ export default function ScannerPage() {
                             {overrideFair != null && o.fair != null && (
                               <span className="ml-1 text-[9px] text-gray-500">(was {fmtCent(o.fair)})</span>
                             )}
+                          </td>
+                          <td className={`px-3 py-2 text-right font-mono border-l border-gray-800 ${bestBidEps ? epsBgClass(bestBidEps.eps) : 'text-gray-700'}`}>
+                            {bestBidEps
+                              ? <span>{(bestBidEps.eps * 100).toFixed(1)}c <span className={`text-[9px] ml-1 ${bestBidEps.venue === 'pm' ? 'text-blue-300' : 'text-purple-300'}`}>{bestBidEps.venue}</span></span>
+                              : '—'}
                           </td>
                           <td className="px-3 py-2 text-right border-l border-gray-800">
                             <BookCell best={o.pm_best} fair={fairDisp} side="bid" venue="pm" hasTicker={true} />
