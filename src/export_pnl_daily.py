@@ -192,7 +192,9 @@ def _kalshi_sign(key_id: str, pem: str, method: str, path: str) -> dict:
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import padding
     ts  = str(int(time.time() * 1000))
-    msg = (ts + method.upper() + '/trade-api/v2' + path).encode()
+    # Kalshi signs the path WITHOUT the query string. Strip ?... if present.
+    sign_path = path.split('?', 1)[0]
+    msg = (ts + method.upper() + '/trade-api/v2' + sign_path).encode()
     private_key = serialization.load_pem_private_key(pem.encode(), password=None)
     sig = private_key.sign(
         msg,
@@ -215,10 +217,12 @@ def _kalshi_get(path: str, key_id: str, pem: str, params: dict = None) -> dict:
     return r.json()
 
 
-def _paginate(path: str, list_key: str, key_id: str, pem: str) -> list:
+def _paginate(path: str, list_key: str, key_id: str, pem: str,
+              extra_params: dict | None = None) -> list:
     rows, cursor = [], None
     while True:
         params = {'limit': 200}
+        if extra_params: params.update(extra_params)
         if cursor: params['cursor'] = cursor
         data   = _kalshi_get(path, key_id, pem, params)
         batch  = data.get(list_key, [])
@@ -283,7 +287,7 @@ def _fetch_kalshi_realized_from_api() -> pd.DataFrame:
         return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
     min_ts = int(CSV_CUTOFF.timestamp())
     fills = []
-    for f in _paginate(f'/portfolio/fills?min_ts={min_ts}', 'fills', key_id, pem):
+    for f in _paginate('/portfolio/fills', 'fills', key_id, pem, extra_params={'min_ts': min_ts}):
         ticker = f.get('ticker') or f.get('market_ticker', '')
         if not any(ticker.startswith(p) for p in KALSHI_PREFIXES):
             continue
@@ -400,6 +404,16 @@ def _fetch_kalshi_unrealized_mtm() -> pd.DataFrame:
     return pd.DataFrame([{'date': today, 'kalshi_pnl': round(total_unrealized, 2), 'kalshi_trades': 0}])
 
 
+def _safe(fn, label: str) -> pd.DataFrame:
+    """Run a Kalshi sub-fetcher; on any failure log + return empty so the
+    surviving sub-fetchers (CSV baseline vs API) still flow through."""
+    try:
+        return fn()
+    except Exception as e:
+        print(f'  {label} failed: {e!r}')
+        return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
+
+
 def _fetch_kalshi() -> pd.DataFrame:
     """Combined Kalshi PnL:
       - CSV (Feb 1 → Apr 30): canonical Kalshi-with-fees realized PnL.
@@ -408,9 +422,9 @@ def _fetch_kalshi() -> pd.DataFrame:
         within the ~200-fill window). Approximate fees but close.
       - API (today): mark-to-market on currently-open positions.
     """
-    pre_may  = _fetch_kalshi_realized_from_csv()
-    may_plus = _fetch_kalshi_realized_from_api()
-    open_mtm = _fetch_kalshi_unrealized_mtm()
+    pre_may  = _safe(_fetch_kalshi_realized_from_csv, 'Kalshi CSV')
+    may_plus = _safe(_fetch_kalshi_realized_from_api, 'Kalshi API fills')
+    open_mtm = _safe(_fetch_kalshi_unrealized_mtm,    'Kalshi positions MTM')
     parts = [df for df in (pre_may, may_plus, open_mtm) if not df.empty]
     if not parts:
         return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
