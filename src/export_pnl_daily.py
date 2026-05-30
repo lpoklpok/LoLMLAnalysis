@@ -269,17 +269,18 @@ def _fetch_kalshi_realized_from_csv() -> pd.DataFrame:
 def _fetch_kalshi_realized_from_api() -> pd.DataFrame:
     """Realized PnL on closed trades from /portfolio/fills, for May 1 onwards.
 
-    The endpoint caps at ~200 most-recent fills, so this window must stay
-    small enough to fit. For each TICKER, reconstruct realized PnL as
-    closed-position rounds: when total BUY size on a side equals total
-    SELL size on that side, the position round closed and the round's
-    PnL = SUM(sell prices) - SUM(buy prices) on that side.
+    For each (ticker, side):
+      - Sum buys / sells from fills
+      - If fully closed via trades (buys == sells): pnl = sell_proc - buy_cost
+      - Else look up the market's settlement. If finalized:
+          held_value = remaining_shares × (1 if won 0 if lost)
+          pnl = sell_proc + held_value - buy_cost
+      - Else still-open → handled by _fetch_kalshi_unrealized_mtm
 
-    Attributed to the close-time of the LAST closing fill of the round.
-
-    Fees are NOT subtracted here (we don't have access to the same canonical
-    realized_pnl_with_fees_cents the CSV has). Slight overcount vs canonical
-    but only by Kalshi's modest fee schedule (~7% × p × (1-p), $0.01 floor).
+    Fees subtracted from both legs (best effort — not exactly the canonical
+    realized_pnl_with_fees_cents that the CSV has, but within pennies).
+    Attributed to the last fill's UTC date for fully-traded rounds, or to
+    the settlement date for settled positions.
     """
     key_id = os.environ.get('KALSHI_API_KEY', '').strip()
     pem    = _load_kalshi_pem()
@@ -291,8 +292,8 @@ def _fetch_kalshi_realized_from_api() -> pd.DataFrame:
         ticker = f.get('ticker') or f.get('market_ticker', '')
         if not any(ticker.startswith(p) for p in KALSHI_PREFIXES):
             continue
-        side  = (f.get('side') or '').upper()  # YES or NO
-        act   = (f.get('action') or '').upper()  # BUY or SELL
+        side  = (f.get('side') or '').upper()
+        act   = (f.get('action') or '').upper()
         price = float((f.get('yes_price_dollars') if side == 'YES'
                        else f.get('no_price_dollars')) or 0)
         count = float(f.get('count_fp', 0) or 0)
@@ -301,13 +302,31 @@ def _fetch_kalshi_realized_from_api() -> pd.DataFrame:
         if pd.isna(ts) or count == 0: continue
         fills.append({'ticker': ticker, 'ts': ts, 'side': side, 'action': act,
                       'price': price, 'count': count, 'fee': fee})
-
     if not fills:
+        print('  API fills: none returned')
         return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
 
-    # Per-ticker, per-side round-trip PnL: when realised (BUY+SELL balance),
-    # attribute round PnL to the last fill's date.
     fills_df = pd.DataFrame(fills).sort_values('ts')
+    # Look up settlement status for every ticker we have fills on. Public
+    # endpoint, no auth needed.
+    from concurrent.futures import ThreadPoolExecutor
+    def _settled(tk):
+        try:
+            r = requests.get(f'{KALSHI_URL}/markets/{tk}', timeout=6)
+            if r.status_code != 200: return tk, None, None
+            m = r.json().get('market', {})
+            st  = (m.get('status') or '').lower()
+            res = (m.get('result') or '').lower()
+            settle_ts = m.get('settlement_ts')
+            return tk, (st, res), settle_ts
+        except Exception:
+            return tk, None, None
+    tickers = sorted(fills_df['ticker'].unique())
+    settlements: dict = {}
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        for tk, status, settle_ts in ex.map(_settled, tickers):
+            if status: settlements[tk] = (status, settle_ts)
+
     rows = []
     for (tk, side), g in fills_df.groupby(['ticker', 'side']):
         buys  = g[g['action'] == 'BUY']
@@ -317,16 +336,35 @@ def _fetch_kalshi_realized_from_api() -> pd.DataFrame:
         buy_cost   = float((buys['price'] * buys['count']).sum())
         sell_proc  = float((sells['price'] * sells['count']).sum())
         fees       = float(g['fee'].sum())
-        # Closed round only if buys and sells are balanced (within rounding)
-        if buy_units > 0 and abs(buy_units - sell_units) < 0.01:
+        remaining  = buy_units - sell_units
+
+        # Case 1: fully closed via trades
+        if buy_units > 0 and abs(remaining) < 0.01:
             pnl = sell_proc - buy_cost - fees
-            last_close = pd.to_datetime(sells['ts'].max(), utc=True)
-            rows.append({'date': last_close.date(), 'pnl': pnl, 'n': 1})
-        # Otherwise it's an open position — handled by _fetch_kalshi_unrealized_mtm
+            close_ts = pd.to_datetime(sells['ts'].max(), utc=True) if not sells.empty else pd.to_datetime(g['ts'].max(), utc=True)
+            rows.append({'date': close_ts.date(), 'pnl': pnl, 'n': 1})
+            continue
+
+        # Case 2: still has open shares — check settlement
+        sett = settlements.get(tk)
+        if sett is None: continue
+        (st, res), settle_ts = sett
+        if st not in ('finalized', 'settled', 'closed'): continue   # still open → MTM path
+        # Side won if: side==YES and res==yes, OR side==NO and res==no
+        won = (side == 'YES' and res == 'yes') or (side == 'NO' and res == 'no')
+        held_value = remaining * (1.0 if won else 0.0)
+        pnl = sell_proc + held_value - buy_cost - fees
+        if settle_ts:
+            close_dt = pd.to_datetime(settle_ts, utc=True)
+        else:
+            close_dt = pd.to_datetime(g['ts'].max(), utc=True)
+        rows.append({'date': close_dt.date(), 'pnl': pnl, 'n': 1})
+
     if not rows:
+        print('  API realized (May+): 0 closed positions')
         return pd.DataFrame(columns=['date', 'kalshi_pnl', 'kalshi_trades'])
     realized = pd.DataFrame(rows)
-    print(f"  API realized (May+): {realized['n'].sum()} closed rounds, "
+    print(f"  API realized (May+): {realized['n'].sum()} closed positions, "
           f"net ${realized['pnl'].sum():+,.0f}")
     return realized.groupby('date').agg(
         kalshi_pnl=('pnl', 'sum'),
