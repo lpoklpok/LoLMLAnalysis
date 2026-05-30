@@ -36,12 +36,16 @@ jobs:
           key: oe-historical-v1
 
       - name: Cache processed state (features + ELO checkpoint)
+        # Bump the suffix to invalidate the cached checkpoint and force a
+        # full rebuild. Needed after any change to feature_engineering's
+        # ELO update rules so historical state is recomputed consistently.
+        # 2026-05-30 → v3 (adaptive K introduced).
         uses: actions/cache@v4
         with:
           path: data/processed
-          key: processed-v2-${{ github.run_number }}
+          key: processed-v3-${{ github.run_number }}
           restore-keys: |
-            processed-v2-
+            processed-v3-
 
       - name: Refresh OE mirror (copy Tim's CSV to your Drive folder)
         env:
