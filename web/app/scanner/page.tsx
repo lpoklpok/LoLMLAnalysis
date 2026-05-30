@@ -499,6 +499,10 @@ export default function ScannerPage() {
   const [search, setSearch] = useState<string>('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [venueFilter, setVenueFilter] = useState<'all' | 'pm' | 'kalshi'>('all')
+  // Best Bid Edge panel: hide rows whose venue spread is wider than this.
+  // Wide spreads usually mean illiquid / stale quotes — the apparent edge
+  // would never actually realize because no one is matching that bid.
+  const [bidMaxSpreadC, setBidMaxSpreadC] = useState<number>(10)
   // Min-size for the "Substantial Edge" panel — defaults to 100 shares to
   // cut out the tiny resting orders that aren't actionable for real positions.
   const [minTradeSize, setMinTradeSize] = useState<number>(100)
@@ -954,35 +958,44 @@ export default function ScannerPage() {
           const adjF = adjFairFor(ev.slug, sm.market_label, o.outcome)
           const fair = adjF ?? o.fair
           if (fair == null) continue
+          const maxSpread = bidMaxSpreadC / 100
           // PM bid
           if (venueFilter !== 'kalshi') {
             const bid = o.pm_best?.bid
+            const ask = o.pm_best?.ask
             if (bid && bid.price != null && bid.size > 0) {
-              const eps = fair - bid.price
-              if (eps > 0) rows.push({
-                slug: ev.slug, team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, date: ev.date,
-                market_label: sm.market_label, outcome: o.outcome,
-                venue: 'pm', bid_price: bid.price, bid_size: bid.size, fair, eps,
-              })
+              const spread = ask?.price != null ? ask.price - bid.price : Infinity
+              if (spread <= maxSpread) {
+                const eps = fair - bid.price
+                if (eps > 0) rows.push({
+                  slug: ev.slug, team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, date: ev.date,
+                  market_label: sm.market_label, outcome: o.outcome,
+                  venue: 'pm', bid_price: bid.price, bid_size: bid.size, fair, eps,
+                })
+              }
             }
           }
           // Kalshi bid (combined book already aggregates this-team-YES + opposite-team-NO routes)
           if (venueFilter !== 'pm') {
             const bid = o.kalshi_best?.bid
+            const ask = o.kalshi_best?.ask
             if (bid && bid.price != null && bid.size > 0) {
-              const eps = fair - bid.price - kalshiFeePerShare(bid.price)
-              if (eps > 0) rows.push({
-                slug: ev.slug, team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, date: ev.date,
-                market_label: sm.market_label, outcome: o.outcome,
-                venue: 'kalshi', bid_price: bid.price, bid_size: bid.size, fair, eps,
-              })
+              const spread = ask?.price != null ? ask.price - bid.price : Infinity
+              if (spread <= maxSpread) {
+                const eps = fair - bid.price - kalshiFeePerShare(bid.price)
+                if (eps > 0) rows.push({
+                  slug: ev.slug, team1: ev.team1, team2: ev.team2, best_of: ev.best_of, league: ev.league, date: ev.date,
+                  market_label: sm.market_label, outcome: o.outcome,
+                  venue: 'kalshi', bid_price: bid.price, bid_size: bid.size, fair, eps,
+                })
+              }
             }
           }
         }
       }
     }
     return rows.sort((a, b) => b.eps - a.eps).slice(0, 30)
-  }, [rendered, eventAdj, majorOnly, venueFilter])
+  }, [rendered, eventAdj, majorOnly, venueFilter, bidMaxSpreadC])
   const filteredLiquidity = useMemo(
     () => allLiquidity
       .filter(r => isPreMatch(r.date))
@@ -1066,11 +1079,15 @@ export default function ScannerPage() {
       <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-3 p-3 md:p-4">
         {/* NEW: Best Bid Edge (passive market-making opportunities) */}
         <div className="bg-gray-900 border border-cyan-700/30 rounded-lg overflow-hidden">
-          <div className="px-3 py-2 border-b border-gray-800 flex items-baseline gap-2">
+          <div className="px-3 py-2 border-b border-gray-800 flex items-baseline gap-2 flex-wrap">
             <span className="text-xs uppercase tracking-wide text-cyan-300 font-semibold">Best Bid Edge ¢/sh</span>
             <span className="text-[10px] text-gray-600">{bidEdges.length}</span>
-            <span className="text-[10px] text-gray-700 ml-auto" title="Passive: post your bid at the same price and get filled. Edge = fair − bid (− Kalshi fee). Respects per-event ELO / playoffs / live overrides.">
-              fair vs bid (passive)
+            <span className="ml-auto text-[10px] text-gray-500 flex items-baseline gap-1" title="Hide bid rows whose venue's bid-ask spread is wider than this. Wide spread → illiquid quote, edge unlikely to realize.">
+              <span>spread ≤</span>
+              <input type="number" min={1} max={99} step={1} value={bidMaxSpreadC}
+                     onChange={e => setBidMaxSpreadC(Math.max(1, Math.min(99, parseInt(e.target.value || '10') || 10)))}
+                     className="w-12 px-1 py-0 bg-gray-950 border border-gray-700 rounded text-cyan-200 font-mono text-[10px] text-right" />
+              <span>c</span>
             </span>
           </div>
           <div className="max-h-[380px] overflow-y-auto">
