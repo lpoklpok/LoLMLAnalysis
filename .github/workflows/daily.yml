@@ -112,8 +112,20 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
 
-      - name: Upload per-game player ELO history (last 2 years) to Supabase
-        run: python src/upload_player_elo_history.py
+      - name: Rebuild player_elo_history server-side (from Supabase games table)
+        # PL/pgSQL replay over the games table. Self-healing: doesn't depend on
+        # local games_with_odds.csv being current. Function defined in
+        # supabase/migrations/20260530_player_elo_history_rebuild.sql.
+        # The Python upload_player_elo_history.py is kept as a fallback for
+        # local runs but no longer in the cron path.
+        run: |
+          curl --fail --silent --show-error --max-time 600 \
+            -X POST \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+            -H "Content-Type: application/json" \
+            "$SUPABASE_URL/rest/v1/rpc/rebuild_player_elo_history" \
+            && echo "  rebuild_player_elo_history complete"
         continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

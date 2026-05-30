@@ -20,9 +20,9 @@ ROOT = Path(__file__).resolve().parent.parent
 PROCESSED_DIR = ROOT / 'data' / 'processed'
 CSV_PATH = PROCESSED_DIR / 'player_elo_history.csv'
 
-# Window: last 2 calendar years inclusive.
-import datetime as dt
-CUTOFF_YEAR = dt.date.today().year - 1   # e.g. 2026 → 2025+
+# Window: starting from 2024 (the year the model was trained on) so the chart
+# shows the full pre-current-meta trajectory, not just the last 1.5 years.
+CUTOFF_YEAR = 2024
 
 
 def run():
