@@ -386,6 +386,9 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
 
     rows: list[dict] = []
     last_processed_date = None
+    # Per-player per-game ELO snapshots fed to data/processed/player_elo_history.csv
+    # and uploaded to Supabase for the /players/[name] page.
+    player_elo_history: list[dict] = []
 
     for g in df.itertuples(index=False):
         blue_players = [getattr(g, f'blue_{p}_playername') for p in POSITIONS]
@@ -632,6 +635,37 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
         _update_players(blue_players, elo_map, league, float(blue_win),     float(red_elo), k_scale)
         _update_players(red_players,  elo_map, league, float(1 - blue_win), float(blue_elo), k_scale)
 
+        # --- Per-player ELO snapshot (post-update) for the player history page ---
+        date_str = str(current_date)[:10]
+        for j, p in enumerate(blue_players):
+            player_elo_history.append({
+                'player':     p,
+                'gameid':     str(g.gameid),
+                'date':       date_str,
+                'year':       int(g.year),
+                'league':     str(league),
+                'pos':        POSITIONS[j],
+                'team':       blue_team,
+                'opp_team':   red_team,
+                'elo_before': float(blue_role_elos[j]),
+                'elo_after':  float(elo_map[p]),
+                'won':        int(blue_win),
+            })
+        for j, p in enumerate(red_players):
+            player_elo_history.append({
+                'player':     p,
+                'gameid':     str(g.gameid),
+                'date':       date_str,
+                'year':       int(g.year),
+                'league':     str(league),
+                'pos':        POSITIONS[j],
+                'team':       red_team,
+                'opp_team':   blue_team,
+                'elo_before': float(red_role_elos[j]),
+                'elo_after':  float(elo_map[p]),
+                'won':        int(1 - blue_win),
+            })
+
         # Update last-played date and split for decay/reset tracking
         for p, team in zip(blue_players + red_players, [blue_team]*5 + [red_team]*5):
             player_last_played[p] = current_date
@@ -791,6 +825,22 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
     }
     with open(PROCESSED_DIR / 'player_h2h.json', 'w') as f:
         json.dump(player_h2h_out, f, cls=_NumpyEncoder)
+
+    # --- Save per-player ELO history (append on incremental, overwrite on full rebuild) ---
+    elo_hist_path = PROCESSED_DIR / 'player_elo_history.csv'
+    if player_elo_history:
+        new_hist_df = pd.DataFrame(player_elo_history)
+        if ckpt is not None and elo_hist_path.exists():
+            # Incremental: append new rows, dedupe by (player, gameid) keeping the later snapshot
+            prev = pd.read_csv(elo_hist_path, low_memory=False)
+            combined = pd.concat([prev, new_hist_df], ignore_index=True)
+            combined = combined.drop_duplicates(subset=['player', 'gameid'], keep='last')
+            combined.to_csv(elo_hist_path, index=False)
+            print(f"Player ELO history: +{len(new_hist_df):,} new snapshots, "
+                  f"total {len(combined):,} rows")
+        else:
+            new_hist_df.to_csv(elo_hist_path, index=False)
+            print(f"Player ELO history: wrote {len(new_hist_df):,} snapshots")
 
     n_new = len(new_rows)
     print(f"New games processed: {n_new:,}")

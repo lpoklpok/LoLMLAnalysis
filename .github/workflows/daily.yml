@@ -112,6 +112,13 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
 
+      - name: Upload per-game player ELO history (last 2 years) to Supabase
+        run: python src/upload_player_elo_history.py
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
       - name: Generate upcoming game predictions
         run: python src/predict_upcoming.py
         continue-on-error: true

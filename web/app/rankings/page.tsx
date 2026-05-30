@@ -148,7 +148,14 @@ export default function RankingsPage() {
                     >
                       <td className="py-3 px-3 text-right text-gray-500">{i + 1}</td>
                       <td className="py-3 px-3">
-                        <span className="font-semibold text-white">{p.player}</span>
+                        <Link
+                          href={`/players/${encodeURIComponent(p.player)}`}
+                          className="font-semibold text-white hover:text-blue-400 transition-colors"
+                          onClick={e => e.stopPropagation()}
+                          title="View ELO history"
+                        >
+                          {p.player}
+                        </Link>
                       </td>
                       <td className="py-3 px-3 text-gray-300">{p.team}</td>
                       <td className="py-3 px-3">
