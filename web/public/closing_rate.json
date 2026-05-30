@@ -1,5 +1,5 @@
 {
-  "generated": "2026-05-30T10:03:51Z",
+  "generated": "2026-05-30T15:16:37Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -26,11 +26,11 @@
     },
     {
       "team": "T1",
-      "n_games": 46,
-      "wins": 35,
-      "avg_pred": 0.6596,
-      "actual_wr": 0.7609,
-      "closing_rate": 0.1013
+      "n_games": 48,
+      "wins": 37,
+      "avg_pred": 0.6626,
+      "actual_wr": 0.7708,
+      "closing_rate": 0.1083
     },
     {
       "team": "SK Gaming",
@@ -38,7 +38,7 @@
       "wins": 9,
       "avg_pred": 0.2489,
       "actual_wr": 0.3333,
-      "closing_rate": 0.0845
+      "closing_rate": 0.0844
     },
     {
       "team": "Movistar KOI",
@@ -46,7 +46,7 @@
       "wins": 27,
       "avg_pred": 0.5409,
       "actual_wr": 0.6136,
-      "closing_rate": 0.0727
+      "closing_rate": 0.0728
     },
     {
       "team": "Sentinels",
@@ -66,11 +66,11 @@
     },
     {
       "team": "KT Rolster",
-      "n_games": 43,
-      "wins": 24,
-      "avg_pred": 0.5037,
-      "actual_wr": 0.5581,
-      "closing_rate": 0.0544
+      "n_games": 45,
+      "wins": 26,
+      "avg_pred": 0.5176,
+      "actual_wr": 0.5778,
+      "closing_rate": 0.0602
     },
     {
       "team": "Bilibili Gaming",
@@ -94,15 +94,15 @@
       "wins": 40,
       "avg_pred": 0.7133,
       "actual_wr": 0.7547,
-      "closing_rate": 0.0415
+      "closing_rate": 0.0414
     },
     {
       "team": "G2 Esports",
       "n_games": 58,
       "wins": 41,
-      "avg_pred": 0.6665,
+      "avg_pred": 0.6666,
       "actual_wr": 0.7069,
-      "closing_rate": 0.0404
+      "closing_rate": 0.0403
     },
     {
       "team": "LOUD",
@@ -134,7 +134,7 @@
       "wins": 6,
       "avg_pred": 0.5917,
       "actual_wr": 0.6,
-      "closing_rate": 0.0082
+      "closing_rate": 0.0083
     }
   ],
   "throwers": [
@@ -150,9 +150,9 @@
       "team": "Disguised",
       "n_games": 21,
       "wins": 6,
-      "avg_pred": 0.3884,
+      "avg_pred": 0.3885,
       "actual_wr": 0.2857,
-      "closing_rate": -0.1027
+      "closing_rate": -0.1028
     },
     {
       "team": "Shifters",
@@ -160,7 +160,7 @@
       "wins": 9,
       "avg_pred": 0.4125,
       "actual_wr": 0.3103,
-      "closing_rate": -0.1021
+      "closing_rate": -0.1022
     },
     {
       "team": "Team Liquid",
@@ -172,27 +172,19 @@
     },
     {
       "team": "DN SOOPers",
-      "n_games": 41,
+      "n_games": 43,
       "wins": 5,
-      "avg_pred": 0.1843,
-      "actual_wr": 0.122,
-      "closing_rate": -0.0623
+      "avg_pred": 0.1842,
+      "actual_wr": 0.1163,
+      "closing_rate": -0.0679
     },
     {
       "team": "Fukuoka SoftBank HAWKS gaming",
       "n_games": 10,
       "wins": 5,
-      "avg_pred": 0.5599,
+      "avg_pred": 0.5598,
       "actual_wr": 0.5,
-      "closing_rate": -0.0599
-    },
-    {
-      "team": "Shopify Rebellion",
-      "n_games": 19,
-      "wins": 5,
-      "avg_pred": 0.3088,
-      "actual_wr": 0.2632,
-      "closing_rate": -0.0457
+      "closing_rate": -0.0598
     },
     {
       "team": "Nongshim RedForce",
@@ -201,6 +193,14 @@
       "avg_pred": 0.386,
       "actual_wr": 0.3404,
       "closing_rate": -0.0456
+    },
+    {
+      "team": "Shopify Rebellion",
+      "n_games": 19,
+      "wins": 5,
+      "avg_pred": 0.3087,
+      "actual_wr": 0.2632,
+      "closing_rate": -0.0455
     },
     {
       "team": "Dplus Kia",
@@ -222,33 +222,33 @@
       "team": "CTBC Flying Oyster",
       "n_games": 8,
       "wins": 3,
-      "avg_pred": 0.4049,
+      "avg_pred": 0.405,
       "actual_wr": 0.375,
-      "closing_rate": -0.0299
+      "closing_rate": -0.03
+    },
+    {
+      "team": "BNK FEARX",
+      "n_games": 57,
+      "wins": 22,
+      "avg_pred": 0.4151,
+      "actual_wr": 0.386,
+      "closing_rate": -0.0291
     },
     {
       "team": "Gen.G",
       "n_games": 50,
       "wins": 36,
-      "avg_pred": 0.7479,
+      "avg_pred": 0.748,
       "actual_wr": 0.72,
-      "closing_rate": -0.0279
+      "closing_rate": -0.028
     },
     {
       "team": "Natus Vincere",
       "n_games": 34,
       "wins": 18,
-      "avg_pred": 0.5547,
+      "avg_pred": 0.5546,
       "actual_wr": 0.5294,
-      "closing_rate": -0.0253
-    },
-    {
-      "team": "BNK FEARX",
-      "n_games": 55,
-      "wins": 22,
-      "avg_pred": 0.4204,
-      "actual_wr": 0.4,
-      "closing_rate": -0.0204
+      "closing_rate": -0.0252
     },
     {
       "team": "Kiwoom DRX",
