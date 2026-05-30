@@ -149,6 +149,9 @@ export default function Dashboard() {
         <Link href="/playoff-adjustments" className="text-sm text-orange-400 hover:text-orange-300 transition-colors">
           Playoff Adj →
         </Link>
+        <Link href="/calibration" className="text-sm text-cyan-400 hover:text-cyan-300 transition-colors">
+          Calibration →
+        </Link>
         <Link href="/gold-lead" className="text-sm text-amber-400 hover:text-amber-300 transition-colors">
           Gold Lead →
         </Link>
