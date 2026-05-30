@@ -16,7 +16,7 @@ Output: data/processed/features.csv
 import json
 import os
 from pathlib import Path
-from collections import defaultdict, deque
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
@@ -41,15 +41,6 @@ ELO_SCALE      = 400
 SERIES_K_ALPHA      = float(os.environ.get('SERIES_K_ALPHA',      '0.3'))  # dampen K for all games in 2025+ (major leagues run bo3/bo5, so all games are intra-series)
 PATCH_RESET_FACTOR  = float(os.environ.get('PATCH_RESET_FACTOR',  '0.0'))  # fraction of ELO deviation reset on patch change
 TRANSFER_RESET_FACTOR = float(os.environ.get('TRANSFER_RESET_FACTOR', '0.0'))  # fraction of ELO deviation reset on team transfer
-
-# ── Adaptive K (per-team K multiplier from rolling surprise) ───────────────
-# surprise_T = |mean(actual_T_won − pred_team_blue_avg)| over last ADAPTIVE_N
-# games. When team T is consistently outperforming or underperforming the
-# model, their K boosts so ELO catches up faster. Tuned via tune_adaptive_k.py
-# on 2024-2026 OOS log loss.
-ADAPTIVE_N     = int(os.environ.get('ADAPTIVE_N',     '12'))
-ADAPTIVE_LAM   = float(os.environ.get('ADAPTIVE_LAM', '0.5'))
-ADAPTIVE_SCALE = float(os.environ.get('ADAPTIVE_SCALE', '0.15'))
 
 # League-tier starting ELOs
 # Derived from implied win probabilities:
@@ -93,21 +84,6 @@ def _update_players(players: list[str], elo_map: dict, league: str,
         r = elo_map.get(p, start)
         e = _expected(r, opp_avg)
         elo_map[p] = r + K_FACTOR * k_scale * (actual - e)
-
-
-def _team_surprise(residuals, min_obs: int = 3) -> float:
-    """|mean of last N residuals|. Used to compute the per-team K multiplier.
-    residuals is a deque of (actual_team_won − pre_game_team_pred) values.
-    Returns 0.0 if we don't have enough history to trust the signal."""
-    if len(residuals) < min_obs:
-        return 0.0
-    return abs(sum(residuals) / len(residuals))
-
-
-def _adaptive_k_mult(surprise: float) -> float:
-    """1 + λ · (surprise / scale). Bounded below at 1.0 (no penalty when
-    surprise is exactly 0). Surprise = 0.15 with default config → 1.5×."""
-    return 1.0 + ADAPTIVE_LAM * (surprise / ADAPTIVE_SCALE)
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +133,7 @@ def _save_checkpoint(
         team_history, h2h, player_gd15, team_gd20,
         team_outperf, team_outperf_elo, team_outperf_staleness,
         team_stats, series_record, roster_state, last_processed_date,
-        player_h2h, team_surprise):
+        player_h2h):
 
     def ts(v):
         return v.isoformat() if hasattr(v, 'isoformat') else str(v)
@@ -183,7 +159,6 @@ def _save_checkpoint(
         },
         'roster_state': roster_state,
         'player_h2h': {'|||'.join(k): v for k, v in player_h2h.items()},
-        'team_surprise':          {k: list(v) for k, v in team_surprise.items()},
     }
     with open(CHECKPOINT_PATH, 'w') as f:
         json.dump(checkpoint, f, cls=_NumpyEncoder)
@@ -230,16 +205,10 @@ def _load_checkpoint():
     if last_date.tzinfo is None:
         last_date = last_date.tz_localize('UTC')
 
-    # Backwards compat: checkpoints created before adaptive K just init empty
-    team_surprise = defaultdict(
-        lambda: deque(maxlen=ADAPTIVE_N),
-        {k: deque(v, maxlen=ADAPTIVE_N) for k, v in c.get('team_surprise', {}).items()},
-    )
-
     return (last_date, elo_map, player_last_played, player_last_split, player_last_patch, player_last_team,
             team_history, h2h, player_gd15, team_gd20, team_outperf,
             team_outperf_elo, team_outperf_staleness, team_stats, series_record,
-            roster_state, player_h2h, team_surprise)
+            roster_state, player_h2h)
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +340,7 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
         (last_date, elo_map, player_last_played, player_last_split, player_last_patch, player_last_team,
          team_history, h2h, player_gd15, team_gd20, team_outperf,
          team_outperf_elo, team_outperf_staleness, team_stats, series_record,
-         roster_state, player_h2h, team_surprise) = ckpt
+         roster_state, player_h2h) = ckpt
 
         new_df = df[df['date'] > last_date]
         if new_df.empty:
@@ -411,7 +380,6 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
         team_outperf           = defaultdict(list)
         team_outperf_elo       = defaultdict(list)
         team_outperf_staleness = defaultdict(int)
-        team_surprise          = defaultdict(lambda: deque(maxlen=ADAPTIVE_N))
         team_stats             = defaultdict(lambda: defaultdict(list))
         series_record          = {}
         player_h2h             = defaultdict(list)
@@ -655,11 +623,6 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
             'blue_first_pick': blue_first_pick,
             'series_score':    series_score,
 
-            # Adaptive K — team surprise scores at pre-game (candidates for
-            # the LR; surprise_diff is the paired form like elo_diff)
-            'blue_surprise':   _team_surprise(team_surprise[blue_team]),
-            'red_surprise':    _team_surprise(team_surprise[red_team]),
-
             # Market (may be NaN for games without odds)
             'q_blue_win':      g.q_blue_win,
 
@@ -668,22 +631,9 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
         })
 
         # --- Update state AFTER recording pre-game snapshot ---
-        # Adaptive K: each team's update rate scales with how surprised the
-        # rating system has been by their recent results. Self-correcting
-        # (surprise reverts → K reverts to baseline).
-        year_scale = SERIES_K_ALPHA if (g.year >= 2025) else 1.0
-        s_blue = _team_surprise(team_surprise[blue_team])
-        s_red  = _team_surprise(team_surprise[red_team])
-        k_scale_blue = year_scale * _adaptive_k_mult(s_blue)
-        k_scale_red  = year_scale * _adaptive_k_mult(s_red)
-        _update_players(blue_players, elo_map, league, float(blue_win),     float(red_elo), k_scale_blue)
-        _update_players(red_players,  elo_map, league, float(1 - blue_win), float(blue_elo), k_scale_red)
-
-        # Update team surprise *after* the update with this game's team-level
-        # residual. Pre-game team prob was 1/(1+10**((red_elo-blue_elo)/400)).
-        team_pred_blue = _expected(blue_elo, red_elo)
-        team_surprise[blue_team].append(blue_win - team_pred_blue)
-        team_surprise[red_team].append((1 - blue_win) - (1 - team_pred_blue))
+        k_scale = SERIES_K_ALPHA if (g.year >= 2025) else 1.0
+        _update_players(blue_players, elo_map, league, float(blue_win),     float(red_elo), k_scale)
+        _update_players(red_players,  elo_map, league, float(1 - blue_win), float(blue_elo), k_scale)
 
         # --- Per-player ELO snapshot (post-update) for the player history page ---
         date_str = str(current_date)[:10]
@@ -854,7 +804,7 @@ def build_features(decay_halflife: float | None = DECAY_HALFLIFE,
             team_history, h2h, player_gd15, team_gd20,
             team_outperf, team_outperf_elo, team_outperf_staleness,
             team_stats, series_record, roster_state, last_processed_date,
-            player_h2h, team_surprise)
+            player_h2h)
 
     # --- Save ELO state for predict_upcoming.py ---
     elo_state = {
