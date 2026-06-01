@@ -17,6 +17,7 @@ interface StateRow {
   pm_ask_depth: number | null
   k_bb: number | null; k_bs: number | null
   k_ba: number | null; k_as: number | null
+  pm_bb: number | null; pm_ba: number | null
   want_b: number | null; want_a: number | null
   skip_reason: string | null
   pm_ts: number | null
@@ -153,6 +154,8 @@ export default function KalshiMmPage() {
                 <th className="px-3 py-2 text-left">Ticker</th>
                 <th className="px-3 py-2 text-center">Mode</th>
                 <th className="px-3 py-2 text-right">Fair</th>
+                <th className="px-3 py-2 text-right">PM bid</th>
+                <th className="px-3 py-2 text-right">PM ask</th>
                 <th className="px-3 py-2 text-right">PM depth (b/a)</th>
                 <th className="px-3 py-2 text-right">K bid (sz)</th>
                 <th className="px-3 py-2 text-right">K ask (sz)</th>
@@ -169,6 +172,8 @@ export default function KalshiMmPage() {
                 const wantAC = r.want_a != null ? `${(r.want_a * 100).toFixed(0)}¢` : '—'
                 const kBidC  = r.k_bb  != null ? `${(r.k_bb  * 100).toFixed(0)}¢` : '—'
                 const kAskC  = r.k_ba  != null ? `${(r.k_ba  * 100).toFixed(0)}¢` : '—'
+                const pmBidC = r.pm_bb != null ? `${(r.pm_bb * 100).toFixed(1)}¢` : '—'
+                const pmAskC = r.pm_ba != null ? `${(r.pm_ba * 100).toFixed(1)}¢` : '—'
                 const mode = r.mode ?? 'both'
                 const isOff = mode === 'off'
                 return (
@@ -199,6 +204,8 @@ export default function KalshiMmPage() {
                       </select>
                     </td>
                     <td className="px-3 py-1.5 text-right">{fairC}</td>
+                    <td className="px-3 py-1.5 text-right text-sky-200">{pmBidC}</td>
+                    <td className="px-3 py-1.5 text-right text-amber-200">{pmAskC}</td>
                     <td className="px-3 py-1.5 text-right text-gray-400">
                       {r.pm_bid_depth != null ? `$${Math.round(r.pm_bid_depth)}` : '—'}
                       <span className="text-gray-600"> / </span>
@@ -224,7 +231,7 @@ export default function KalshiMmPage() {
                 )
               })}
               {filtered.length === 0 && (
-                <tr><td colSpan={11} className="px-3 py-6 text-center text-gray-500">
+                <tr><td colSpan={13} className="px-3 py-6 text-center text-gray-500">
                   {rows.length === 0
                     ? 'No state rows yet — is the kw-kalshi-mm worker running?'
                     : 'No markets match the filter.'}
