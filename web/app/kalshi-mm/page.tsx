@@ -302,8 +302,9 @@ export default function KalshiMmPage() {
           Each row is one (event × market × outcome) where we have both a Polymarket token and a Kalshi ticker.
           <code className="text-gray-400"> Fair</code> is the size-weighted Polymarket microprice, gated to
           ≥&nbsp;500 contracts each side (≈ same liquidity threshold across favorites and underdogs).
-          <code className="text-gray-400"> Want bid / Want ask</code> is what we would post on Kalshi —
-          rounded to cents, never quoted through fair, improving the BBO by 1¢ when possible.
+          <code className="text-gray-400"> Want bid / Want ask</code> is what we would post on Kalshi:
+          we join the existing Kalshi BBO whenever PM is ≥ 1¢ better (so each fill banks ≥ 1¢ arb vs PM).
+          If a Kalshi side is empty we post at PM ± 1¢. No quote when there's no edge.
           Mode picks which side(s) we'd post on; flipping it propagates to the worker within ~5&nbsp;s.
         </p>
       </main>
