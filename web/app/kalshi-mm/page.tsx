@@ -29,6 +29,16 @@ interface StateResp { rows: StateRow[]; generated_at: number }
 
 type SortKey = 'event' | 'mode' | 'fair' | 'spread' | 'updated'
 
+interface WorkerHealth {
+  ok: boolean
+  markets: number
+  pm_books: number
+  kalshi_books: number
+  live_trading: boolean
+  live_orders: number
+  kill_engaged: boolean
+}
+
 export default function KalshiMmPage() {
   const [rows, setRows]       = useState<StateRow[]>([])
   const [genAt, setGenAt]     = useState<number>(0)
@@ -36,6 +46,8 @@ export default function KalshiMmPage() {
   const [sort, setSort]       = useState<SortKey>('updated')
   const [filter, setFilter]   = useState<string>('')
   const [updating, setUpdating] = useState<Set<string>>(new Set())
+  const [health, setHealth]   = useState<WorkerHealth | null>(null)
+  const [killing, setKilling] = useState<boolean>(false)
 
   useEffect(() => {
     let cancelled = false
@@ -57,6 +69,35 @@ export default function KalshiMmPage() {
     const t = setInterval(poll, 2000)
     return () => { cancelled = true; clearInterval(t) }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    async function poll() {
+      try {
+        const r = await fetch('/api/kalshi-mm-kill', { cache: 'no-store' })
+        if (!r.ok) return
+        const j = (await r.json()) as WorkerHealth
+        if (!cancelled) setHealth(j)
+      } catch { /* ignore */ }
+    }
+    poll()
+    const t = setInterval(poll, 3000)
+    return () => { cancelled = true; clearInterval(t) }
+  }, [])
+
+  async function toggleKill(on: boolean) {
+    setKilling(true)
+    try {
+      const r = await fetch('/api/kalshi-mm-kill', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ on }),
+      })
+      if (!r.ok) console.error('kill toggle failed', await r.text())
+    } finally {
+      setKilling(false)
+    }
+  }
 
   async function setMode(ticker: string, mode: 'both' | 'bid' | 'ask' | 'off') {
     setUpdating(s => new Set(s).add(ticker))
@@ -112,18 +153,34 @@ export default function KalshiMmPage() {
     <div className="min-h-screen bg-gray-950 text-gray-100">
       <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-emerald-400">Kalshi Maker (v0 read-only)</h1>
+          <h1 className="text-2xl font-bold text-emerald-400">
+            Kalshi Maker {health?.live_trading ? <span className="text-amber-400 text-sm">(LIVE)</span> : <span className="text-gray-500 text-sm">(dry-run)</span>}
+          </h1>
           <p className="text-sm text-gray-400 mt-1">
-            Quote intent — no Kalshi orders are placed yet. {live} live / {rows.length} markets.
-            {genAt > 0 && <span className="text-gray-600 ml-2">last refresh {new Date(genAt).toLocaleTimeString()}</span>}
+            {live} live / {rows.length} markets.
+            {health && <span className="ml-3 text-gray-500">{health.live_orders} resting orders</span>}
+            {genAt > 0 && <span className="text-gray-600 ml-2">refresh {new Date(genAt).toLocaleTimeString()}</span>}
           </p>
         </div>
-        <nav className="flex gap-5 text-sm">
-          <Link href="/"        className="text-gray-400 hover:text-gray-200">Home</Link>
-          <Link href="/trader"  className="text-gray-400 hover:text-gray-200">Trader</Link>
-          <Link href="/scanner" className="text-gray-400 hover:text-gray-200">Scanner</Link>
-          <Link href="/pnl"     className="text-gray-400 hover:text-gray-200">PnL</Link>
-        </nav>
+        <div className="flex items-center gap-4">
+          {health?.kill_engaged ? (
+            <button onClick={() => toggleKill(false)} disabled={killing}
+                    className="px-3 py-1.5 rounded bg-red-900 border border-red-600 text-red-200 hover:bg-red-800 text-sm">
+              KILL ENGAGED · click to release
+            </button>
+          ) : (
+            <button onClick={() => toggleKill(true)} disabled={killing}
+                    className="px-3 py-1.5 rounded bg-gray-900 border border-red-800 text-red-400 hover:bg-red-900/40 text-sm">
+              ⏻ Kill (cancel all)
+            </button>
+          )}
+          <nav className="flex gap-5 text-sm">
+            <Link href="/"        className="text-gray-400 hover:text-gray-200">Home</Link>
+            <Link href="/trader"  className="text-gray-400 hover:text-gray-200">Trader</Link>
+            <Link href="/scanner" className="text-gray-400 hover:text-gray-200">Scanner</Link>
+            <Link href="/pnl"     className="text-gray-400 hover:text-gray-200">PnL</Link>
+          </nav>
+        </div>
       </header>
 
       <main className="px-6 py-5">
