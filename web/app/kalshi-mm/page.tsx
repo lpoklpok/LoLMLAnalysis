@@ -156,7 +156,7 @@ export default function KalshiMmPage() {
                 <th className="px-3 py-2 text-right">Fair</th>
                 <th className="px-3 py-2 text-right">PM bid</th>
                 <th className="px-3 py-2 text-right">PM ask</th>
-                <th className="px-3 py-2 text-right">PM depth (b/a)</th>
+                <th className="px-3 py-2 text-right">PM depth ◆ b/a</th>
                 <th className="px-3 py-2 text-right">K bid (sz)</th>
                 <th className="px-3 py-2 text-right">K ask (sz)</th>
                 <th className="px-3 py-2 text-right">Want bid</th>
@@ -207,9 +207,9 @@ export default function KalshiMmPage() {
                     <td className="px-3 py-1.5 text-right text-sky-200">{pmBidC}</td>
                     <td className="px-3 py-1.5 text-right text-amber-200">{pmAskC}</td>
                     <td className="px-3 py-1.5 text-right text-gray-400">
-                      {r.pm_bid_depth != null ? `$${Math.round(r.pm_bid_depth)}` : '—'}
+                      {r.pm_bid_depth != null ? Math.round(r.pm_bid_depth) : '—'}
                       <span className="text-gray-600"> / </span>
-                      {r.pm_ask_depth != null ? `$${Math.round(r.pm_ask_depth)}` : '—'}
+                      {r.pm_ask_depth != null ? Math.round(r.pm_ask_depth) : '—'}
                     </td>
                     <td className="px-3 py-1.5 text-right">
                       {kBidC} <span className="text-gray-600">({r.k_bs ?? '—'})</span>
@@ -244,7 +244,7 @@ export default function KalshiMmPage() {
         <p className="text-xs text-gray-500 mt-4 max-w-3xl">
           Each row is one (event × market × outcome) where we have both a Polymarket token and a Kalshi ticker.
           <code className="text-gray-400"> Fair</code> is the size-weighted Polymarket microprice, gated to
-          ≥&nbsp;$500 depth each side.
+          ≥&nbsp;500 contracts each side (≈ same liquidity threshold across favorites and underdogs).
           <code className="text-gray-400"> Want bid / Want ask</code> is what we would post on Kalshi —
           rounded to cents, never quoted through fair, improving the BBO by 1¢ when possible.
           Mode picks which side(s) we'd post on; flipping it propagates to the worker within ~5&nbsp;s.
