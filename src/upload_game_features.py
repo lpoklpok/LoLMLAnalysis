@@ -173,6 +173,17 @@ def run():
     ]
     gw = pd.read_csv(PROCESSED_DIR / 'games_with_odds.csv', low_memory=False, usecols=gw_cols)
     df = df.merge(gw, on='gameid', how='left')
+
+    # Merge Glicko-2 predictions (from predict_glicko.py). Optional — skip if missing.
+    glicko_path = PROCESSED_DIR / 'glicko_predictions.csv'
+    if glicko_path.exists():
+        gl = pd.read_csv(glicko_path, low_memory=False)
+        df = df.merge(gl, on='gameid', how='left')
+        print(f"Merged glicko_pred ({gl['glicko_pred'].notna().sum():,}/{len(gl):,} non-null)")
+    else:
+        df['glicko_pred'] = np.nan
+        print("WARN: glicko_predictions.csv missing — run predict_glicko.py first.")
+
     df['actual_gd10_diff'] = df['blue_team_golddiffat10']
     df['actual_gd15_diff'] = df['blue_team_golddiffat15']
     df['actual_gd20_diff'] = df['blue_team_golddiffat20']
@@ -277,6 +288,7 @@ def run():
                                        else round(float(preds_live[i]), 4)),
             'poly_blue_win_prob': _safe(row.get('poly_blue_win_prob')),
             'poly_source':        (None if (row.get('poly_source') is None or (isinstance(row.get('poly_source'), float) and np.isnan(row.get('poly_source')))) else str(row.get('poly_source'))),
+            'glicko_pred':        _safe(row.get('glicko_pred')),
         })
 
     supabase_url = os.environ.get('SUPABASE_URL')
