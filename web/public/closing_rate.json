@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-01T13:40:10Z",
+  "generated": "2026-06-01T19:24:15Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -22,7 +22,7 @@
       "wins": 5,
       "avg_pred": 0.4398,
       "actual_wr": 0.5556,
-      "closing_rate": 0.1158
+      "closing_rate": 0.1157
     },
     {
       "team": "T1",
@@ -30,13 +30,13 @@
       "wins": 37,
       "avg_pred": 0.6626,
       "actual_wr": 0.7708,
-      "closing_rate": 0.1083
+      "closing_rate": 0.1082
     },
     {
       "team": "SK Gaming",
       "n_games": 27,
       "wins": 9,
-      "avg_pred": 0.2489,
+      "avg_pred": 0.2488,
       "actual_wr": 0.3333,
       "closing_rate": 0.0845
     },
@@ -54,13 +54,13 @@
       "wins": 18,
       "avg_pred": 0.5484,
       "actual_wr": 0.6207,
-      "closing_rate": 0.0722
+      "closing_rate": 0.0723
     },
     {
       "team": "KT Rolster",
       "n_games": 45,
       "wins": 26,
-      "avg_pred": 0.5176,
+      "avg_pred": 0.5177,
       "actual_wr": 0.5778,
       "closing_rate": 0.0601
     },
@@ -84,17 +84,17 @@
       "team": "Bilibili Gaming",
       "n_games": 15,
       "wins": 12,
-      "avg_pred": 0.7539,
+      "avg_pred": 0.754,
       "actual_wr": 0.8,
-      "closing_rate": 0.0461
+      "closing_rate": 0.046
     },
     {
       "team": "GiantX",
       "n_games": 30,
       "wins": 15,
-      "avg_pred": 0.4547,
+      "avg_pred": 0.4548,
       "actual_wr": 0.5,
-      "closing_rate": 0.0453
+      "closing_rate": 0.0452
     },
     {
       "team": "Hanwha Life Esports",
@@ -116,9 +116,9 @@
       "team": "LOUD",
       "n_games": 8,
       "wins": 2,
-      "avg_pred": 0.2257,
+      "avg_pred": 0.2258,
       "actual_wr": 0.25,
-      "closing_rate": 0.0243
+      "closing_rate": 0.0242
     },
     {
       "team": "HANJIN BRION",
@@ -132,9 +132,9 @@
       "team": "Deep Cross Gaming",
       "n_games": 10,
       "wins": 6,
-      "avg_pred": 0.5917,
+      "avg_pred": 0.5916,
       "actual_wr": 0.6,
-      "closing_rate": 0.0083
+      "closing_rate": 0.0084
     }
   ],
   "throwers": [
@@ -254,9 +254,9 @@
       "team": "Kiwoom DRX",
       "n_games": 47,
       "wins": 17,
-      "avg_pred": 0.3791,
+      "avg_pred": 0.3792,
       "actual_wr": 0.3617,
-      "closing_rate": -0.0174
+      "closing_rate": -0.0175
     }
   ]
 }
