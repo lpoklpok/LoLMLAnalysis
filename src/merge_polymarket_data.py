@@ -294,17 +294,21 @@ def merge_polymarket_odds(games: pd.DataFrame, snaps: pd.DataFrame) -> pd.DataFr
                     p = blue_prob_of('game_3_winner')
                     source = 'game_3_winner' if p is not None else None
                 elif gnum == 4:
-                    p = blue_prob_of('game_4_winner')
-                    source = 'game_4_winner' if p is not None else None
+                    # Polymarket's game_4_winner is illiquid/unreliable — reuse
+                    # game_3_winner as the Game 4 probability proxy.
+                    p = blue_prob_of('game_3_winner')
+                    source = 'game_3_winner_for_g4' if p is not None else None
                 elif gnum == 5:
                     p_s  = blue_prob_of('match_winner')
                     p_g1 = blue_prob_of('game_1_winner')
                     p_g2 = blue_prob_of('game_2_winner')
                     p_g3 = blue_prob_of('game_3_winner')
-                    p_g4 = blue_prob_of('game_4_winner')
+                    # Use game_3_winner as the Game 4 probability proxy (same
+                    # reason as gnum==4 above), then back-solve for Game 5.
+                    p_g4 = blue_prob_of('game_3_winner')
                     if None not in (p_s, p_g1, p_g2, p_g3, p_g4):
                         p = bo5_g5_prob(p_s, p_g1, p_g2, p_g3, p_g4)
-                        source = 'derived_g5'
+                        source = 'derived_g5_g3proxy'
 
             gid = g['gameid']
             prob_by_gameid[gid]   = None if p is None else round(float(p), 4)

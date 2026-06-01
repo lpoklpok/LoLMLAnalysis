@@ -246,7 +246,18 @@ def run():
     print("Loading data...")
     df = pd.read_csv(path, low_memory=False, usecols=[c for c in KEEP_COLS
                                                        if c not in ('format', 'score_match')]
-                     + ['format', 'score_match'])
+                     + ['format', 'score_match', 'poly_blue_win_prob'])
+
+    # Coalesce polymarket implied prob into q_blue_win where oddsportal didn't fill it.
+    # Both are blue-side-perspective probabilities. Polymarket snapshots cover ~May 21+;
+    # oddsportal covers ~through May 19. The two don't overlap in practice.
+    if 'poly_blue_win_prob' in df.columns:
+        if 'q_blue_win' in df.columns:
+            n_before = df['q_blue_win'].notna().sum()
+            df['q_blue_win'] = df['q_blue_win'].fillna(df['poly_blue_win_prob'])
+            n_after = df['q_blue_win'].notna().sum()
+            print(f"  coalesce: q_blue_win {n_before:,} → {n_after:,} non-null (+{n_after-n_before:,} from polymarket)")
+        df = df.drop(columns=['poly_blue_win_prob'])
 
     # Only keep columns that actually exist (odds cols may be absent for some rows)
     existing = [c for c in KEEP_COLS if c in df.columns]

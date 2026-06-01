@@ -58,7 +58,7 @@ type SortDir = 'asc' | 'desc'
 type PivotSortKey = keyof PivotRow
 type Mode = 'games' | 'pivot'
 
-const MAJOR_LEAGUES = ['LCS', 'LEC', 'LCK', 'LPL', 'LCP', 'MSI', 'Worlds', 'WLDs', 'EWC']
+const MAJOR_LEAGUES = ['LCS', 'LEC', 'LCK', 'LPL', 'MSI', 'Worlds', 'WLDs', 'EWC']
 
 const COLS: { key: SortKey; label: string; fmt?: (v: number) => string; width?: string }[] = [
   { key: 'date',           label: 'Date',        width: 'w-24' },
