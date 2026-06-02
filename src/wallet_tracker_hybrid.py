@@ -111,6 +111,16 @@ async def sync_watch_task():
             await _refresh_watch_from_supabase(session)
         await asyncio.sleep(60)
 
+
+# Boot-time alert suppression: the initial /trades poll returns up to 20
+# trades per wallet, all "new" to the freshly-booted process. Suppress
+# Discord alerts during a short warmup window so we don't flood the channel
+# with re-alerts of fills the user already saw. Trades still hit CSV +
+# dedup set so the worker doesn't re-alert them later.
+BOOT_TIME_MONO  = time.monotonic()
+WARMUP_GRACE_SEC = int(os.environ.get('WARMUP_GRACE_SEC', '30'))
+WARMUP_MAX_AGE_SEC = int(os.environ.get('WARMUP_MAX_AGE_SEC', '300'))   # 5 min
+
 # ── Tier classification from 7-day backtest (2026-05-25 → 2026-06-01) ──
 # PROVEN sharks: net positive pre-series PnL over the window. Worth mirroring.
 # AVOID: net negative. Skip these alerts.
@@ -252,8 +262,16 @@ async def worker(session: aiohttp.ClientSession):
             log.info(f'  🦈 [{source}] {name} {side} ${usd:,.0f} {outcome[:25]:25s} {title[:50]} [{tag}]')
 
             if pregame and DISCORD:
-                msg = format_alert(name, proxy, side, outcome, price, size, usd, title, slug, tx, pregame, source, trade_ts)
-                await discord_send(session, msg)
+                # Boot warmup: suppress alerts for fills older than WARMUP_MAX_AGE_SEC
+                # during the first WARMUP_GRACE_SEC after boot. Catches the initial
+                # /trades?limit=20 backfill without flooding the Discord channel.
+                trade_age = (datetime.now(timezone.utc) - trade_ts).total_seconds()
+                in_warmup = (time.monotonic() - BOOT_TIME_MONO) < WARMUP_GRACE_SEC
+                if in_warmup and trade_age > WARMUP_MAX_AGE_SEC:
+                    log.info(f'  [warmup-skip] {name} {side} ${usd:,.0f} {outcome[:25]} ({trade_age/60:.0f}min old)')
+                else:
+                    msg = format_alert(name, proxy, side, outcome, price, size, usd, title, slug, tx, pregame, source, trade_ts)
+                    await discord_send(session, msg)
         except Exception as e:
             log.warning(f'worker error: {e!r}')
 
