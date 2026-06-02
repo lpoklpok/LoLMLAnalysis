@@ -239,8 +239,16 @@ async def worker(session: aiohttp.ClientSession):
             proxy = (t.get('proxyWallet') or t.get('user') or '').lower()
             name = WATCH_LIST[proxy]
             title = t.get('title') or ''
-            if not title.startswith('LoL:'): continue   # LoL only
             slug = t.get('eventSlug') or t.get('slug') or ''
+            # LoL filter: previously this checked title.startswith('LoL:') but
+            # that only catches match/game-winner submarkets. Handicap, totals,
+            # and kill props use different title prefixes ("Game Handicap:",
+            # "Games Total:", "Total Kills..."). The eventSlug is consistent
+            # across every submarket of a LoL event, so gate on that instead.
+            slug_lc = slug.lower()
+            if not (title.startswith('LoL:') or
+                    slug_lc.startswith(('lol-','lck-','lec-','lpl-','lcs-'))):
+                continue
             series_start = await get_series_start(session, slug) if slug else None
             trade_ts = datetime.fromtimestamp(t.get('timestamp', time.time()), tz=timezone.utc) if isinstance(t.get('timestamp'), (int, float)) else datetime.now(timezone.utc)
             pregame = series_start is not None and trade_ts <= series_start - PREGAME_BUFFER
