@@ -57,6 +57,7 @@ export default function SharksPage() {
   const [filter,   setFilter]   = useState<string>('')
   const [sort,     setSort]     = useState<SortKey>('value')
   const [lolOnly,  setLolOnly]  = useState<boolean>(true)
+  const [openOnly, setOpenOnly] = useState<boolean>(true)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   // add-shark form
@@ -123,7 +124,9 @@ export default function SharksPage() {
   const visible = useMemo(() => {
     const f = filter.trim().toLowerCase()
     let xs = sharks.map(s => {
-      const positions = lolOnly ? s.positions.filter(isLol) : s.positions
+      let positions = s.positions
+      if (lolOnly)  positions = positions.filter(isLol)
+      if (openOnly) positions = positions.filter(p => !p.redeemable)
       return {
         ...s,
         positions,
@@ -144,7 +147,7 @@ export default function SharksPage() {
       case 'count': xs.sort((a,b) => b.position_count - a.position_count);                    break
     }
     return xs
-  }, [sharks, filter, sort, lolOnly])
+  }, [sharks, filter, sort, lolOnly, openOnly])
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
@@ -152,7 +155,7 @@ export default function SharksPage() {
         <div>
           <h1 className="text-2xl font-bold text-emerald-400">Sharks</h1>
           <p className="text-sm text-gray-400 mt-1">
-            {visible.length} tracked · {lolOnly ? 'LoL only' : 'all markets'} · refreshes every 30s
+            {visible.length} tracked · {lolOnly ? 'LoL' : 'all'} · {openOnly ? 'open only' : 'incl. settled'} · refreshes every 30s
             {err && <span className="text-red-400 ml-3">error: {err}</span>}
           </p>
         </div>
@@ -203,6 +206,10 @@ export default function SharksPage() {
           <label className="text-xs text-gray-400 flex items-center gap-1.5">
             <input type="checkbox" checked={lolOnly} onChange={e => setLolOnly(e.target.checked)} />
             LoL only
+          </label>
+          <label className="text-xs text-gray-400 flex items-center gap-1.5">
+            <input type="checkbox" checked={openOnly} onChange={e => setOpenOnly(e.target.checked)} />
+            open only
           </label>
           <span className="text-xs text-gray-500 ml-3">sort:</span>
           {(['value','pnl','count','name'] as SortKey[]).map(k => (
