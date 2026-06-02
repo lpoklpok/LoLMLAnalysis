@@ -47,20 +47,13 @@ jobs:
           restore-keys: |
             processed-v4-
 
-      - name: Refresh OE mirror (copy Tim's CSV to your Drive folder)
-        env:
-          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
-          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
-          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
-          OE_DRIVE_FOLDER_ID: ${{ secrets.OE_DRIVE_FOLDER_ID }}
-        run: python src/refresh_oe_mirror.py
-        continue-on-error: true
-
       - name: Pull latest Oracle's Elixir data
+        # Pulls Tim's CSV directly via Drive v3 + GOOGLE_API_KEY (project quota,
+        # not the rate-limited anonymous pool). Mirror-to-our-Drive step was
+        # removed 2026-06-02 — OAuth refresh token kept expiring and silently
+        # froze the pipeline. drive_api on Tim's public file ID works fine.
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          OE_DRIVE_FILE_ID: ${{ secrets.OE_DRIVE_FILE_ID }}
-          OE_DRIVE_FOLDER_ID: ${{ secrets.OE_DRIVE_FOLDER_ID }}
         run: python src/PullOEData.py
         continue-on-error: true
 
