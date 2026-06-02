@@ -261,6 +261,19 @@ def run():
     no_gd20 = df['actual_gd20_diff'].isna().values
     preds_live = np.where(no_gd20, np.nan, preds_live)
 
+    # Coalesce polymarket implied prob into q_blue_win where oddsportal didn't fill it.
+    # Mirrors the logic in upload_to_supabase.py — game_features needs the same
+    # coalesced column so the /games page renders odds for May 21+ markets (where
+    # oddsportal has no coverage and only the polymarket snapshot lane has a value).
+    if 'poly_blue_win_prob' in df.columns:
+        if 'q_blue_win' in df.columns:
+            n_before = df['q_blue_win'].notna().sum()
+            df['q_blue_win'] = df['q_blue_win'].fillna(df['poly_blue_win_prob'])
+            n_after = df['q_blue_win'].notna().sum()
+            print(f"  coalesce: q_blue_win {n_before:,} → {n_after:,} non-null (+{n_after-n_before:,} from polymarket)")
+        else:
+            df['q_blue_win'] = df['poly_blue_win_prob']
+
     records = []
     for i, (_, row) in enumerate(df.iterrows()):
         records.append({
