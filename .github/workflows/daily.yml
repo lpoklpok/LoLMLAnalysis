@@ -47,6 +47,15 @@ jobs:
           restore-keys: |
             processed-v4-
 
+      - name: Restore snapshot file from git (cache may shadow it)
+        # 2026-06-02: actions/cache restore overwrites data/processed/* with
+        # the prior run's cached versions, including polymarket_submarket_
+        # snapshots.csv. But git is the authoritative source for that file
+        # (the kw-polymarket-snapshots Fly worker commits to it ~1x/hour).
+        # Force re-checkout so we don't run merge_polymarket_data on stale
+        # snapshots.
+        run: git checkout -- data/processed/polymarket_submarket_snapshots.csv
+
       - name: Refresh OE mirror (copy Tim's CSV to your Drive folder)
         env:
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
