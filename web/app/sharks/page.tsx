@@ -113,6 +113,19 @@ export default function SharksPage() {
     await load()
   }
 
+  async function saveEdit(wallet: string, name: string, notes: string, type: 'sharp'|'fade'|'watch') {
+    const r = await fetch('/api/sharks', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ wallet, name: name || undefined, notes: notes || undefined, type }),
+    })
+    if (!r.ok) {
+      const j = await r.json().catch(()=>({}))
+      alert(`save failed: ${j.error ?? r.status}`)
+    }
+    await load()
+  }
+
   function toggle(w: string) {
     setExpanded(s => {
       const ns = new Set(s)
@@ -259,10 +272,8 @@ export default function SharksPage() {
 
                   {open && (
                     <div className="border-t border-gray-800 px-4 py-3">
-                      <div className="flex justify-end mb-2">
-                        <button onClick={() => removeShark(s.wallet_address, s.name)}
-                                className="text-xs text-red-400 hover:text-red-300">remove shark</button>
-                      </div>
+                      <SharkEdit shark={s} onSave={saveEdit}
+                                 onRemove={() => removeShark(s.wallet_address, s.name)} />
                       {s.positions.length === 0 ? (
                         <p className="text-sm text-gray-500">no {lolOnly ? 'LoL ' : ''}positions.</p>
                       ) : (
@@ -315,6 +326,55 @@ export default function SharksPage() {
           </div>
         )}
       </main>
+    </div>
+  )
+}
+
+
+function SharkEdit({ shark, onSave, onRemove }: {
+  shark:    Shark
+  onSave:   (wallet: string, name: string, notes: string, type: 'sharp'|'fade'|'watch') => Promise<void>
+  onRemove: () => Promise<void>
+}) {
+  const [name,    setName]    = useState(shark.name  ?? '')
+  const [notes,   setNotes]   = useState(shark.notes ?? '')
+  const [type,    setType]    = useState<'sharp'|'fade'|'watch'>(shark.type)
+  const [saving,  setSaving]  = useState(false)
+  const dirty = name !== (shark.name ?? '') || notes !== (shark.notes ?? '') || type !== shark.type
+  return (
+    <div className="flex flex-wrap items-end gap-3 mb-3 bg-gray-950/60 border border-gray-800 rounded p-2.5">
+      <div className="flex-1 min-w-[160px]">
+        <label className="text-[10px] uppercase text-gray-500">name</label>
+        <input value={name} onChange={e => setName(e.target.value)}
+               placeholder="(no name)"
+               className="bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs w-full" />
+      </div>
+      <div className="flex-1 min-w-[200px]">
+        <label className="text-[10px] uppercase text-gray-500">notes</label>
+        <input value={notes} onChange={e => setNotes(e.target.value)}
+               placeholder="(none)"
+               className="bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs w-full" />
+      </div>
+      <div>
+        <label className="text-[10px] uppercase text-gray-500">type</label>
+        <select value={type} onChange={e => setType(e.target.value as 'sharp'|'fade'|'watch')}
+                className="bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs block">
+          <option value="sharp">sharp</option>
+          <option value="fade">fade</option>
+          <option value="watch">watch</option>
+        </select>
+      </div>
+      <button
+        disabled={!dirty || saving}
+        onClick={async () => {
+          setSaving(true)
+          try { await onSave(shark.wallet_address, name.trim(), notes.trim(), type) }
+          finally { setSaving(false) }
+        }}
+        className="px-3 py-1 text-xs rounded bg-emerald-700 hover:bg-emerald-600 disabled:opacity-30">
+        {saving ? 'saving…' : 'save'}
+      </button>
+      <button onClick={onRemove} className="px-2 py-1 text-xs text-red-400 hover:text-red-300">remove</button>
     </div>
   )
 }
