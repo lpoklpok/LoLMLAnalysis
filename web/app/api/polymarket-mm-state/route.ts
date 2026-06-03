@@ -47,7 +47,13 @@ export async function GET(): Promise<Response> {
 
   type Row = Record<string, unknown>
 
-  // Build {(slug, market_type, outcome_index): pm_best} from scanner output
+  // Build {(slug, market_type, outcome_index, outcome_name): pm_best} from
+  // scanner output. The outcome_name is needed because the same event can
+  // expose multiple submarkets sharing the same market_type — e.g. Bo5
+  // events have BOTH "Game Handicap (-1.5/+1.5)" AND "Game Handicap (-2.5/+2.5)"
+  // as separate Polymarket markets but both have market_type='game_handicap'.
+  // Keying on (slug, market_type, outcome_index) alone causes a collision and
+  // both mm_config rows would inherit the same (wrong) PM bid/ask.
   const scannerBest: Record<string, { bid: BookBest | null; ask: BookBest | null }> = {}
   if (scanner) {
     for (const ev of scanner.events ?? []) {
@@ -55,7 +61,7 @@ export async function GET(): Promise<Response> {
         for (let idx = 0; idx < (sm.outcomes ?? []).length; idx++) {
           const o = sm.outcomes[idx]
           if (o?.pm_best) {
-            scannerBest[`${ev.slug}|${sm.market_type}|${idx}`] = o.pm_best
+            scannerBest[`${ev.slug}|${sm.market_type}|${idx}|${o.outcome}`] = o.pm_best
           }
         }
       }
@@ -71,7 +77,9 @@ export async function GET(): Promise<Response> {
     // Merge scanner pm_best into state if worker hasn't yet captured the book
     // (i.e., row is not enabled / no WS subscription). The scanner gives us a
     // current snapshot so the cockpit can show book before the user enables.
-    const scannerKey = `${c.event_slug}|${c.market_type}|${c.outcome_index}`
+    // Key includes outcome_label so multiple submarkets sharing market_type
+    // (e.g. Bo5 -1.5 and -2.5 handicaps) don't collide on the merge.
+    const scannerKey = `${c.event_slug}|${c.market_type}|${c.outcome_index}|${c.outcome_label}`
     const sb_book = scannerBest[scannerKey]
     const wsbid  = stateByKey[`${c.condition_id}|${c.outcome_index}|bid`] ?? null
     const wsoffer = stateByKey[`${c.condition_id}|${c.outcome_index}|offer`] ?? null
