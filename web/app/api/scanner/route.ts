@@ -170,6 +170,19 @@ function seriesProb(pG1: number, bestOf: number): number {
   return p
 }
 
+// P(game `gnum` is actually played) = sum of probabilities of every series
+// path whose total game count is ≥ gnum. Bo3 game 3 needs 1-1 after 2; Bo5
+// game 4 needs not-a-sweep-in-3; Bo5 game 5 needs 2-2 after 4. Earlier games
+// always have pPlayed = 1.
+function pGamePlayed(dist: Map<string, number>, gnum: number): number {
+  let p = 0
+  for (const [k, v] of dist) {
+    const totalGames = parseInt(k.split('_')[1] || '0', 10)
+    if (totalGames >= gnum) p += v
+  }
+  return p
+}
+
 // Handicap = team1 must win series by at least |H| game margin. team1 -1.5 in
 // Bo3 means 2-0. team2 +1.5 means t2 can lose ≤ 0-2 (i.e., NOT a 2-0 t1 sweep).
 // Returns P(team1 covers handicap H), assuming standard convention where
@@ -419,12 +432,20 @@ export async function GET(): Promise<Response> {
         label = 'Match Winner'
         const pT1Game = team1IsBlue ? pBlue : 1 - pBlue
         fv1 = seriesProb(pT1Game, pred.best_of)
-      } else if (sm.market_type.startsWith('game_') && sm.market_type.endsWith('_winner') && pBlue != null) {
+      } else if (sm.market_type.startsWith('game_') && sm.market_type.endsWith('_winner') && pBlue != null && seriesDist) {
         const gnum = parseInt(sm.market_type.replace('game_','').replace('_winner',''), 10)
         label = `Game ${gnum} Winner`
         const pT1Game = team1IsBlue ? pBlue : 1 - pBlue
-        // Game 2 has draft-swap shrinkage; G1 and G3+ are pG1 unchanged.
-        fv1 = pGameMarginal(pT1Game, gnum)
+        // Conditional win prob when the game IS played. G2 uses draft-swap
+        // shrinkage; G1 and G3+ use raw pG1.
+        const pWinIfPlayed = pGameMarginal(pT1Game, gnum)
+        // Probability the game actually happens. Bo3 G1/G2 = 1, Bo3 G3 = P(1-1).
+        // Bo5 G1/G2/G3 = 1, Bo5 G4 = P(not 3-0), Bo5 G5 = P(2-2 after 4).
+        const pPlayed = pGamePlayed(seriesDist, gnum)
+        // If the game doesn't happen, the market resolves to a 50/50 outcome
+        // (either void/refund or neutral). Per user spec:
+        //   fair = P(played) * P(win|played) + (1 - P(played)) * 0.5
+        fv1 = pPlayed * pWinIfPlayed + (1 - pPlayed) * 0.5
       } else if (sm.market_type === 'game_handicap' && seriesDist) {
         // Question is "Game Handicap: T1 (-1.5) vs BNK FEARX (+1.5)". The
         // handicap value is always in parentheses; without the paren-anchor
