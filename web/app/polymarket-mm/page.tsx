@@ -230,8 +230,10 @@ export default function PolymarketMmPage() {
                 const sb = r.state_bid
                 const so = r.state_offer
                 const fair = c.fair
-                const bid  = sb?.last_book_top_price ?? null
-                const ask  = so?.last_book_top_price ?? null
+                const bid     = sb?.last_book_top_price ?? null
+                const ask     = so?.last_book_top_price ?? null
+                const bidSize = sb?.last_book_top_size ?? null
+                const askSize = so?.last_book_top_size ?? null
                 const bidEdge = fair != null && bid != null ? fair - bid : null
                 const askEdge = fair != null && ask != null ? ask - fair : null
                 const edgeThr = (c.edge_threshold_pp ?? 5) / 100
@@ -280,8 +282,14 @@ export default function PolymarketMmPage() {
                              className="bg-gray-950 border border-gray-700 rounded px-1 py-0.5 text-xs w-14 text-right" />
                       <span className="ml-0.5 text-gray-600">pp</span>
                     </td>
-                    <td className="px-2 py-1 text-right">{cents(bid)}</td>
-                    <td className="px-2 py-1 text-right">{cents(ask)}</td>
+                    <td className="px-2 py-1 text-right">
+                      {cents(bid)}
+                      {bidSize != null && <span className="text-gray-500 text-[10px] ml-1">({bidSize.toLocaleString('en-US',{maximumFractionDigits:0})})</span>}
+                    </td>
+                    <td className="px-2 py-1 text-right">
+                      {cents(ask)}
+                      {askSize != null && <span className="text-gray-500 text-[10px] ml-1">({askSize.toLocaleString('en-US',{maximumFractionDigits:0})})</span>}
+                    </td>
                     <td className={`px-2 py-1 text-right ${bidGood ? 'text-emerald-400' : 'text-gray-500'}`}>
                       {bidEdge != null ? `${(bidEdge * 100).toFixed(1)}c` : '—'}
                     </td>
