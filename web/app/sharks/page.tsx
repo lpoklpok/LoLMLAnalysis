@@ -38,6 +38,37 @@ interface Shark {
 }
 
 type SortKey = 'name' | 'value' | 'pnl' | 'count'
+type ViewMode = 'events' | 'sharks'
+
+interface SharkHolding {
+  shark:       Shark
+  size:        number
+  avgPrice:    number
+  curPrice:    number
+  currentValue: number
+  cashPnl:     number
+}
+interface OutcomeAgg {
+  outcome:        string
+  asset:          string
+  totalSize:      number
+  totalValue:     number
+  totalPnl:       number
+  holders:        SharkHolding[]
+}
+interface SubmarketAgg {
+  title:          string         // market title (e.g. "Game 4 Winner")
+  conditionId:    string
+  outcomes:       OutcomeAgg[]
+}
+interface EventAgg {
+  eventSlug:      string
+  title:          string         // best-guess event-level title
+  totalValue:     number
+  totalPnl:       number
+  totalHolders:   number
+  submarkets:     SubmarketAgg[]
+}
 
 const LOL_PREFIXES = ['lol-', 'lck-', 'lec-', 'lpl-', 'lcs-']
 const isLol = (p: PmPosition) =>
@@ -54,11 +85,14 @@ export default function SharksPage() {
   const [sharks,   setSharks]   = useState<Shark[]>([])
   const [err,      setErr]      = useState<string | null>(null)
   const [loading,  setLoading]  = useState<boolean>(true)
-  const [filter,   setFilter]   = useState<string>('')
-  const [sort,     setSort]     = useState<SortKey>('value')
-  const [lolOnly,  setLolOnly]  = useState<boolean>(true)
-  const [openOnly, setOpenOnly] = useState<boolean>(true)
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [filter,    setFilter]   = useState<string>('')
+  const [sort,      setSort]     = useState<SortKey>('value')
+  const [lolOnly,   setLolOnly]  = useState<boolean>(true)
+  const [openOnly,  setOpenOnly] = useState<boolean>(true)
+  const [expanded,  setExpanded] = useState<Set<string>>(new Set())
+  const [viewMode,  setViewMode] = useState<ViewMode>('events')
+  const [eventExpanded,  setEventExpanded]  = useState<Set<string>>(new Set())
+  const [outcomeExpanded, setOutcomeExpanded] = useState<Set<string>>(new Set())
 
   // add-shark form
   const [newWallet, setNewWallet] = useState('')
@@ -133,6 +167,110 @@ export default function SharksPage() {
       return ns
     })
   }
+  function toggleSet(s: Set<string>, key: string, setter: (n: Set<string>) => void) {
+    const ns = new Set(s)
+    if (ns.has(key)) ns.delete(key); else ns.add(key)
+    setter(ns)
+  }
+
+  // Event-grouped aggregation: net size + per-shark breakdown per
+  // (eventSlug, market title, outcome). Honours lolOnly / openOnly /
+  // filter the same way as the sharks view.
+  const events = useMemo(() => {
+    const f = filter.trim().toLowerCase()
+    // First flatten: (eventSlug, marketTitle, conditionId, outcome) → entries
+    type Key = string
+    const byKey: Record<Key, OutcomeAgg & { marketTitle: string; eventSlug: string; eventTitleBest: string }> = {}
+    const eventTitleBest: Record<string, string> = {}
+    for (const s of sharks) {
+      if (!s.fetched_ok) continue
+      for (const p of s.positions) {
+        if (lolOnly  && !isLol(p)) continue
+        if (openOnly && p.redeemable) continue
+        // Derive 'event title' from the market title — strip the trailing
+        // submarket descriptor. PM uses titles like
+        // "LoL: ThunderTalk Gaming vs LGD Gaming (BO5) - LPL Playoffs - Match Winner"
+        // The portion before the last " - " is the event identifier.
+        const lastDash = p.title.lastIndexOf(' - ')
+        const evtTitle = lastDash > 0 ? p.title.slice(0, lastDash) : p.title
+        const mktTitle = lastDash > 0 ? p.title.slice(lastDash + 3) : 'Market'
+        if (f && ![p.title, evtTitle, p.outcome, s.name || '', s.wallet_address].some(
+          x => x.toLowerCase().includes(f))) continue
+
+        if (!eventTitleBest[p.eventSlug] || evtTitle.length > eventTitleBest[p.eventSlug].length) {
+          eventTitleBest[p.eventSlug] = evtTitle
+        }
+        const k = `${p.eventSlug}|${p.conditionId}|${p.outcome}`
+        if (!byKey[k]) {
+          byKey[k] = {
+            outcome:     p.outcome,
+            asset:       p.asset,
+            totalSize:   0,
+            totalValue:  0,
+            totalPnl:    0,
+            holders:     [],
+            marketTitle: mktTitle,
+            eventSlug:   p.eventSlug,
+            eventTitleBest: evtTitle,
+          }
+        }
+        const cur = byKey[k]
+        cur.totalSize  += p.size
+        cur.totalValue += p.currentValue
+        cur.totalPnl   += p.cashPnl
+        cur.holders.push({
+          shark:        s,
+          size:         p.size,
+          avgPrice:     p.avgPrice,
+          curPrice:     p.curPrice,
+          currentValue: p.currentValue,
+          cashPnl:      p.cashPnl,
+        })
+      }
+    }
+    // Re-group into Event → Submarket → Outcomes
+    const evMap: Record<string, EventAgg> = {}
+    for (const entry of Object.values(byKey)) {
+      const evtSlug = entry.eventSlug
+      if (!evMap[evtSlug]) {
+        evMap[evtSlug] = {
+          eventSlug:   evtSlug,
+          title:       eventTitleBest[evtSlug] || evtSlug,
+          totalValue:  0,
+          totalPnl:    0,
+          totalHolders: 0,
+          submarkets:  [],
+        }
+      }
+      const ev = evMap[evtSlug]
+      let s = ev.submarkets.find(x => x.title === entry.marketTitle)
+      if (!s) {
+        s = { title: entry.marketTitle, conditionId: '', outcomes: [] }
+        ev.submarkets.push(s)
+      }
+      s.outcomes.push({
+        outcome:     entry.outcome,
+        asset:       entry.asset,
+        totalSize:   entry.totalSize,
+        totalValue:  entry.totalValue,
+        totalPnl:    entry.totalPnl,
+        holders:     entry.holders.sort((a, b) => b.currentValue - a.currentValue),
+      })
+      ev.totalValue += entry.totalValue
+      ev.totalPnl   += entry.totalPnl
+    }
+    for (const ev of Object.values(evMap)) {
+      const uniq = new Set<string>()
+      for (const sm of ev.submarkets) for (const o of sm.outcomes) for (const h of o.holders) uniq.add(h.shark.wallet_address)
+      ev.totalHolders = uniq.size
+      // Sort submarkets / outcomes within
+      ev.submarkets.sort((a, b) =>
+        Math.max(...b.outcomes.map(o => o.totalValue)) - Math.max(...a.outcomes.map(o => o.totalValue)))
+      for (const sm of ev.submarkets) sm.outcomes.sort((a, b) => b.totalValue - a.totalValue)
+    }
+    // Sort events by total value desc
+    return Object.values(evMap).sort((a, b) => b.totalValue - a.totalValue)
+  }, [sharks, filter, lolOnly, openOnly])
 
   const visible = useMemo(() => {
     const f = filter.trim().toLowerCase()
@@ -213,8 +351,19 @@ export default function SharksPage() {
 
         {/* controls */}
         <div className="flex items-center gap-3 mb-4 flex-wrap">
+          {/* view mode tabs */}
+          <div className="inline-flex rounded border border-gray-800 overflow-hidden">
+            {(['events','sharks'] as ViewMode[]).map(v => (
+              <button key={v} onClick={() => setViewMode(v)}
+                      className={`px-3 py-1 text-xs ${viewMode === v
+                        ? 'bg-emerald-700 text-white'
+                        : 'bg-gray-900 text-gray-400 hover:text-gray-200'}`}>
+                by {v}
+              </button>
+            ))}
+          </div>
           <input value={filter} onChange={e => setFilter(e.target.value)}
-                 placeholder="filter by name / wallet / notes"
+                 placeholder={viewMode === 'events' ? 'filter market / event / outcome' : 'filter by name / wallet / notes'}
                  className="bg-gray-900 border border-gray-800 rounded px-3 py-1.5 text-sm w-72" />
           <label className="text-xs text-gray-400 flex items-center gap-1.5">
             <input type="checkbox" checked={lolOnly} onChange={e => setLolOnly(e.target.checked)} />
@@ -224,17 +373,134 @@ export default function SharksPage() {
             <input type="checkbox" checked={openOnly} onChange={e => setOpenOnly(e.target.checked)} />
             open only
           </label>
-          <span className="text-xs text-gray-500 ml-3">sort:</span>
-          {(['value','pnl','count','name'] as SortKey[]).map(k => (
-            <button key={k} onClick={() => setSort(k)}
-                    className={`px-2 py-0.5 text-xs rounded ${sort === k ? 'bg-emerald-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'}`}>
-              {k}
-            </button>
-          ))}
+          {viewMode === 'sharks' && <>
+            <span className="text-xs text-gray-500 ml-3">sort:</span>
+            {(['value','pnl','count','name'] as SortKey[]).map(k => (
+              <button key={k} onClick={() => setSort(k)}
+                      className={`px-2 py-0.5 text-xs rounded ${sort === k ? 'bg-emerald-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'}`}>
+                {k}
+              </button>
+            ))}
+          </>}
         </div>
 
+        {/* events view: net + per-shark positions grouped by event & submarket */}
+        {viewMode === 'events' && (
+          loading ? <p className="text-gray-500">loading…</p>
+          : events.length === 0
+            ? <p className="text-gray-500">no positions{filter ? ' match' : ''}.</p>
+            : <div className="space-y-3">
+                {events.map(ev => {
+                  const evOpen = eventExpanded.has(ev.eventSlug)
+                  return (
+                    <div key={ev.eventSlug} className="bg-gray-900 border border-gray-800 rounded-lg">
+                      <button onClick={() => toggleSet(eventExpanded, ev.eventSlug, setEventExpanded)}
+                              className="w-full px-4 py-3 flex items-center gap-4 text-left hover:bg-gray-900/60">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-baseline gap-3 flex-wrap">
+                            <a href={`https://polymarket.com/event/${ev.eventSlug}`} target="_blank" rel="noreferrer"
+                               onClick={e => e.stopPropagation()}
+                               className="text-base font-semibold text-gray-100 hover:text-emerald-300">{ev.title}</a>
+                            <span className="text-[10px] uppercase text-gray-500">
+                              {ev.submarkets.length} submarket{ev.submarkets.length === 1 ? '' : 's'} · {ev.totalHolders} shark{ev.totalHolders === 1 ? '' : 's'}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="text-right text-sm">
+                          <div className="text-gray-200">{dollar(ev.totalValue)}</div>
+                          <div className={ev.totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}>
+                            {dollar(ev.totalPnl)}
+                          </div>
+                        </div>
+                        <span className="text-gray-600 text-xs ml-2">{evOpen ? '▲' : '▼'}</span>
+                      </button>
+
+                      {evOpen && (
+                        <div className="border-t border-gray-800 px-4 py-3 space-y-3">
+                          {ev.submarkets.map(sm => (
+                            <div key={sm.title} className="bg-gray-950/50 border border-gray-800 rounded p-3">
+                              <div className="text-xs uppercase tracking-wide text-gray-400 mb-2">{sm.title}</div>
+                              <div className="space-y-1.5">
+                                {sm.outcomes.map(o => {
+                                  const key = `${ev.eventSlug}|${sm.title}|${o.outcome}`
+                                  const open = outcomeExpanded.has(key)
+                                  return (
+                                    <div key={key} className="border border-gray-800/70 rounded">
+                                      <button onClick={() => toggleSet(outcomeExpanded, key, setOutcomeExpanded)}
+                                              className="w-full px-3 py-2 flex items-center gap-3 text-left hover:bg-gray-900/70">
+                                        <span className={`text-sm font-medium ${
+                                          o.outcome === 'Yes' ? 'text-emerald-300'
+                                          : o.outcome === 'No' ? 'text-amber-300'
+                                          : 'text-gray-200'}`}>{o.outcome}</span>
+                                        <span className="text-[11px] text-gray-500">{o.holders.length} shark{o.holders.length === 1 ? '' : 's'}</span>
+                                        <span className="flex-1" />
+                                        <span className="text-xs text-gray-300">
+                                          net&nbsp;
+                                          <span className="text-gray-100 font-semibold">
+                                            {o.totalSize.toLocaleString('en-US',{maximumFractionDigits:0})} sh
+                                          </span>
+                                        </span>
+                                        <span className="text-xs text-gray-200 w-24 text-right">{dollar(o.totalValue)}</span>
+                                        <span className={`text-xs w-24 text-right ${o.totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                          {dollar(o.totalPnl)}
+                                        </span>
+                                        <span className="text-gray-600 text-[10px] w-3">{open ? '▲' : '▼'}</span>
+                                      </button>
+                                      {open && (
+                                        <div className="border-t border-gray-800/70 px-3 py-2 overflow-x-auto">
+                                          <table className="w-full text-xs">
+                                            <thead className="text-gray-500 uppercase tracking-wide">
+                                              <tr>
+                                                <th className="text-left  py-1 pr-3">Shark</th>
+                                                <th className="text-right py-1 pr-3">Size</th>
+                                                <th className="text-right py-1 pr-3">Avg</th>
+                                                <th className="text-right py-1 pr-3">Cur</th>
+                                                <th className="text-right py-1 pr-3">Value</th>
+                                                <th className="text-right py-1 pr-3">PnL</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody>
+                                              {o.holders.map(h => (
+                                                <tr key={h.shark.wallet_address} className="border-t border-gray-800/40">
+                                                  <td className="py-1 pr-3">
+                                                    <span className="mr-1">{h.shark.emoji ?? '🦈'}</span>
+                                                    <span className="text-gray-200">{h.shark.name || trunc(h.shark.wallet_address)}</span>
+                                                    <span className={`ml-2 text-[9px] uppercase px-1 py-0.5 rounded ${
+                                                      h.shark.type === 'sharp' ? 'bg-emerald-900 text-emerald-300' :
+                                                      h.shark.type === 'fade'  ? 'bg-red-900 text-red-300' :
+                                                                                 'bg-gray-800 text-gray-400'}`}>{h.shark.type}</span>
+                                                  </td>
+                                                  <td className="py-1 pr-3 text-right text-gray-300">
+                                                    {h.size.toLocaleString('en-US',{maximumFractionDigits:0})}
+                                                  </td>
+                                                  <td className="py-1 pr-3 text-right text-gray-400">{(h.avgPrice * 100).toFixed(1)}¢</td>
+                                                  <td className="py-1 pr-3 text-right text-gray-400">{(h.curPrice * 100).toFixed(1)}¢</td>
+                                                  <td className="py-1 pr-3 text-right text-gray-200">{dollar(h.currentValue)}</td>
+                                                  <td className={`py-1 pr-3 text-right ${h.cashPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                                    {dollar(h.cashPnl)}
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+        )}
+
         {/* sharks list */}
-        {loading ? (
+        {viewMode === 'sharks' && (loading ? (
           <p className="text-gray-500">loading…</p>
         ) : visible.length === 0 ? (
           <p className="text-gray-500">no sharks{filter ? ' match' : ''}.</p>
@@ -324,7 +590,7 @@ export default function SharksPage() {
               )
             })}
           </div>
-        )}
+        ))}
       </main>
     </div>
   )
