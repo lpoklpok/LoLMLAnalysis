@@ -45,27 +45,30 @@ interface PageRow {
 }
 
 interface KillSwitch { killed: boolean; reason: string | null; updated_at?: string }
-
 interface ApiResp {
   rows:         PageRow[]
   kill_switch:  KillSwitch
   generated_at: number
 }
 
-type SortKey = 'event' | 'fair' | 'edge' | 'position' | 'updated'
+type SortKey = 'active' | 'event' | 'fair' | 'edge' | 'position' | 'updated'
+type ViewMode = 'all' | 'active' | 'enabled' | 'with-edge'
 
-const pct = (v: number) => `${(v * 100).toFixed(1)}%`
-const cents = (v: number | null | undefined) =>
-  v == null ? '—' : `${(v * 100).toFixed(1)}¢`
-const usd = (v: number | null | undefined) =>
-  v == null ? '—' : `$${v.toFixed(2)}`
+const cents = (v: number | null | undefined) => v == null ? '—' : `${(v * 100).toFixed(1)}¢`
+const usd   = (v: number | null | undefined) => v == null ? '—' : `$${v.toFixed(2)}`
+const num   = (v: number | null | undefined) => v == null ? '—' : v.toLocaleString('en-US',{maximumFractionDigits:0})
+
+function isActive(s: MmStateRow | null): boolean {
+  return !!(s && s.active_order_id && s.active_size_shares && s.active_size_shares > 0)
+}
 
 export default function PolymarketMmPage() {
-  const [data,   setData]   = useState<ApiResp | null>(null)
-  const [err,    setErr]    = useState<string | null>(null)
-  const [filter, setFilter] = useState('')
-  const [sort,   setSort]   = useState<SortKey>('edge')
-  const [busy,   setBusy]   = useState<Set<number>>(new Set())
+  const [data,    setData]    = useState<ApiResp | null>(null)
+  const [err,     setErr]     = useState<string | null>(null)
+  const [filter,  setFilter]  = useState('')
+  const [sort,    setSort]    = useState<SortKey>('active')
+  const [view,    setView]    = useState<ViewMode>('all')
+  const [busy,    setBusy]    = useState<Set<number>>(new Set())
 
   async function load() {
     try {
@@ -85,7 +88,6 @@ export default function PolymarketMmPage() {
 
   async function patchCfg(id: number, updates: Record<string, unknown>) {
     setBusy(s => new Set(s).add(id))
-    // Optimistic local update
     setData(d => d ? {
       ...d,
       rows: d.rows.map(r => r.cfg.id === id ? { ...r, cfg: { ...r.cfg, ...updates } as MmConfigRow } : r),
@@ -128,8 +130,25 @@ export default function PolymarketMmPage() {
       (r.cfg.team1 || '').toLowerCase().includes(f) ||
       (r.cfg.team2 || '').toLowerCase().includes(f) ||
       (r.cfg.market_type || '').toLowerCase().includes(f) ||
-      (r.cfg.outcome_label || '').toLowerCase().includes(f) ||
-      (r.cfg.event_slug || '').toLowerCase().includes(f))
+      (r.cfg.outcome_label || '').toLowerCase().includes(f))
+
+    if (view === 'active') {
+      xs = xs.filter(r => isActive(r.state_bid) || isActive(r.state_offer))
+    } else if (view === 'enabled') {
+      xs = xs.filter(r => r.cfg.enabled)
+    } else if (view === 'with-edge') {
+      xs = xs.filter(r => {
+        const fair = r.cfg.fair
+        const bid = r.state_bid?.last_book_top_price ?? null
+        const ask = r.state_offer?.last_book_top_price ?? null
+        const thr = (r.cfg.edge_threshold_pp ?? 5) / 100
+        if (fair == null) return false
+        const be = bid != null ? fair - bid : -1
+        const ae = ask != null ? ask - fair : -1
+        return be >= thr || ae >= thr
+      })
+    }
+
     const edgeFor = (r: PageRow) => {
       const f_ = r.cfg.fair
       const b = r.state_bid?.last_book_top_price ?? null
@@ -140,7 +159,10 @@ export default function PolymarketMmPage() {
       return Math.max(be, ae)
     }
     xs = [...xs].sort((a, b) => {
+      const aActive = (isActive(a.state_bid) ? 1 : 0) + (isActive(a.state_offer) ? 1 : 0)
+      const bActive = (isActive(b.state_bid) ? 1 : 0) + (isActive(b.state_offer) ? 1 : 0)
       switch (sort) {
+        case 'active':   return bActive - aActive || edgeFor(b) - edgeFor(a)
         case 'event':    return (a.cfg.event_title || '').localeCompare(b.cfg.event_title || '')
         case 'fair':     return (b.cfg.fair ?? -1) - (a.cfg.fair ?? -1)
         case 'edge':     return edgeFor(b) - edgeFor(a)
@@ -151,77 +173,106 @@ export default function PolymarketMmPage() {
       }
     })
     return xs
-  }, [data, filter, sort])
+  }, [data, filter, sort, view])
 
-  const enabledCount = data?.rows.filter(r => r.cfg.enabled).length ?? 0
-  const nbboCount    = data?.rows.filter(r => r.cfg.strategy === 'nbbo_edge').length ?? 0
-  const killed       = data?.kill_switch.killed ?? true
+  const stats = useMemo(() => {
+    const rows = data?.rows ?? []
+    let bids = 0, asks = 0, restingUsd = 0, posShares = 0, fillsUsd = 0
+    for (const r of rows) {
+      if (isActive(r.state_bid)) {
+        bids++
+        restingUsd += (r.state_bid?.active_price ?? 0) * (r.state_bid?.active_size_shares ?? 0)
+      }
+      if (isActive(r.state_offer)) {
+        asks++
+        restingUsd += (r.state_offer?.active_price ?? 0) * (r.state_offer?.active_size_shares ?? 0)
+      }
+      posShares += Math.abs((r.state_bid?.position_shares ?? 0) + (r.state_offer?.position_shares ?? 0))
+      fillsUsd  += (r.state_bid?.fills_today_usd ?? 0) + (r.state_offer?.fills_today_usd ?? 0)
+    }
+    return { bids, asks, restingUsd, posShares, fillsUsd,
+             enabled: rows.filter(r => r.cfg.enabled).length, total: rows.length }
+  }, [data])
+
+  const killed = data?.kill_switch.killed ?? true
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
-      <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
-        <div>
+      <header className="border-b border-gray-800 px-6 py-3 flex items-center justify-between gap-4">
+        <div className="flex items-baseline gap-4">
           <h1 className="text-2xl font-bold text-emerald-400">Polymarket Maker</h1>
-          <p className="text-sm text-gray-400 mt-1">
-            {enabledCount} enabled · {nbboCount} on nbbo_edge ·
-            {data?.rows.length ?? 0} markets total
-            {data && <span className="text-gray-600 ml-2">refresh {new Date(data.generated_at).toLocaleTimeString()}</span>}
-            {err && <span className="text-red-400 ml-3">error: {err}</span>}
-          </p>
+          {err && <span className="text-red-400 text-sm">error: {err}</span>}
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           {killed ? (
             <button onClick={() => toggleKill(false)}
                     className="px-3 py-1.5 rounded bg-red-900 border border-red-600 text-red-200 hover:bg-red-800 text-sm">
-              KILL ENGAGED · click to release
+              KILL ENGAGED · release
             </button>
           ) : (
             <button onClick={() => toggleKill(true)}
                     className="px-3 py-1.5 rounded bg-gray-900 border border-red-800 text-red-400 hover:bg-red-900/40 text-sm">
-              ⏻ Kill (cancel all)
+              ⏻ Kill
             </button>
           )}
-          <nav className="flex gap-5 text-sm">
+          <nav className="flex gap-4 text-sm">
             <Link href="/"          className="text-gray-400 hover:text-gray-200">Home</Link>
             <Link href="/scanner"   className="text-gray-400 hover:text-gray-200">Scanner</Link>
-            <Link href="/kalshi-mm" className="text-gray-400 hover:text-gray-200">Kalshi-MM</Link>
+            <Link href="/kalshi-mm" className="text-gray-400 hover:text-gray-200">Kalshi</Link>
           </nav>
         </div>
       </header>
 
-      <main className="px-6 py-5">
-        <div className="flex items-center gap-3 mb-4 flex-wrap">
+      {/* Top stat cards */}
+      <section className="grid grid-cols-2 md:grid-cols-6 gap-3 px-6 py-4 border-b border-gray-800">
+        <StatCard label="🟢 Resting bids"  value={stats.bids.toString()}  hint={`${stats.enabled} enabled / ${stats.total}`} />
+        <StatCard label="🔴 Resting asks"  value={stats.asks.toString()} />
+        <StatCard label="$ resting"        value={usd(stats.restingUsd)} hint="aggregate notional" />
+        <StatCard label="|Net position|"   value={`${num(stats.posShares)} sh`} />
+        <StatCard label="Fills today"      value={usd(stats.fillsUsd)} />
+        <StatCard label="Last refresh"     value={data ? new Date(data.generated_at).toLocaleTimeString().slice(0,8) : '—'} hint="auto every 2s" />
+      </section>
+
+      <main className="px-6 py-4">
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
           <input value={filter} onChange={e => setFilter(e.target.value)}
-                 placeholder="filter by team / event / market"
+                 placeholder="filter team / event / outcome"
                  className="bg-gray-900 border border-gray-800 rounded px-3 py-1.5 text-sm w-72" />
-          <span className="text-xs text-gray-500">sort:</span>
-          {(['edge', 'fair', 'position', 'event', 'updated'] as SortKey[]).map(k => (
+          <span className="text-xs text-gray-500 ml-2">view:</span>
+          {(['all','active','enabled','with-edge'] as ViewMode[]).map(v => (
+            <button key={v} onClick={() => setView(v)}
+                    className={`px-2 py-0.5 text-xs rounded ${view === v ? 'bg-emerald-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'}`}>
+              {v}
+            </button>
+          ))}
+          <span className="text-xs text-gray-500 ml-3">sort:</span>
+          {(['active','edge','position','fair','event','updated'] as SortKey[]).map(k => (
             <button key={k} onClick={() => setSort(k)}
                     className={`px-2 py-0.5 text-xs rounded ${sort === k ? 'bg-emerald-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'}`}>
               {k}
             </button>
           ))}
+          <span className="ml-auto text-xs text-gray-500">{visible.length} of {stats.total} rows</span>
         </div>
 
         <div className="overflow-x-auto border border-gray-800 rounded-lg">
           <table className="w-full text-xs font-mono">
-            <thead className="bg-gray-900 text-gray-400 uppercase tracking-wide">
+            <thead className="bg-gray-900 text-gray-400 uppercase tracking-wide text-[10px]">
               <tr>
-                <th className="px-2 py-2 text-left">Event / outcome</th>
-                <th className="px-2 py-2 text-left">Strategy</th>
-                <th className="px-2 py-2 text-center">On</th>
-                <th className="px-2 py-2 text-center">Bid</th>
-                <th className="px-2 py-2 text-center">Ask</th>
+                <th className="px-2 py-2 text-center">Status</th>
+                <th className="px-2 py-2 text-left">Event · outcome</th>
+                <th className="px-2 py-2 text-center">Strategy</th>
+                <th className="px-2 py-2 text-center">On / Bid / Ask</th>
                 <th className="px-2 py-2 text-right">Fair</th>
                 <th className="px-2 py-2 text-right">Edge thr.</th>
-                <th className="px-2 py-2 text-right">PM bid</th>
-                <th className="px-2 py-2 text-right">PM ask</th>
-                <th className="px-2 py-2 text-right">Bid edge</th>
-                <th className="px-2 py-2 text-right">Ask edge</th>
+                <th className="px-2 py-2 text-right">PM bid (sz)</th>
+                <th className="px-2 py-2 text-right">PM ask (sz)</th>
+                <th className="px-2 py-2 text-right">Edge $</th>
+                <th className="px-2 py-2 text-right">Our bid</th>
+                <th className="px-2 py-2 text-right">Our ask</th>
                 <th className="px-2 py-2 text-right">Size (sh)</th>
                 <th className="px-2 py-2 text-right">Pos</th>
-                <th className="px-2 py-2 text-right">Fills $</th>
-                <th className="px-2 py-2 text-left">Status</th>
+                <th className="px-2 py-2 text-right">Fills$</th>
               </tr>
             </thead>
             <tbody>
@@ -232,104 +283,154 @@ export default function PolymarketMmPage() {
                 const fair = c.fair
                 const bid     = sb?.last_book_top_price ?? null
                 const ask     = so?.last_book_top_price ?? null
-                const bidSize = sb?.last_book_top_size ?? null
-                const askSize = so?.last_book_top_size ?? null
+                const bidSize = sb?.last_book_top_size  ?? null
+                const askSize = so?.last_book_top_size  ?? null
                 const bidEdge = fair != null && bid != null ? fair - bid : null
                 const askEdge = fair != null && ask != null ? ask - fair : null
                 const edgeThr = (c.edge_threshold_pp ?? 5) / 100
                 const bidGood = bidEdge != null && bidEdge >= edgeThr
                 const askGood = askEdge != null && askEdge >= edgeThr
-                const pos = (sb?.position_shares ?? 0) + (so?.position_shares ?? 0)
-                const fillsTotal = (sb?.fills_today_usd ?? 0) + (so?.fills_today_usd ?? 0)
-                const isBusy = busy.has(c.id)
-                const statusBits: string[] = []
-                if (sb?.paused_reason) statusBits.push(`B:${sb.paused_reason}`)
-                if (so?.paused_reason) statusBits.push(`O:${so.paused_reason}`)
+                const activeBid   = isActive(sb)
+                const activeAsk   = isActive(so)
+                const ourBidPx    = sb?.active_price ?? null
+                const ourBidSz    = sb?.active_size_shares ?? null
+                const ourAskPx    = so?.active_price ?? null
+                const ourAskSz    = so?.active_size_shares ?? null
+                const pos         = (sb?.position_shares ?? 0) + (so?.position_shares ?? 0)
+                const fillsTotal  = (sb?.fills_today_usd ?? 0) + (so?.fills_today_usd ?? 0)
+                const isBusy      = busy.has(c.id)
+                const hasActive   = activeBid || activeAsk
+                const pausedBits: string[] = []
+                if (sb?.paused_reason) pausedBits.push(`B: ${sb.paused_reason}`)
+                if (so?.paused_reason) pausedBits.push(`O: ${so.paused_reason}`)
                 return (
-                  <tr key={c.id} className={`border-t border-gray-800 ${c.enabled ? '' : 'opacity-50'}`}>
-                    <td className="px-2 py-1 whitespace-nowrap">
+                  <tr key={c.id} className={`border-t border-gray-800 align-middle ${
+                    hasActive       ? 'bg-emerald-950/30 hover:bg-emerald-950/40'
+                                    : c.enabled ? 'hover:bg-gray-900/40'
+                                                : 'opacity-50 hover:opacity-70 hover:bg-gray-900/40'}`}>
+                    {/* Status: bid/ask LED dots */}
+                    <td className="px-2 py-1.5 text-center whitespace-nowrap">
+                      <div className="flex items-center gap-1 justify-center">
+                        <Dot kind={activeBid ? 'live' : (sb?.paused_reason ? 'paused' : 'off')} title="bid" />
+                        <Dot kind={activeAsk ? 'live' : (so?.paused_reason ? 'paused' : 'off')} title="ask" />
+                      </div>
+                    </td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">
                       <div className="text-gray-200">{c.team1} vs {c.team2}</div>
                       <div className="text-[10px] text-gray-500">{c.market_type} · {c.outcome_label}</div>
                     </td>
-                    <td className="px-2 py-1">
+                    <td className="px-2 py-1.5 text-center">
                       <select value={c.strategy} disabled={isBusy}
                               onChange={e => patchCfg(c.id, { strategy: e.target.value })}
-                              className="bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-xs">
+                              className="bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-[10px]">
                         <option value="join_best">join_best</option>
                         <option value="penny_back">penny_back</option>
                         <option value="nbbo_edge">nbbo_edge</option>
                       </select>
                     </td>
-                    <td className="px-2 py-1 text-center">
-                      <input type="checkbox" checked={c.enabled} disabled={isBusy}
-                             onChange={e => patchCfg(c.id, { enabled: e.target.checked })} />
+                    <td className="px-2 py-1.5 text-center">
+                      <div className="flex items-center gap-2 justify-center">
+                        <label className="flex items-center gap-0.5">
+                          <input type="checkbox" checked={c.enabled}        disabled={isBusy}
+                                 onChange={e => patchCfg(c.id, { enabled: e.target.checked })} />
+                        </label>
+                        <span className="text-gray-700">·</span>
+                        <input type="checkbox" checked={!!c.bid_enabled}    disabled={isBusy}
+                               onChange={e => patchCfg(c.id, { bid_enabled: e.target.checked })} title="bid enabled" />
+                        <input type="checkbox" checked={!!c.offer_enabled}  disabled={isBusy}
+                               onChange={e => patchCfg(c.id, { offer_enabled: e.target.checked })} title="ask enabled" />
+                      </div>
                     </td>
-                    <td className="px-2 py-1 text-center">
-                      <input type="checkbox" checked={!!c.bid_enabled} disabled={isBusy}
-                             onChange={e => patchCfg(c.id, { bid_enabled: e.target.checked })} />
-                    </td>
-                    <td className="px-2 py-1 text-center">
-                      <input type="checkbox" checked={!!c.offer_enabled} disabled={isBusy}
-                             onChange={e => patchCfg(c.id, { offer_enabled: e.target.checked })} />
-                    </td>
-                    <td className="px-2 py-1 text-right">
-                      {fair != null ? pct(fair) : <span className="text-gray-600">—</span>}
-                    </td>
-                    <td className="px-2 py-1 text-right">
+                    <td className="px-2 py-1.5 text-right">{fair != null ? cents(fair) : <span className="text-gray-600">—</span>}</td>
+                    <td className="px-2 py-1.5 text-right">
                       <input type="number" step="0.5" min="0" max="50"
                              value={c.edge_threshold_pp ?? 5}
                              onChange={e => patchCfg(c.id, { edge_threshold_pp: parseFloat(e.target.value) })}
-                             className="bg-gray-950 border border-gray-700 rounded px-1 py-0.5 text-xs w-14 text-right" />
-                      <span className="ml-0.5 text-gray-600">pp</span>
+                             className="bg-gray-950 border border-gray-700 rounded px-1 py-0.5 text-xs w-12 text-right" />
+                      <span className="ml-0.5 text-gray-600 text-[10px]">pp</span>
                     </td>
-                    <td className="px-2 py-1 text-right">
+                    <td className="px-2 py-1.5 text-right whitespace-nowrap">
                       {cents(bid)}
-                      {bidSize != null && <span className="text-gray-500 text-[10px] ml-1">({bidSize.toLocaleString('en-US',{maximumFractionDigits:0})})</span>}
+                      {bidSize != null && <span className="text-gray-500 text-[10px] ml-1">({num(bidSize)})</span>}
                     </td>
-                    <td className="px-2 py-1 text-right">
+                    <td className="px-2 py-1.5 text-right whitespace-nowrap">
                       {cents(ask)}
-                      {askSize != null && <span className="text-gray-500 text-[10px] ml-1">({askSize.toLocaleString('en-US',{maximumFractionDigits:0})})</span>}
+                      {askSize != null && <span className="text-gray-500 text-[10px] ml-1">({num(askSize)})</span>}
                     </td>
-                    <td className={`px-2 py-1 text-right ${bidGood ? 'text-emerald-400' : 'text-gray-500'}`}>
-                      {bidEdge != null ? `${(bidEdge * 100).toFixed(1)}c` : '—'}
+                    <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                      <div className={bidGood ? 'text-emerald-400' : 'text-gray-500'}>
+                        b {bidEdge != null ? `${(bidEdge * 100).toFixed(1)}` : '—'}
+                      </div>
+                      <div className={askGood ? 'text-emerald-400' : 'text-gray-500'}>
+                        a {askEdge != null ? `${(askEdge * 100).toFixed(1)}` : '—'}
+                      </div>
                     </td>
-                    <td className={`px-2 py-1 text-right ${askGood ? 'text-emerald-400' : 'text-gray-500'}`}>
-                      {askEdge != null ? `${(askEdge * 100).toFixed(1)}c` : '—'}
+                    {/* Our resting bid */}
+                    <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                      {activeBid ? (
+                        <span className="text-emerald-300">
+                          {cents(ourBidPx)} <span className="text-emerald-500/70 text-[10px]">×{num(ourBidSz)}</span>
+                        </span>
+                      ) : <span className="text-gray-700">—</span>}
                     </td>
-                    <td className="px-2 py-1 text-right">
+                    {/* Our resting ask */}
+                    <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                      {activeAsk ? (
+                        <span className="text-amber-300">
+                          {cents(ourAskPx)} <span className="text-amber-500/70 text-[10px]">×{num(ourAskSz)}</span>
+                        </span>
+                      ) : <span className="text-gray-700">—</span>}
+                    </td>
+                    <td className="px-2 py-1.5 text-right">
                       <input type="number" step="1" min="0"
                              value={c.quote_size_shares ?? ''} placeholder="auto"
                              onChange={e => patchCfg(c.id, { quote_size_shares: e.target.value === '' ? null : parseFloat(e.target.value) })}
-                             className="bg-gray-950 border border-gray-700 rounded px-1 py-0.5 text-xs w-16 text-right" />
+                             className="bg-gray-950 border border-gray-700 rounded px-1 py-0.5 text-xs w-14 text-right" />
                     </td>
-                    <td className={`px-2 py-1 text-right ${pos > 0 ? 'text-emerald-300' : pos < 0 ? 'text-red-300' : ''}`}>
-                      {pos.toFixed(0)}
+                    <td className={`px-2 py-1.5 text-right ${pos > 0 ? 'text-emerald-300' : pos < 0 ? 'text-red-300' : 'text-gray-500'}`}>
+                      {pos !== 0 ? pos.toFixed(0) : '—'}
                     </td>
-                    <td className="px-2 py-1 text-right text-gray-400">{usd(fillsTotal)}</td>
-                    <td className="px-2 py-1 text-[10px] text-amber-300">
-                      {statusBits.join(' / ') || (c.enabled ? '' : 'disabled')}
-                    </td>
+                    <td className="px-2 py-1.5 text-right text-gray-400">{fillsTotal > 0 ? usd(fillsTotal) : '—'}</td>
                   </tr>
                 )
               })}
               {visible.length === 0 && (
-                <tr><td colSpan={15} className="px-2 py-6 text-center text-gray-500">
+                <tr><td colSpan={14} className="px-2 py-8 text-center text-gray-500">
                   {data?.rows.length === 0
-                    ? 'No mm_config rows yet — apply migration + let the worker auto-populate from poly_market_balance.'
-                    : 'No markets match the filter.'}
+                    ? 'No mm_config rows yet — apply migration + wait for the worker fair_sync_loop.'
+                    : `No markets match this filter (${view}).`}
                 </td></tr>
               )}
             </tbody>
           </table>
         </div>
 
-        <p className="text-xs text-gray-500 mt-4 max-w-3xl">
-          Each row is a (market × outcome). <code className="text-gray-400">strategy=nbbo_edge</code> means
-          the worker joins NBBO at <strong>1/3 of depth</strong> when |fair − market price| ≥ <code className="text-gray-400">edge_threshold_pp</code> on each
-          side independently — quotes only the side(s) with edge. <code className="text-gray-400">Fair</code> auto-syncs from
-          the scanner every 60s. <code className="text-gray-400">On</code> is master enable; <code className="text-gray-400">Bid</code>/<code className="text-gray-400">Ask</code> toggle per side. Leave <code className="text-gray-400">size</code> empty for the 1/3-depth default.
+        <p className="text-xs text-gray-500 mt-3 max-w-3xl">
+          🟢 dots = active resting orders. Rows with green tint = currently quoting.
+          Use the <code>active</code> view to filter to only what&apos;s on the book.
+          <code className="text-gray-400"> Our bid / Our ask</code> show your resting price × size.
+          <code className="text-gray-400"> Edge $ b/a</code> show per-side edge (¢); emerald = above your threshold.
+          Click <code className="text-gray-400">On</code> to enable; Bid/Ask checkboxes toggle each side.
         </p>
       </main>
     </div>
   )
+}
+
+
+function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-lg px-3 py-2">
+      <p className="text-[10px] text-gray-500 uppercase tracking-wide">{label}</p>
+      <p className="text-lg font-semibold text-gray-100 mt-0.5">{value}</p>
+      {hint && <p className="text-[10px] text-gray-500">{hint}</p>}
+    </div>
+  )
+}
+
+function Dot({ kind, title }: { kind: 'live' | 'paused' | 'off'; title: string }) {
+  const cls = kind === 'live'
+    ? 'bg-emerald-400 shadow-[0_0_4px_rgba(52,211,153,0.7)]'
+    : kind === 'paused' ? 'bg-amber-500' : 'bg-gray-700'
+  return <span title={title} className={`inline-block w-2 h-2 rounded-full ${cls}`} />
 }
