@@ -48,7 +48,7 @@ interface SharkWithPositions extends Shark {
 }
 
 let CACHE: { ts: number; data: SharkWithPositions[] } | null = null
-const CACHE_TTL_MS = 60_000
+const CACHE_TTL_MS = 5 * 60_000   // server cache: 5 min
 
 export async function GET(): Promise<Response> {
   if (CACHE && Date.now() - CACHE.ts < CACHE_TTL_MS) {

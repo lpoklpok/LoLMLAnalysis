@@ -113,7 +113,7 @@ export default function SharksPage() {
 
   useEffect(() => {
     load()
-    const t = setInterval(load, 30_000)
+    const t = setInterval(load, 3 * 60_000)   // client refresh: 3 min
     return () => clearInterval(t)
   }, [])
 
@@ -306,7 +306,7 @@ export default function SharksPage() {
         <div>
           <h1 className="text-2xl font-bold text-emerald-400">Sharks</h1>
           <p className="text-sm text-gray-400 mt-1">
-            {visible.length} tracked · {lolOnly ? 'LoL' : 'all'} · {openOnly ? 'open only' : 'incl. settled'} · refreshes every 30s
+            {visible.length} tracked · {lolOnly ? 'LoL' : 'all'} · {openOnly ? 'open only' : 'incl. settled'} · refreshes every 3 min
             {err && <span className="text-red-400 ml-3">error: {err}</span>}
           </p>
         </div>
