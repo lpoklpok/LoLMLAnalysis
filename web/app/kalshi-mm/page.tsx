@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useMemo } from 'react'
 import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
+import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js'
 
 interface StateRow {
   ticker:       string
@@ -51,7 +53,7 @@ export default function KalshiMmPage() {
 
   useEffect(() => {
     let cancelled = false
-    async function poll() {
+    async function loadOnce() {
       try {
         const r = await fetch('/api/kalshi-mm-state', { cache: 'no-store' })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
@@ -65,12 +67,41 @@ export default function KalshiMmPage() {
         if (!cancelled) setErr(e instanceof Error ? e.message : String(e))
       }
     }
-    poll()
-    const t = setInterval(poll, 2000)
-    return () => { cancelled = true; clearInterval(t) }
+    loadOnce()
+    // Slow safety-net refresh — Realtime carries the live updates.
+    const safety = setInterval(loadOnce, 60_000)
+
+    const ch = supabase.channel('kalshi-mm-cockpit')
+      .on('postgres_changes',
+          { event: '*', schema: 'public', table: 'kalshi_mm_state' },
+          (p) => {
+            const payload = p as RealtimePostgresChangesPayload<StateRow>
+            setRows(prev => {
+              if (payload.eventType === 'DELETE') {
+                const oldT = (payload.old as Partial<StateRow>)?.ticker
+                return oldT ? prev.filter(r => r.ticker !== oldT) : prev
+              }
+              const nw = payload.new as StateRow
+              const i = prev.findIndex(r => r.ticker === nw.ticker)
+              if (i < 0) return [...prev, nw]
+              const out = prev.slice()
+              out[i] = nw
+              return out
+            })
+            setGenAt(Date.now())
+          })
+      .subscribe()
+
+    return () => {
+      cancelled = true
+      clearInterval(safety)
+      supabase.removeChannel(ch)
+    }
   }, [])
 
   useEffect(() => {
+    // Worker health is served by the Fly app, not Supabase, so keep a
+    // poll. Bumped to 15s (was 3s) — health changes slowly.
     let cancelled = false
     async function poll() {
       try {
@@ -81,7 +112,7 @@ export default function KalshiMmPage() {
       } catch { /* ignore */ }
     }
     poll()
-    const t = setInterval(poll, 3000)
+    const t = setInterval(poll, 15_000)
     return () => { cancelled = true; clearInterval(t) }
   }, [])
 

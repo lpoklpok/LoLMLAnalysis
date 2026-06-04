@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
+import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js'
 
 interface MmConfigRow {
   id:                 number
@@ -62,6 +64,48 @@ function isActive(s: MmStateRow | null): boolean {
   return !!(s && s.active_order_id && s.active_size_shares && s.active_size_shares > 0)
 }
 
+// Realtime patch helpers — mutate the ApiResp in response to a single
+// Postgres row event so the cockpit shows changes the instant the worker
+// writes them, without polling. Each helper returns a new ApiResp.
+
+function patchCfgEvent(d: ApiResp, p: RealtimePostgresChangesPayload<MmConfigRow>): ApiResp {
+  if (p.eventType === 'DELETE') {
+    const oldId = (p.old as Partial<MmConfigRow>)?.id
+    return oldId == null ? d : { ...d, rows: d.rows.filter(r => r.cfg.id !== oldId) }
+  }
+  const nw = p.new as MmConfigRow
+  if (p.eventType === 'INSERT') {
+    if (d.rows.some(r => r.cfg.id === nw.id)) return d
+    return { ...d, rows: [...d.rows, { cfg: nw, state_bid: null, state_offer: null }] }
+  }
+  return { ...d, rows: d.rows.map(r => r.cfg.id === nw.id ? { ...r, cfg: nw } : r) }
+}
+
+interface MmStateDbRow extends MmStateRow {
+  condition_id:  string
+  outcome_index: number
+  side:          'bid' | 'offer'
+}
+
+function patchStateEvent(d: ApiResp, p: RealtimePostgresChangesPayload<MmStateDbRow>): ApiResp {
+  const ref = (p.eventType === 'DELETE' ? p.old : p.new) as Partial<MmStateDbRow>
+  const { condition_id, outcome_index, side } = ref
+  if (!condition_id || outcome_index == null || (side !== 'bid' && side !== 'offer')) return d
+  const next = p.eventType === 'DELETE' ? null : (p.new as MmStateDbRow)
+  return {
+    ...d,
+    rows: d.rows.map(r => {
+      if (r.cfg.condition_id !== condition_id || r.cfg.outcome_index !== outcome_index) return r
+      return side === 'bid' ? { ...r, state_bid: next } : { ...r, state_offer: next }
+    }),
+  }
+}
+
+function patchKillEvent(d: ApiResp, p: RealtimePostgresChangesPayload<KillSwitch>): ApiResp {
+  if (p.eventType === 'DELETE') return d
+  return { ...d, kill_switch: p.new as KillSwitch }
+}
+
 export default function PolymarketMmPage() {
   const [data,    setData]    = useState<ApiResp | null>(null)
   const [err,     setErr]     = useState<string | null>(null)
@@ -81,9 +125,30 @@ export default function PolymarketMmPage() {
     }
   }
   useEffect(() => {
+    // One initial fetch to seed config + state + scanner pm_best merge.
     load()
-    const t = setInterval(load, 2000)
-    return () => clearInterval(t)
+    // Slow safety-net refresh (also re-pulls scanner pm_best which the
+    // API route merges in and which Realtime can't push).
+    const t = setInterval(load, 30_000)
+
+    // Realtime patches the fast-changing Supabase tables in-place so the
+    // 2s polling cadence is no longer needed for live state updates.
+    const ch = supabase.channel('polymarket-mm-cockpit')
+      .on('postgres_changes',
+          { event: '*', schema: 'public', table: 'mm_config' },
+          (p) => setData(d => d ? patchCfgEvent(d, p as RealtimePostgresChangesPayload<MmConfigRow>) : d))
+      .on('postgres_changes',
+          { event: '*', schema: 'public', table: 'mm_state' },
+          (p) => setData(d => d ? patchStateEvent(d, p as RealtimePostgresChangesPayload<MmStateDbRow>) : d))
+      .on('postgres_changes',
+          { event: '*', schema: 'public', table: 'mm_kill_switch' },
+          (p) => setData(d => d ? patchKillEvent(d, p as RealtimePostgresChangesPayload<KillSwitch>) : d))
+      .subscribe()
+
+    return () => {
+      clearInterval(t)
+      supabase.removeChannel(ch)
+    }
   }, [])
 
   async function patchCfg(id: number, updates: Record<string, unknown>) {
