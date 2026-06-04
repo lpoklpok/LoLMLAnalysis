@@ -173,33 +173,72 @@ export default function SharksPage() {
     setter(ns)
   }
 
-  // Event-grouped aggregation: net size + per-shark breakdown per
-  // (eventSlug, market title, outcome). Honours lolOnly / openOnly /
-  // filter the same way as the sharks view.
+  // Event-grouped aggregation: net + per-shark positions grouped by
+  // event (Polymarket eventSlug) → submarket (Polymarket conditionId)
+  // → outcome. We bucket submarkets by conditionId — NOT by title text —
+  // because PM titles for handicap / total-maps markets don't share a
+  // common " - " separator with match-winner markets. The displayed
+  // submarket label is derived heuristically from each market's title.
   const events = useMemo(() => {
     const f = filter.trim().toLowerCase()
-    // First flatten: (eventSlug, marketTitle, conditionId, outcome) → entries
-    type Key = string
-    const byKey: Record<Key, OutcomeAgg & { marketTitle: string; eventSlug: string; eventTitleBest: string }> = {}
-    const eventTitleBest: Record<string, string> = {}
+
+    // Submarket label: extract a short, comparable label per PM market.
+    function submarketLabel(title: string): string {
+      // Game handicap: "Game Handicap: AL (-1.5) vs Team WE (+1.5)"
+      const hcap = title.match(/^Game Handicap:.*\(([+-]?\d+(?:\.\d+)?)\)/)
+      if (hcap) return `Game Handicap ${hcap[1]}`
+      // Total maps / O/U:  "... - Total Games O/U 4.5"  or  inline
+      const totals = title.match(/(?:Total Games |Total Maps |O\/U )\s*(\d+(?:\.\d+)?)/i)
+      if (totals) return `Total Maps O/U ${totals[1]}`
+      // Trailing " - Game N Winner" / " - Match Winner" / etc.
+      const last = title.lastIndexOf(' - ')
+      if (last > 0) {
+        const tail = title.slice(last + 3).trim()
+        // Avoid "LPL Playoffs"-style tails — those are series labels, not
+        // a market type. If the tail looks like a tournament stage and
+        // the prefix already includes "(BOn)", call it the Match Winner.
+        if (/Playoffs|Regular Season|Group Stage|Tournament|Spring|Summer|Winter/i.test(tail)
+            && /\(BO\d+\)/i.test(title.slice(0, last))) {
+          return 'Match Winner'
+        }
+        return tail
+      }
+      // No clean separator — return title verbatim (truncated for layout)
+      return title.length > 60 ? title.slice(0, 57) + '…' : title
+    }
+
+    // Event title: prefer the longest "LoL: A vs B …" style title across
+    // positions of this event. Fall back to eventSlug if none looks like
+    // the canonical event title (handicap-only events).
+    function eventCandidate(title: string): string | null {
+      // "LoL: X vs Y ..." is the canonical PM event title format
+      if (/^LoL:.*\bvs\b/i.test(title)) {
+        const last = title.lastIndexOf(' - ')
+        return last > 0 ? title.slice(0, last) : title
+      }
+      return null
+    }
+
+    const byKey: Record<string, OutcomeAgg & { conditionId: string; eventSlug: string }> = {}
+    const submarketLabels: Record<string, string> = {} // conditionId → label
+    const eventTitleBest: Record<string, string>  = {} // eventSlug   → title
+
     for (const s of sharks) {
       if (!s.fetched_ok) continue
       for (const p of s.positions) {
         if (lolOnly  && !isLol(p)) continue
         if (openOnly && p.redeemable) continue
-        // Derive 'event title' from the market title — strip the trailing
-        // submarket descriptor. PM uses titles like
-        // "LoL: ThunderTalk Gaming vs LGD Gaming (BO5) - LPL Playoffs - Match Winner"
-        // The portion before the last " - " is the event identifier.
-        const lastDash = p.title.lastIndexOf(' - ')
-        const evtTitle = lastDash > 0 ? p.title.slice(0, lastDash) : p.title
-        const mktTitle = lastDash > 0 ? p.title.slice(lastDash + 3) : 'Market'
-        if (f && ![p.title, evtTitle, p.outcome, s.name || '', s.wallet_address].some(
+        if (f && ![p.title, p.outcome, s.name || '', s.wallet_address].some(
           x => x.toLowerCase().includes(f))) continue
 
-        if (!eventTitleBest[p.eventSlug] || evtTitle.length > eventTitleBest[p.eventSlug].length) {
-          eventTitleBest[p.eventSlug] = evtTitle
+        const cand = eventCandidate(p.title)
+        if (cand && (!eventTitleBest[p.eventSlug] || cand.length > eventTitleBest[p.eventSlug].length)) {
+          eventTitleBest[p.eventSlug] = cand
         }
+        if (!submarketLabels[p.conditionId]) {
+          submarketLabels[p.conditionId] = submarketLabel(p.title)
+        }
+
         const k = `${p.eventSlug}|${p.conditionId}|${p.outcome}`
         if (!byKey[k]) {
           byKey[k] = {
@@ -209,9 +248,8 @@ export default function SharksPage() {
             totalValue:  0,
             totalPnl:    0,
             holders:     [],
-            marketTitle: mktTitle,
+            conditionId: p.conditionId,
             eventSlug:   p.eventSlug,
-            eventTitleBest: evtTitle,
           }
         }
         const cur = byKey[k]
@@ -228,7 +266,8 @@ export default function SharksPage() {
         })
       }
     }
-    // Re-group into Event → Submarket → Outcomes
+
+    // Re-group into Event → Submarket (by conditionId) → Outcomes
     const evMap: Record<string, EventAgg> = {}
     for (const entry of Object.values(byKey)) {
       const evtSlug = entry.eventSlug
@@ -243,9 +282,13 @@ export default function SharksPage() {
         }
       }
       const ev = evMap[evtSlug]
-      let s = ev.submarkets.find(x => x.title === entry.marketTitle)
+      let s = ev.submarkets.find(x => x.conditionId === entry.conditionId)
       if (!s) {
-        s = { title: entry.marketTitle, conditionId: '', outcomes: [] }
+        s = {
+          title:        submarketLabels[entry.conditionId] || 'Market',
+          conditionId:  entry.conditionId,
+          outcomes:     [],
+        }
         ev.submarkets.push(s)
       }
       s.outcomes.push({
@@ -263,12 +306,10 @@ export default function SharksPage() {
       const uniq = new Set<string>()
       for (const sm of ev.submarkets) for (const o of sm.outcomes) for (const h of o.holders) uniq.add(h.shark.wallet_address)
       ev.totalHolders = uniq.size
-      // Sort submarkets / outcomes within
       ev.submarkets.sort((a, b) =>
         Math.max(...b.outcomes.map(o => o.totalValue)) - Math.max(...a.outcomes.map(o => o.totalValue)))
       for (const sm of ev.submarkets) sm.outcomes.sort((a, b) => b.totalValue - a.totalValue)
     }
-    // Sort events by total value desc
     return Object.values(evMap).sort((a, b) => b.totalValue - a.totalValue)
   }, [sharks, filter, lolOnly, openOnly])
 
@@ -464,7 +505,11 @@ export default function SharksPage() {
                                                 <tr key={h.shark.wallet_address} className="border-t border-gray-800/40">
                                                   <td className="py-1 pr-3">
                                                     <span className="mr-1">{h.shark.emoji ?? '🦈'}</span>
-                                                    <span className="text-gray-200">{h.shark.name || trunc(h.shark.wallet_address)}</span>
+                                                    <a href={`https://polymarket.com/profile/${h.shark.wallet_address}`}
+                                                       target="_blank" rel="noreferrer"
+                                                       className="text-gray-200 hover:text-emerald-300 underline-offset-2 hover:underline">
+                                                      {h.shark.name || trunc(h.shark.wallet_address)}
+                                                    </a>
                                                     <span className={`ml-2 text-[9px] uppercase px-1 py-0.5 rounded ${
                                                       h.shark.type === 'sharp' ? 'bg-emerald-900 text-emerald-300' :
                                                       h.shark.type === 'fade'  ? 'bg-red-900 text-red-300' :
@@ -522,7 +567,12 @@ export default function SharksPage() {
                                                'bg-gray-800 text-gray-400'}`}>
                           {s.type}
                         </span>
-                        <code className="text-xs text-gray-500 font-mono">{trunc(s.wallet_address)}</code>
+                        <a href={`https://polymarket.com/profile/${s.wallet_address}`}
+                           target="_blank" rel="noreferrer"
+                           onClick={e => e.stopPropagation()}
+                           className="text-xs text-gray-500 font-mono hover:text-emerald-300 underline-offset-2 hover:underline">
+                          {trunc(s.wallet_address)}
+                        </a>
                         {!s.fetched_ok && <span className="text-xs text-red-400">err: {s.error}</span>}
                       </div>
                       {s.notes && <div className="text-xs text-gray-500 mt-0.5">{s.notes}</div>}
