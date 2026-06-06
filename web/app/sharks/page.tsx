@@ -356,7 +356,6 @@ export default function SharksPage() {
           <Link href="/trader"    className="text-gray-400 hover:text-gray-200">Trader</Link>
           <Link href="/scanner"   className="text-gray-400 hover:text-gray-200">Scanner</Link>
           <Link href="/kalshi-mm" className="text-gray-400 hover:text-gray-200">Kalshi-MM</Link>
-          <Link href="/pnl"       className="text-gray-400 hover:text-gray-200">PnL</Link>
         </nav>
       </header>
 

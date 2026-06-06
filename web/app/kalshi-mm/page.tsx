@@ -209,7 +209,6 @@ export default function KalshiMmPage() {
             <Link href="/"        className="text-gray-400 hover:text-gray-200">Home</Link>
             <Link href="/trader"  className="text-gray-400 hover:text-gray-200">Trader</Link>
             <Link href="/scanner" className="text-gray-400 hover:text-gray-200">Scanner</Link>
-            <Link href="/pnl"     className="text-gray-400 hover:text-gray-200">PnL</Link>
           </nav>
         </div>
       </header>

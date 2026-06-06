@@ -155,9 +155,6 @@ export default function Dashboard() {
         <Link href="/gold-lead" className="text-sm text-amber-400 hover:text-amber-300 transition-colors">
           Gold Lead →
         </Link>
-        <Link href="/pnl" className="text-sm text-emerald-400 hover:text-emerald-300 transition-colors">
-          PnL →
-        </Link>
         <Link href="/draft-sim" className="text-sm text-cyan-400 hover:text-cyan-300 transition-colors">
           Draft Sim →
         </Link>
