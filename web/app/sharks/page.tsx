@@ -353,9 +353,6 @@ export default function SharksPage() {
         </div>
         <nav className="flex gap-5 text-sm">
           <Link href="/"          className="text-gray-400 hover:text-gray-200">Home</Link>
-          <Link href="/trader"    className="text-gray-400 hover:text-gray-200">Trader</Link>
-          <Link href="/scanner"   className="text-gray-400 hover:text-gray-200">Scanner</Link>
-          <Link href="/kalshi-mm" className="text-gray-400 hover:text-gray-200">Kalshi-MM</Link>
         </nav>
       </header>
 

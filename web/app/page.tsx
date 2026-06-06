@@ -121,15 +121,6 @@ export default function Dashboard() {
         <Link href="/predictions" className="text-sm text-green-400 hover:text-green-300 transition-colors">
           Predictions →
         </Link>
-        <Link href="/trader" className="text-sm text-cyan-400 hover:text-cyan-300 transition-colors">
-          Trader →
-        </Link>
-        <Link href="/scanner" className="text-sm text-amber-400 hover:text-amber-300 transition-colors">
-          Scanner →
-        </Link>
-        <Link href="/vwaper" className="text-sm text-teal-400 hover:text-teal-300 transition-colors">
-          VWAPer →
-        </Link>
         <Link href="/games" className="text-sm text-yellow-400 hover:text-yellow-300 transition-colors">
           Game Explorer →
         </Link>
