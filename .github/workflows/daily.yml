@@ -72,13 +72,18 @@ jobs:
         run: git checkout -- data/processed/polymarket_submarket_snapshots.csv
 
       - name: Refresh OE mirror (copy Tim's CSV to your Drive folder)
+        # Fails the run if Google OAuth credentials expire. Previously this
+        # had `continue-on-error: true`, which let the OAuth refresh token
+        # silently die on 2026-06-09 — pipeline kept going green for 3 weeks
+        # while serving the stale Drive mirror. If this step fails again,
+        # rotate the token: `python src/oauth_setup.py <client_secret.json>`
+        # then `gh secret set GOOGLE_OAUTH_REFRESH_TOKEN --body <new_token>`.
         env:
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
           OE_DRIVE_FOLDER_ID: ${{ secrets.OE_DRIVE_FOLDER_ID }}
         run: python src/refresh_oe_mirror.py
-        continue-on-error: true
 
       - name: Pull latest Oracle's Elixir data
         env:
