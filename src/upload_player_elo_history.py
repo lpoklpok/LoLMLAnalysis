@@ -49,15 +49,14 @@ def run():
         return
     client = create_client(sb_url, sb_key)
 
-    print(f"Deleting existing rows with year >= {CUTOFF_YEAR}...")
-    client.table('player_elo_history').delete().gte('year', CUTOFF_YEAR).execute()
-
     records = df.to_dict(orient='records')
-    print(f"Uploading {len(records):,} rows...")
+    print(f"Upserting {len(records):,} rows...")
     BATCH = 1000
     for i in range(0, len(records), BATCH):
         batch = records[i:i + BATCH]
-        client.table('player_elo_history').insert(batch).execute()
+        client.table('player_elo_history').upsert(
+            batch, on_conflict='player,gameid'
+        ).execute()
         print(f"  {min(i + BATCH, len(records))}/{len(records)}")
     print("Done.")
 

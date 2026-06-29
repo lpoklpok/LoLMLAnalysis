@@ -29,6 +29,21 @@ jobs:
       - name: Install dependencies
         run: uv pip install --system -r requirements.txt
 
+      - name: Supabase healthcheck (fail fast if DB is unhealthy)
+        # Daily pipeline does 15min of feature engineering before touching
+        # Supabase. When Postgres is down (e.g. PGRST002 schema-cache outage
+        # like 2026-06-20..2026-06-29) we used to discover that 90s in. This
+        # check exits in <1s if the REST→Postgres path is broken.
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          curl --fail --silent --show-error --max-time 10 \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+            "$SUPABASE_URL/rest/v1/game_features?select=id&limit=1" \
+            > /dev/null
+
       - name: Cache historical OE data (2014–2025)
         uses: actions/cache@v4
         with:

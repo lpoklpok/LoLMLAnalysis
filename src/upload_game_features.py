@@ -141,6 +141,18 @@ def run():
     df = pd.read_csv(PROCESSED_DIR / 'features_all.csv', low_memory=False)
     df['date'] = pd.to_datetime(df['date'], utc=True)
 
+    # Dedupe on the unique-constraint key (game_features_natural_key in
+    # 20260629_upsert_unique_keys.sql). features_all.csv occasionally has
+    # duplicate (date, blue_team, red_team, game) rows from OE source edits;
+    # Postgres ON CONFLICT cannot touch the same target row twice in one
+    # batch, so the upsert would error without this. Keep the last copy
+    # (most recent in input order).
+    before = len(df)
+    df = df.drop_duplicates(subset=['date', 'blue_team', 'red_team', 'game'],
+                            keep='last').reset_index(drop=True)
+    if len(df) < before:
+        print(f"Dropped {before - len(df)} duplicate rows on (date, blue_team, red_team, game)")
+
     # Merge champion-level features (built walk-forward by build_champ_features.py)
     champ_path = PROCESSED_DIR / 'champ_features.csv'
     if champ_path.exists():
@@ -312,13 +324,12 @@ def run():
 
     client = create_client(supabase_url, supabase_key)
 
-    print(f"Deleting existing rows...")
-    client.table('game_features').delete().neq('id', 0).execute()
-
-    print(f"Uploading {len(records)} games...")
+    print(f"Upserting {len(records)} games...")
     for i in range(0, len(records), 500):
         batch = records[i:i+500]
-        client.table('game_features').insert(batch).execute()
+        client.table('game_features').upsert(
+            batch, on_conflict='date,blue_team,red_team,game_in_series'
+        ).execute()
         print(f"  {min(i+500, len(records))}/{len(records)}")
 
     print("Done.")

@@ -40,16 +40,13 @@ def run():
     print(f"Uploading {len(df):,} predictions...")
     client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    # Truncate
-    client.table('predictions').delete().neq('gameid', '').execute()
-
     records = [_sanitize(r) for r in df.to_dict(orient='records')]
     total_batches = math.ceil(len(records) / BATCH_SIZE)
 
     for i in range(0, len(records), BATCH_SIZE):
         batch = records[i:i + BATCH_SIZE]
         print(f"  Batch {i // BATCH_SIZE + 1}/{total_batches}...", end='\r')
-        client.table('predictions').insert(batch).execute()
+        client.table('predictions').upsert(batch, on_conflict='gameid').execute()
 
     print(f"\nDone — {len(records):,} predictions uploaded.")
 
