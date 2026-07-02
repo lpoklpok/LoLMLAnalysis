@@ -1,5 +1,5 @@
 {
-  "generated": "2026-07-02T10:43:51Z",
+  "generated": "2026-07-02T16:09:22Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -44,7 +44,7 @@
       "team": "Vivo Keyd Stars",
       "n_games": 11,
       "wins": 5,
-      "avg_pred": 0.3211,
+      "avg_pred": 0.3212,
       "actual_wr": 0.4545,
       "closing_rate": 0.1334
     },
@@ -76,9 +76,9 @@
       "team": "L\u00d8S",
       "n_games": 14,
       "wins": 10,
-      "avg_pred": 0.6656,
+      "avg_pred": 0.6655,
       "actual_wr": 0.7143,
-      "closing_rate": 0.0487
+      "closing_rate": 0.0488
     },
     {
       "team": "Hanwha Life Esports",
@@ -86,7 +86,7 @@
       "wins": 43,
       "avg_pred": 0.7128,
       "actual_wr": 0.7544,
-      "closing_rate": 0.0416
+      "closing_rate": 0.0415
     },
     {
       "team": "SK Gaming",
@@ -102,7 +102,7 @@
       "wins": 25,
       "avg_pred": 0.4955,
       "actual_wr": 0.5208,
-      "closing_rate": 0.0253
+      "closing_rate": 0.0254
     },
     {
       "team": "Sentinels",
@@ -129,12 +129,12 @@
       "closing_rate": 0.0132
     },
     {
-      "team": "HANJIN BRION",
-      "n_games": 47,
-      "wins": 18,
-      "avg_pred": 0.3723,
-      "actual_wr": 0.383,
-      "closing_rate": 0.0106
+      "team": "FlyQuest",
+      "n_games": 46,
+      "wins": 25,
+      "avg_pred": 0.5351,
+      "actual_wr": 0.5435,
+      "closing_rate": 0.0084
     }
   ],
   "throwers": [
@@ -184,7 +184,7 @@
       "wins": 17,
       "avg_pred": 0.5848,
       "actual_wr": 0.5152,
-      "closing_rate": -0.0697
+      "closing_rate": -0.0696
     },
     {
       "team": "Fukuoka SoftBank HAWKS gaming",
@@ -224,7 +224,7 @@
       "wins": 3,
       "avg_pred": 0.1754,
       "actual_wr": 0.1429,
-      "closing_rate": -0.0326
+      "closing_rate": -0.0325
     },
     {
       "team": "Team Liquid",
@@ -243,20 +243,20 @@
       "closing_rate": -0.03
     },
     {
-      "team": "BNK FEARX",
-      "n_games": 46,
-      "wins": 17,
-      "avg_pred": 0.3973,
-      "actual_wr": 0.3696,
-      "closing_rate": -0.0278
-    },
-    {
       "team": "Karmine Corp",
       "n_games": 59,
       "wins": 35,
       "avg_pred": 0.6148,
       "actual_wr": 0.5932,
       "closing_rate": -0.0216
+    },
+    {
+      "team": "Natus Vincere",
+      "n_games": 32,
+      "wins": 15,
+      "avg_pred": 0.4901,
+      "actual_wr": 0.4688,
+      "closing_rate": -0.0213
     }
   ]
 }
