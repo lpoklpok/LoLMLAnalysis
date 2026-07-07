@@ -1,5 +1,5 @@
 {
-  "generated": "2026-07-07T10:59:47Z",
+  "generated": "2026-07-07T16:37:10Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -41,20 +41,20 @@
       "closing_rate": 0.1334
     },
     {
+      "team": "T1",
+      "n_games": 68,
+      "wins": 53,
+      "avg_pred": 0.6524,
+      "actual_wr": 0.7794,
+      "closing_rate": 0.127
+    },
+    {
       "team": "Bilibili Gaming",
       "n_games": 8,
       "wins": 6,
-      "avg_pred": 0.6235,
+      "avg_pred": 0.6234,
       "actual_wr": 0.75,
-      "closing_rate": 0.1265
-    },
-    {
-      "team": "T1",
-      "n_games": 69,
-      "wins": 53,
-      "avg_pred": 0.6436,
-      "actual_wr": 0.7681,
-      "closing_rate": 0.1245
+      "closing_rate": 0.1266
     },
     {
       "team": "Galions",
@@ -78,7 +78,7 @@
       "wins": 9,
       "avg_pred": 0.5611,
       "actual_wr": 0.6429,
-      "closing_rate": 0.0818
+      "closing_rate": 0.0817
     },
     {
       "team": "GiantX",
@@ -238,7 +238,7 @@
       "team": "Cloud9",
       "n_games": 32,
       "wins": 17,
-      "avg_pred": 0.5628,
+      "avg_pred": 0.5627,
       "actual_wr": 0.5312,
       "closing_rate": -0.0315
     },
@@ -256,7 +256,7 @@
       "wins": 3,
       "avg_pred": 0.181,
       "actual_wr": 0.1579,
-      "closing_rate": -0.0231
+      "closing_rate": -0.0232
     }
   ]
 }
