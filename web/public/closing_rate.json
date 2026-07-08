@@ -1,5 +1,5 @@
 {
-  "generated": "2026-07-08T10:21:50Z",
+  "generated": "2026-07-08T16:06:05Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -36,7 +36,7 @@
       "team": "Vivo Keyd Stars",
       "n_games": 11,
       "wins": 5,
-      "avg_pred": 0.3212,
+      "avg_pred": 0.3211,
       "actual_wr": 0.4545,
       "closing_rate": 0.1334
     },
@@ -44,17 +44,9 @@
       "team": "Bilibili Gaming",
       "n_games": 8,
       "wins": 6,
-      "avg_pred": 0.6236,
+      "avg_pred": 0.6235,
       "actual_wr": 0.75,
-      "closing_rate": 0.1264
-    },
-    {
-      "team": "T1",
-      "n_games": 69,
-      "wins": 53,
-      "avg_pred": 0.6523,
-      "actual_wr": 0.7681,
-      "closing_rate": 0.1158
+      "closing_rate": 0.1265
     },
     {
       "team": "Galions",
@@ -73,20 +65,28 @@
       "closing_rate": 0.1026
     },
     {
+      "team": "T1",
+      "n_games": 72,
+      "wins": 54,
+      "avg_pred": 0.6522,
+      "actual_wr": 0.75,
+      "closing_rate": 0.0978
+    },
+    {
       "team": "GiantX",
       "n_games": 28,
       "wins": 12,
       "avg_pred": 0.3496,
       "actual_wr": 0.4286,
-      "closing_rate": 0.079
+      "closing_rate": 0.0789
     },
     {
       "team": "SK Gaming",
       "n_games": 17,
       "wins": 5,
-      "avg_pred": 0.2323,
+      "avg_pred": 0.2324,
       "actual_wr": 0.2941,
-      "closing_rate": 0.0618
+      "closing_rate": 0.0617
     },
     {
       "team": "Hanwha Life Esports",
@@ -105,28 +105,20 @@
       "closing_rate": 0.0487
     },
     {
+      "team": "G2 Esports",
+      "n_games": 49,
+      "wins": 34,
+      "avg_pred": 0.646,
+      "actual_wr": 0.6939,
+      "closing_rate": 0.0479
+    },
+    {
       "team": "Sentinels",
       "n_games": 29,
       "wins": 17,
       "avg_pred": 0.5462,
       "actual_wr": 0.5862,
-      "closing_rate": 0.04
-    },
-    {
-      "team": "G2 Esports",
-      "n_games": 46,
-      "wins": 32,
-      "avg_pred": 0.6651,
-      "actual_wr": 0.6957,
-      "closing_rate": 0.0305
-    },
-    {
-      "team": "KT Rolster",
-      "n_games": 48,
-      "wins": 25,
-      "avg_pred": 0.4954,
-      "actual_wr": 0.5208,
-      "closing_rate": 0.0254
+      "closing_rate": 0.0401
     },
     {
       "team": "Team Secret Whales",
@@ -135,6 +127,14 @@
       "avg_pred": 0.5056,
       "actual_wr": 0.5294,
       "closing_rate": 0.0238
+    },
+    {
+      "team": "KT Rolster",
+      "n_games": 46,
+      "wins": 23,
+      "avg_pred": 0.48,
+      "actual_wr": 0.5,
+      "closing_rate": 0.02
     }
   ],
   "throwers": [
@@ -168,7 +168,7 @@
       "wins": 9,
       "avg_pred": 0.4278,
       "actual_wr": 0.3333,
-      "closing_rate": -0.0945
+      "closing_rate": -0.0944
     },
     {
       "team": "Shopify Rebellion",
@@ -179,14 +179,6 @@
       "closing_rate": -0.0918
     },
     {
-      "team": "Nongshim RedForce",
-      "n_games": 45,
-      "wins": 12,
-      "avg_pred": 0.3396,
-      "actual_wr": 0.2667,
-      "closing_rate": -0.0729
-    },
-    {
       "team": "DN SOOPers",
       "n_games": 39,
       "wins": 3,
@@ -195,10 +187,18 @@
       "closing_rate": -0.0702
     },
     {
+      "team": "Nongshim RedForce",
+      "n_games": 43,
+      "wins": 12,
+      "avg_pred": 0.3485,
+      "actual_wr": 0.2791,
+      "closing_rate": -0.0694
+    },
+    {
       "team": "Top Esports",
       "n_games": 9,
       "wins": 3,
-      "avg_pred": 0.4026,
+      "avg_pred": 0.4027,
       "actual_wr": 0.3333,
       "closing_rate": -0.0693
     },
@@ -206,9 +206,9 @@
       "team": "Dplus Kia",
       "n_games": 56,
       "wins": 32,
-      "avg_pred": 0.6339,
+      "avg_pred": 0.6338,
       "actual_wr": 0.5714,
-      "closing_rate": -0.0625
+      "closing_rate": -0.0624
     },
     {
       "team": "Fukuoka SoftBank HAWKS gaming",
@@ -246,9 +246,9 @@
       "team": "CTBC Flying Oyster",
       "n_games": 8,
       "wins": 3,
-      "avg_pred": 0.405,
+      "avg_pred": 0.4049,
       "actual_wr": 0.375,
-      "closing_rate": -0.03
+      "closing_rate": -0.0299
     },
     {
       "team": "Dignitas",
