@@ -1,5 +1,5 @@
 {
-  "generated": "2026-07-27T11:25:51Z",
+  "generated": "2026-07-27T16:27:54Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -28,15 +28,15 @@
       "team": "LOUD",
       "n_games": 8,
       "wins": 4,
-      "avg_pred": 0.3345,
+      "avg_pred": 0.3344,
       "actual_wr": 0.5,
-      "closing_rate": 0.1655
+      "closing_rate": 0.1656
     },
     {
       "team": "SK Gaming",
       "n_games": 9,
       "wins": 3,
-      "avg_pred": 0.1922,
+      "avg_pred": 0.1921,
       "actual_wr": 0.3333,
       "closing_rate": 0.1412
     },
@@ -46,21 +46,13 @@
       "wins": 5,
       "avg_pred": 0.3211,
       "actual_wr": 0.4545,
-      "closing_rate": 0.1334
-    },
-    {
-      "team": "Galions",
-      "n_games": 9,
-      "wins": 5,
-      "avg_pred": 0.4399,
-      "actual_wr": 0.5556,
-      "closing_rate": 0.1156
+      "closing_rate": 0.1335
     },
     {
       "team": "GiantX",
       "n_games": 21,
       "wins": 9,
-      "avg_pred": 0.3336,
+      "avg_pred": 0.3335,
       "actual_wr": 0.4286,
       "closing_rate": 0.095
     },
@@ -84,9 +76,9 @@
       "team": "L\u00d8S",
       "n_games": 19,
       "wins": 12,
-      "avg_pred": 0.5744,
+      "avg_pred": 0.5745,
       "actual_wr": 0.6316,
-      "closing_rate": 0.0572
+      "closing_rate": 0.0571
     },
     {
       "team": "Gen.G",
@@ -135,6 +127,14 @@
       "avg_pred": 0.6147,
       "actual_wr": 0.6364,
       "closing_rate": 0.0216
+    },
+    {
+      "team": "G2 Esports",
+      "n_games": 55,
+      "wins": 35,
+      "avg_pred": 0.6158,
+      "actual_wr": 0.6364,
+      "closing_rate": 0.0206
     }
   ],
   "throwers": [
@@ -142,17 +142,17 @@
       "team": "Team Heretics",
       "n_games": 8,
       "wins": 0,
-      "avg_pred": 0.3883,
+      "avg_pred": 0.3884,
       "actual_wr": 0.0,
-      "closing_rate": -0.3883
+      "closing_rate": -0.3884
     },
     {
       "team": "Disguised",
       "n_games": 8,
       "wins": 2,
-      "avg_pred": 0.4654,
+      "avg_pred": 0.4655,
       "actual_wr": 0.25,
-      "closing_rate": -0.2154
+      "closing_rate": -0.2155
     },
     {
       "team": "FURIA",
@@ -230,17 +230,17 @@
       "team": "Deep Cross Gaming",
       "n_games": 16,
       "wins": 6,
-      "avg_pred": 0.409,
+      "avg_pred": 0.4089,
       "actual_wr": 0.375,
-      "closing_rate": -0.034
+      "closing_rate": -0.0339
     },
     {
       "team": "BNK FEARX",
       "n_games": 29,
       "wins": 12,
-      "avg_pred": 0.4442,
+      "avg_pred": 0.4443,
       "actual_wr": 0.4138,
-      "closing_rate": -0.0304
+      "closing_rate": -0.0305
     },
     {
       "team": "CTBC Flying Oyster",
