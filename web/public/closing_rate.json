@@ -1,5 +1,5 @@
 {
-  "generated": "2026-07-30T10:27:13Z",
+  "generated": "2026-07-30T15:56:10Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -22,7 +22,7 @@
       "wins": 26,
       "avg_pred": 0.4795,
       "actual_wr": 0.6667,
-      "closing_rate": 0.1871
+      "closing_rate": 0.1872
     },
     {
       "team": "LOUD",
@@ -36,7 +36,7 @@
       "team": "Vivo Keyd Stars",
       "n_games": 11,
       "wins": 5,
-      "avg_pred": 0.3211,
+      "avg_pred": 0.3212,
       "actual_wr": 0.4545,
       "closing_rate": 0.1334
     },
@@ -49,20 +49,20 @@
       "closing_rate": 0.123
     },
     {
-      "team": "T1",
-      "n_games": 69,
-      "wins": 49,
-      "avg_pred": 0.6247,
-      "actual_wr": 0.7101,
-      "closing_rate": 0.0855
-    },
-    {
       "team": "Dignitas",
       "n_games": 9,
       "wins": 2,
       "avg_pred": 0.142,
       "actual_wr": 0.2222,
       "closing_rate": 0.0802
+    },
+    {
+      "team": "T1",
+      "n_games": 67,
+      "wins": 48,
+      "avg_pred": 0.6383,
+      "actual_wr": 0.7164,
+      "closing_rate": 0.0781
     },
     {
       "team": "Gen.G",
@@ -84,7 +84,7 @@
       "team": "Shopify Rebellion",
       "n_games": 12,
       "wins": 5,
-      "avg_pred": 0.3707,
+      "avg_pred": 0.3708,
       "actual_wr": 0.4167,
       "closing_rate": 0.0459
     },
@@ -102,7 +102,7 @@
       "wins": 11,
       "avg_pred": 0.4756,
       "actual_wr": 0.5,
-      "closing_rate": 0.0244
+      "closing_rate": 0.0243
     },
     {
       "team": "Team Secret Whales",
@@ -121,20 +121,20 @@
       "closing_rate": 0.0214
     },
     {
+      "team": "Hanwha Life Esports",
+      "n_games": 59,
+      "wins": 41,
+      "avg_pred": 0.6754,
+      "actual_wr": 0.6949,
+      "closing_rate": 0.0195
+    },
+    {
       "team": "Team Secret",
       "n_games": 8,
       "wins": 4,
       "avg_pred": 0.4824,
       "actual_wr": 0.5,
       "closing_rate": 0.0176
-    },
-    {
-      "team": "G2 Esports",
-      "n_games": 53,
-      "wins": 33,
-      "avg_pred": 0.6143,
-      "actual_wr": 0.6226,
-      "closing_rate": 0.0083
     }
   ],
   "throwers": [
@@ -158,9 +158,9 @@
       "team": "FURIA",
       "n_games": 9,
       "wins": 0,
-      "avg_pred": 0.1838,
+      "avg_pred": 0.1839,
       "actual_wr": 0.0,
-      "closing_rate": -0.1838
+      "closing_rate": -0.1839
     },
     {
       "team": "Team Vitality",
@@ -190,7 +190,7 @@
       "team": "Natus Vincere",
       "n_games": 13,
       "wins": 3,
-      "avg_pred": 0.3006,
+      "avg_pred": 0.3007,
       "actual_wr": 0.2308,
       "closing_rate": -0.0699
     },
@@ -198,7 +198,7 @@
       "team": "Top Esports",
       "n_games": 9,
       "wins": 3,
-      "avg_pred": 0.4028,
+      "avg_pred": 0.4027,
       "actual_wr": 0.3333,
       "closing_rate": -0.0694
     },
