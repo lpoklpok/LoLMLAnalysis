@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-07-30T15:57:25Z",
+  "generated_at_utc": "2026-07-31T10:43:09Z",
   "wallet": "0x9560dbf536660b5fc71efbe75b144f92013b9467",
   "kalshi_available": true,
   "start_date": "2026-02-01",
@@ -1444,6 +1444,14 @@
       "total_pnl": 0.0,
       "polymarket_trades": 0,
       "kalshi_trades": 0
+    },
+    {
+      "date": "2026-07-31",
+      "polymarket_pnl": 0.0,
+      "kalshi_pnl": 0.0,
+      "total_pnl": 0.0,
+      "polymarket_trades": 0,
+      "kalshi_trades": 0
     }
   ],
   "totals": {
@@ -2709,6 +2717,13 @@
     },
     {
       "date": "2026-07-30",
+      "polymarket_pnl": 0.0,
+      "kalshi_pnl": 0.0,
+      "total_pnl": 0.0,
+      "cum_pnl": -26511.13
+    },
+    {
+      "date": "2026-07-31",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
