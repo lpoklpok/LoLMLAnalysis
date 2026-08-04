@@ -1,5 +1,5 @@
 {
-  "generated": "2026-08-04T10:42:43Z",
+  "generated": "2026-08-04T16:17:06Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -28,15 +28,15 @@
       "team": "LOUD",
       "n_games": 8,
       "wins": 4,
-      "avg_pred": 0.3344,
+      "avg_pred": 0.3345,
       "actual_wr": 0.5,
-      "closing_rate": 0.1656
+      "closing_rate": 0.1655
     },
     {
       "team": "Vivo Keyd Stars",
       "n_games": 11,
       "wins": 5,
-      "avg_pred": 0.3211,
+      "avg_pred": 0.3212,
       "actual_wr": 0.4545,
       "closing_rate": 0.1334
     },
@@ -86,7 +86,7 @@
       "wins": 25,
       "avg_pred": 0.6537,
       "actual_wr": 0.6757,
-      "closing_rate": 0.0219
+      "closing_rate": 0.022
     },
     {
       "team": "Bilibili Gaming",
@@ -102,7 +102,7 @@
       "wins": 4,
       "avg_pred": 0.3453,
       "actual_wr": 0.3636,
-      "closing_rate": 0.0184
+      "closing_rate": 0.0183
     },
     {
       "team": "Karmine Corp",
@@ -110,7 +110,7 @@
       "wins": 40,
       "avg_pred": 0.5703,
       "actual_wr": 0.5882,
-      "closing_rate": 0.0179
+      "closing_rate": 0.018
     },
     {
       "team": "Team Secret",
@@ -132,7 +132,7 @@
       "team": "GAM Esports",
       "n_games": 19,
       "wins": 9,
-      "avg_pred": 0.4585,
+      "avg_pred": 0.4584,
       "actual_wr": 0.4737,
       "closing_rate": 0.0152
     }
@@ -160,7 +160,7 @@
       "wins": 2,
       "avg_pred": 0.3905,
       "actual_wr": 0.25,
-      "closing_rate": -0.1405
+      "closing_rate": -0.1404
     },
     {
       "team": "Fukuoka SoftBank HAWKS gaming",
@@ -188,19 +188,19 @@
     },
     {
       "team": "DN SOOPers",
-      "n_games": 22,
+      "n_games": 21,
       "wins": 3,
-      "avg_pred": 0.2023,
-      "actual_wr": 0.1364,
-      "closing_rate": -0.0659
+      "avg_pred": 0.2068,
+      "actual_wr": 0.1429,
+      "closing_rate": -0.0639
     },
     {
       "team": "Natus Vincere",
       "n_games": 12,
       "wins": 3,
-      "avg_pred": 0.3108,
+      "avg_pred": 0.3109,
       "actual_wr": 0.25,
-      "closing_rate": -0.0608
+      "closing_rate": -0.0609
     },
     {
       "team": "Dplus Kia",
@@ -214,7 +214,7 @@
       "team": "Team Vitality",
       "n_games": 15,
       "wins": 4,
-      "avg_pred": 0.3067,
+      "avg_pred": 0.3066,
       "actual_wr": 0.2667,
       "closing_rate": -0.04
     },
