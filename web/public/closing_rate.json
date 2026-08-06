@@ -1,5 +1,5 @@
 {
-  "generated": "2026-08-05T16:05:20Z",
+  "generated": "2026-08-06T10:42:14Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -28,15 +28,15 @@
       "team": "LOUD",
       "n_games": 8,
       "wins": 4,
-      "avg_pred": 0.3344,
+      "avg_pred": 0.3343,
       "actual_wr": 0.5,
-      "closing_rate": 0.1656
+      "closing_rate": 0.1657
     },
     {
       "team": "Vivo Keyd Stars",
       "n_games": 11,
       "wins": 5,
-      "avg_pred": 0.3212,
+      "avg_pred": 0.3213,
       "actual_wr": 0.4545,
       "closing_rate": 0.1333
     },
@@ -52,17 +52,17 @@
       "team": "GiantX",
       "n_games": 20,
       "wins": 8,
-      "avg_pred": 0.317,
+      "avg_pred": 0.3171,
       "actual_wr": 0.4,
-      "closing_rate": 0.083
+      "closing_rate": 0.0829
     },
     {
       "team": "T1",
-      "n_games": 69,
-      "wins": 48,
-      "avg_pred": 0.6239,
-      "actual_wr": 0.6957,
-      "closing_rate": 0.0717
+      "n_games": 67,
+      "wins": 46,
+      "avg_pred": 0.6133,
+      "actual_wr": 0.6866,
+      "closing_rate": 0.0733
     },
     {
       "team": "GAM Esports",
@@ -78,47 +78,39 @@
       "wins": 12,
       "avg_pred": 0.5742,
       "actual_wr": 0.6316,
-      "closing_rate": 0.0573
+      "closing_rate": 0.0574
     },
     {
       "team": "KT Rolster",
       "n_games": 32,
       "wins": 15,
-      "avg_pred": 0.425,
+      "avg_pred": 0.4252,
       "actual_wr": 0.4688,
-      "closing_rate": 0.0438
+      "closing_rate": 0.0436
     },
     {
       "team": "Gen.G",
-      "n_games": 37,
-      "wins": 25,
-      "avg_pred": 0.6536,
-      "actual_wr": 0.6757,
-      "closing_rate": 0.0221
+      "n_games": 39,
+      "wins": 26,
+      "avg_pred": 0.6375,
+      "actual_wr": 0.6667,
+      "closing_rate": 0.0291
     },
     {
       "team": "Bilibili Gaming",
       "n_games": 22,
       "wins": 14,
-      "avg_pred": 0.615,
+      "avg_pred": 0.6147,
       "actual_wr": 0.6364,
-      "closing_rate": 0.0214
-    },
-    {
-      "team": "Shopify Rebellion",
-      "n_games": 11,
-      "wins": 4,
-      "avg_pred": 0.3457,
-      "actual_wr": 0.3636,
-      "closing_rate": 0.0179
+      "closing_rate": 0.0217
     },
     {
       "team": "Karmine Corp",
       "n_games": 68,
       "wins": 40,
-      "avg_pred": 0.5704,
+      "avg_pred": 0.5703,
       "actual_wr": 0.5882,
-      "closing_rate": 0.0179
+      "closing_rate": 0.018
     },
     {
       "team": "Team Secret",
@@ -129,11 +121,19 @@
       "closing_rate": 0.0177
     },
     {
-      "team": "BNK FEARX",
-      "n_games": 26,
-      "wins": 11,
-      "avg_pred": 0.4202,
-      "actual_wr": 0.4231,
+      "team": "Shopify Rebellion",
+      "n_games": 11,
+      "wins": 4,
+      "avg_pred": 0.346,
+      "actual_wr": 0.3636,
+      "closing_rate": 0.0176
+    },
+    {
+      "team": "G2 Esports",
+      "n_games": 53,
+      "wins": 33,
+      "avg_pred": 0.6197,
+      "actual_wr": 0.6226,
       "closing_rate": 0.0029
     }
   ],
@@ -150,17 +150,17 @@
       "team": "Sentinels",
       "n_games": 15,
       "wins": 6,
-      "avg_pred": 0.5731,
+      "avg_pred": 0.5729,
       "actual_wr": 0.4,
-      "closing_rate": -0.1731
+      "closing_rate": -0.1729
     },
     {
       "team": "Disguised",
       "n_games": 8,
       "wins": 2,
-      "avg_pred": 0.3902,
+      "avg_pred": 0.3898,
       "actual_wr": 0.25,
-      "closing_rate": -0.1402
+      "closing_rate": -0.1398
     },
     {
       "team": "FlyQuest",
@@ -174,17 +174,17 @@
       "team": "Top Esports",
       "n_games": 9,
       "wins": 3,
-      "avg_pred": 0.4026,
+      "avg_pred": 0.4027,
       "actual_wr": 0.3333,
       "closing_rate": -0.0693
     },
     {
       "team": "DN SOOPers",
-      "n_games": 21,
+      "n_games": 19,
       "wins": 3,
-      "avg_pred": 0.2066,
-      "actual_wr": 0.1429,
-      "closing_rate": -0.0638
+      "avg_pred": 0.2268,
+      "actual_wr": 0.1579,
+      "closing_rate": -0.0689
     },
     {
       "team": "Natus Vincere",
@@ -206,9 +206,9 @@
       "team": "Movistar KOI",
       "n_games": 45,
       "wins": 21,
-      "avg_pred": 0.5056,
+      "avg_pred": 0.5057,
       "actual_wr": 0.4667,
-      "closing_rate": -0.0389
+      "closing_rate": -0.039
     },
     {
       "team": "Team Secret Whales",
@@ -232,15 +232,15 @@
       "wins": 12,
       "avg_pred": 0.414,
       "actual_wr": 0.3871,
-      "closing_rate": -0.027
+      "closing_rate": -0.0269
     },
     {
       "team": "Kiwoom DRX",
-      "n_games": 27,
+      "n_games": 26,
       "wins": 11,
-      "avg_pred": 0.4312,
-      "actual_wr": 0.4074,
-      "closing_rate": -0.0238
+      "avg_pred": 0.4477,
+      "actual_wr": 0.4231,
+      "closing_rate": -0.0246
     },
     {
       "team": "Deep Cross Gaming",
@@ -248,15 +248,15 @@
       "wins": 5,
       "avg_pred": 0.4076,
       "actual_wr": 0.3846,
-      "closing_rate": -0.023
+      "closing_rate": -0.0229
     },
     {
       "team": "Hanwha Life Esports",
-      "n_games": 61,
-      "wins": 39,
-      "avg_pred": 0.6553,
-      "actual_wr": 0.6393,
-      "closing_rate": -0.016
+      "n_games": 64,
+      "wins": 40,
+      "avg_pred": 0.6452,
+      "actual_wr": 0.625,
+      "closing_rate": -0.0202
     }
   ]
 }
