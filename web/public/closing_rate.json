@@ -1,5 +1,5 @@
 {
-  "generated": "2026-08-27T18:57:19Z",
+  "generated": "2026-08-27T23:43:03Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -20,15 +20,15 @@
       "team": "GiantX",
       "n_games": 23,
       "wins": 13,
-      "avg_pred": 0.3552,
+      "avg_pred": 0.3553,
       "actual_wr": 0.5652,
-      "closing_rate": 0.21
+      "closing_rate": 0.2099
     },
     {
       "team": "Team WE",
       "n_games": 23,
       "wins": 11,
-      "avg_pred": 0.2804,
+      "avg_pred": 0.2803,
       "actual_wr": 0.4783,
       "closing_rate": 0.1979
     },
@@ -68,7 +68,7 @@
       "team": "Vivo Keyd Stars",
       "n_games": 11,
       "wins": 5,
-      "avg_pred": 0.3209,
+      "avg_pred": 0.3208,
       "actual_wr": 0.4545,
       "closing_rate": 0.1337
     },
@@ -76,9 +76,9 @@
       "team": "KT Rolster",
       "n_games": 25,
       "wins": 13,
-      "avg_pred": 0.3998,
+      "avg_pred": 0.3997,
       "actual_wr": 0.52,
-      "closing_rate": 0.1202
+      "closing_rate": 0.1203
     },
     {
       "team": "Team Liquid",
@@ -182,9 +182,9 @@
       "team": "Kiwoom DRX",
       "n_games": 19,
       "wins": 6,
-      "avg_pred": 0.4134,
+      "avg_pred": 0.4135,
       "actual_wr": 0.3158,
-      "closing_rate": -0.0976
+      "closing_rate": -0.0977
     },
     {
       "team": "Team Heretics",
@@ -192,15 +192,15 @@
       "wins": 4,
       "avg_pred": 0.3594,
       "actual_wr": 0.2667,
-      "closing_rate": -0.0928
+      "closing_rate": -0.0927
     },
     {
       "team": "BNK FEARX",
       "n_games": 25,
       "wins": 12,
-      "avg_pred": 0.5563,
+      "avg_pred": 0.5564,
       "actual_wr": 0.48,
-      "closing_rate": -0.0763
+      "closing_rate": -0.0764
     },
     {
       "team": "FlyQuest",
@@ -240,7 +240,7 @@
       "wins": 26,
       "avg_pred": 0.6188,
       "actual_wr": 0.5778,
-      "closing_rate": -0.0411
+      "closing_rate": -0.041
     },
     {
       "team": "Fnatic",
@@ -254,9 +254,9 @@
       "team": "Team Secret Whales",
       "n_games": 10,
       "wins": 3,
-      "avg_pred": 0.3385,
+      "avg_pred": 0.3386,
       "actual_wr": 0.3,
-      "closing_rate": -0.0385
+      "closing_rate": -0.0386
     }
   ]
 }
