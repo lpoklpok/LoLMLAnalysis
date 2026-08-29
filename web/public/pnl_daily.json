@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-08-28T23:31:52Z",
+  "generated_at_utc": "2026-08-29T13:42:09Z",
   "wallet": "0x9560dbf536660b5fc71efbe75b144f92013b9467",
   "kalshi_available": true,
   "start_date": "2026-02-01",
@@ -127,17 +127,17 @@
     },
     {
       "date": "2026-02-16",
-      "polymarket_pnl": 561.29,
+      "polymarket_pnl": 0.0,
       "kalshi_pnl": 940.8,
-      "total_pnl": 1502.09,
+      "total_pnl": 940.8,
       "polymarket_trades": 2,
       "kalshi_trades": 19
     },
     {
       "date": "2026-02-17",
-      "polymarket_pnl": -672.38,
+      "polymarket_pnl": 0.0,
       "kalshi_pnl": 346.24,
-      "total_pnl": -326.14,
+      "total_pnl": 346.24,
       "polymarket_trades": 6,
       "kalshi_trades": 16
     },
@@ -151,25 +151,25 @@
     },
     {
       "date": "2026-02-19",
-      "polymarket_pnl": -48.9,
+      "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
-      "total_pnl": -48.9,
+      "total_pnl": 0.0,
       "polymarket_trades": 9,
       "kalshi_trades": 0
     },
     {
       "date": "2026-02-20",
-      "polymarket_pnl": -677.01,
+      "polymarket_pnl": 0.0,
       "kalshi_pnl": 1332.41,
-      "total_pnl": 655.4,
+      "total_pnl": 1332.41,
       "polymarket_trades": 7,
       "kalshi_trades": 85
     },
     {
       "date": "2026-02-21",
-      "polymarket_pnl": -1423.11,
+      "polymarket_pnl": -288.0,
       "kalshi_pnl": 3060.47,
-      "total_pnl": 1637.36,
+      "total_pnl": 2772.47,
       "polymarket_trades": 39,
       "kalshi_trades": 217
     },
@@ -1676,12 +1676,20 @@
       "total_pnl": 0.0,
       "polymarket_trades": 0,
       "kalshi_trades": 0
+    },
+    {
+      "date": "2026-08-29",
+      "polymarket_pnl": 0.0,
+      "kalshi_pnl": 0.0,
+      "total_pnl": 0.0,
+      "polymarket_trades": 0,
+      "kalshi_trades": 0
     }
   ],
   "totals": {
-    "polymarket_pnl": -23952.94,
+    "polymarket_pnl": -21980.83,
     "kalshi_pnl": 1448.87,
-    "total_pnl": -22504.07,
+    "total_pnl": -20531.96,
     "polymarket_trades": 1927,
     "kalshi_trades": 1218
   },
@@ -1793,1361 +1801,1368 @@
     },
     {
       "date": "2026-02-16",
-      "polymarket_pnl": 561.29,
+      "polymarket_pnl": 0.0,
       "kalshi_pnl": 940.8,
-      "total_pnl": 1502.09,
-      "cum_pnl": 2192.43
+      "total_pnl": 940.8,
+      "cum_pnl": 1631.14
     },
     {
       "date": "2026-02-17",
-      "polymarket_pnl": -672.38,
+      "polymarket_pnl": 0.0,
       "kalshi_pnl": 346.24,
-      "total_pnl": -326.14,
-      "cum_pnl": 1866.29
+      "total_pnl": 346.24,
+      "cum_pnl": 1977.38
     },
     {
       "date": "2026-02-18",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1866.29
+      "cum_pnl": 1977.38
     },
     {
       "date": "2026-02-19",
-      "polymarket_pnl": -48.9,
+      "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
-      "total_pnl": -48.9,
-      "cum_pnl": 1817.39
+      "total_pnl": 0.0,
+      "cum_pnl": 1977.38
     },
     {
       "date": "2026-02-20",
-      "polymarket_pnl": -677.01,
+      "polymarket_pnl": 0.0,
       "kalshi_pnl": 1332.41,
-      "total_pnl": 655.4,
-      "cum_pnl": 2472.79
+      "total_pnl": 1332.41,
+      "cum_pnl": 3309.79
     },
     {
       "date": "2026-02-21",
-      "polymarket_pnl": -1423.11,
+      "polymarket_pnl": -288.0,
       "kalshi_pnl": 3060.47,
-      "total_pnl": 1637.36,
-      "cum_pnl": 4110.15
+      "total_pnl": 2772.47,
+      "cum_pnl": 6082.26
     },
     {
       "date": "2026-02-22",
       "polymarket_pnl": 168.85,
       "kalshi_pnl": -733.56,
       "total_pnl": -564.71,
-      "cum_pnl": 3545.44
+      "cum_pnl": 5517.55
     },
     {
       "date": "2026-02-23",
       "polymarket_pnl": 2458.72,
       "kalshi_pnl": 0.0,
       "total_pnl": 2458.72,
-      "cum_pnl": 6004.16
+      "cum_pnl": 7976.27
     },
     {
       "date": "2026-02-24",
       "polymarket_pnl": -555.0,
       "kalshi_pnl": -54.76,
       "total_pnl": -609.76,
-      "cum_pnl": 5394.4
+      "cum_pnl": 7366.51
     },
     {
       "date": "2026-02-25",
       "polymarket_pnl": 2017.64,
       "kalshi_pnl": 1802.55,
       "total_pnl": 3820.19,
-      "cum_pnl": 9214.59
+      "cum_pnl": 11186.7
     },
     {
       "date": "2026-02-26",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": -1428.76,
       "total_pnl": -1428.76,
-      "cum_pnl": 7785.83
+      "cum_pnl": 9757.94
     },
     {
       "date": "2026-02-27",
       "polymarket_pnl": 4717.15,
       "kalshi_pnl": 594.54,
       "total_pnl": 5311.69,
-      "cum_pnl": 13097.52
+      "cum_pnl": 15069.63
     },
     {
       "date": "2026-02-28",
       "polymarket_pnl": 3436.28,
       "kalshi_pnl": 161.46,
       "total_pnl": 3597.74,
-      "cum_pnl": 16695.26
+      "cum_pnl": 18667.37
     },
     {
       "date": "2026-03-01",
       "polymarket_pnl": 10533.21,
       "kalshi_pnl": -1199.42,
       "total_pnl": 9333.79,
-      "cum_pnl": 26029.05
+      "cum_pnl": 28001.16
     },
     {
       "date": "2026-03-02",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 26029.05
+      "cum_pnl": 28001.16
     },
     {
       "date": "2026-03-03",
       "polymarket_pnl": 1247.43,
       "kalshi_pnl": 113.9,
       "total_pnl": 1361.33,
-      "cum_pnl": 27390.38
+      "cum_pnl": 29362.49
     },
     {
       "date": "2026-03-04",
       "polymarket_pnl": -8962.9,
       "kalshi_pnl": -365.85,
       "total_pnl": -9328.75,
-      "cum_pnl": 18061.63
+      "cum_pnl": 20033.74
     },
     {
       "date": "2026-03-05",
       "polymarket_pnl": -2848.4,
       "kalshi_pnl": -2984.93,
       "total_pnl": -5833.33,
-      "cum_pnl": 12228.3
+      "cum_pnl": 14200.41
     },
     {
       "date": "2026-03-06",
       "polymarket_pnl": -611.65,
       "kalshi_pnl": 215.3,
       "total_pnl": -396.35,
-      "cum_pnl": 11831.95
+      "cum_pnl": 13804.06
     },
     {
       "date": "2026-03-07",
       "polymarket_pnl": 92.79,
       "kalshi_pnl": 334.26,
       "total_pnl": 427.05,
-      "cum_pnl": 12259.0
+      "cum_pnl": 14231.11
     },
     {
       "date": "2026-03-08",
       "polymarket_pnl": 1106.09,
       "kalshi_pnl": 1657.86,
       "total_pnl": 2763.95,
-      "cum_pnl": 15022.95
+      "cum_pnl": 16995.06
     },
     {
       "date": "2026-03-09",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 15022.95
+      "cum_pnl": 16995.06
     },
     {
       "date": "2026-03-10",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 15022.95
+      "cum_pnl": 16995.06
     },
     {
       "date": "2026-03-11",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 15022.95
+      "cum_pnl": 16995.06
     },
     {
       "date": "2026-03-12",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 15022.95
+      "cum_pnl": 16995.06
     },
     {
       "date": "2026-03-13",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 15022.95
+      "cum_pnl": 16995.06
     },
     {
       "date": "2026-03-14",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 15022.95
+      "cum_pnl": 16995.06
     },
     {
       "date": "2026-03-15",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 15022.95
+      "cum_pnl": 16995.06
     },
     {
       "date": "2026-03-16",
       "polymarket_pnl": 264.81,
       "kalshi_pnl": -912.55,
       "total_pnl": -647.74,
-      "cum_pnl": 14375.21
+      "cum_pnl": 16347.32
     },
     {
       "date": "2026-03-17",
       "polymarket_pnl": 3000.0,
       "kalshi_pnl": 245.53,
       "total_pnl": 3245.53,
-      "cum_pnl": 17620.74
+      "cum_pnl": 19592.85
     },
     {
       "date": "2026-03-18",
       "polymarket_pnl": -222.06,
       "kalshi_pnl": 411.9,
       "total_pnl": 189.84,
-      "cum_pnl": 17810.58
+      "cum_pnl": 19782.69
     },
     {
       "date": "2026-03-19",
       "polymarket_pnl": 1196.25,
       "kalshi_pnl": -4.62,
       "total_pnl": 1191.63,
-      "cum_pnl": 19002.21
+      "cum_pnl": 20974.32
     },
     {
       "date": "2026-03-20",
       "polymarket_pnl": -1003.72,
       "kalshi_pnl": -2630.48,
       "total_pnl": -3634.2,
-      "cum_pnl": 15368.01
+      "cum_pnl": 17340.12
     },
     {
       "date": "2026-03-21",
       "polymarket_pnl": -536.41,
       "kalshi_pnl": 1747.84,
       "total_pnl": 1211.43,
-      "cum_pnl": 16579.44
+      "cum_pnl": 18551.55
     },
     {
       "date": "2026-03-22",
       "polymarket_pnl": -720.0,
       "kalshi_pnl": 1789.56,
       "total_pnl": 1069.56,
-      "cum_pnl": 17649.0
+      "cum_pnl": 19621.11
     },
     {
       "date": "2026-03-23",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 17649.0
+      "cum_pnl": 19621.11
     },
     {
       "date": "2026-03-24",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 17649.0
+      "cum_pnl": 19621.11
     },
     {
       "date": "2026-03-25",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 17649.0
+      "cum_pnl": 19621.11
     },
     {
       "date": "2026-03-26",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 17649.0
+      "cum_pnl": 19621.11
     },
     {
       "date": "2026-03-27",
       "polymarket_pnl": -322.42,
       "kalshi_pnl": -3.6,
       "total_pnl": -326.02,
-      "cum_pnl": 17322.98
+      "cum_pnl": 19295.09
     },
     {
       "date": "2026-03-28",
       "polymarket_pnl": -3272.0,
       "kalshi_pnl": -370.24,
       "total_pnl": -3642.24,
-      "cum_pnl": 13680.74
+      "cum_pnl": 15652.85
     },
     {
       "date": "2026-03-29",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 13680.74
+      "cum_pnl": 15652.85
     },
     {
       "date": "2026-03-30",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 13680.74
+      "cum_pnl": 15652.85
     },
     {
       "date": "2026-03-31",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 13680.74
+      "cum_pnl": 15652.85
     },
     {
       "date": "2026-04-01",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 13680.74
+      "cum_pnl": 15652.85
     },
     {
       "date": "2026-04-02",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 13680.74
+      "cum_pnl": 15652.85
     },
     {
       "date": "2026-04-03",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 13680.74
+      "cum_pnl": 15652.85
     },
     {
       "date": "2026-04-04",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": -102.0,
       "total_pnl": -102.0,
-      "cum_pnl": 13578.74
+      "cum_pnl": 15550.85
     },
     {
       "date": "2026-04-05",
       "polymarket_pnl": 942.43,
       "kalshi_pnl": -69.11,
       "total_pnl": 873.32,
-      "cum_pnl": 14452.06
+      "cum_pnl": 16424.17
     },
     {
       "date": "2026-04-06",
       "polymarket_pnl": 1801.17,
       "kalshi_pnl": 1554.12,
       "total_pnl": 3355.29,
-      "cum_pnl": 17807.35
+      "cum_pnl": 19779.46
     },
     {
       "date": "2026-04-07",
       "polymarket_pnl": -1900.0,
       "kalshi_pnl": 0.0,
       "total_pnl": -1900.0,
-      "cum_pnl": 15907.35
+      "cum_pnl": 17879.46
     },
     {
       "date": "2026-04-08",
       "polymarket_pnl": -6619.44,
       "kalshi_pnl": -1634.51,
       "total_pnl": -8253.95,
-      "cum_pnl": 7653.4
+      "cum_pnl": 9625.51
     },
     {
       "date": "2026-04-09",
       "polymarket_pnl": 795.61,
       "kalshi_pnl": 18.0,
       "total_pnl": 813.61,
-      "cum_pnl": 8467.01
+      "cum_pnl": 10439.12
     },
     {
       "date": "2026-04-10",
       "polymarket_pnl": -291.82,
       "kalshi_pnl": 0.0,
       "total_pnl": -291.82,
-      "cum_pnl": 8175.19
+      "cum_pnl": 10147.3
     },
     {
       "date": "2026-04-11",
       "polymarket_pnl": 3528.31,
       "kalshi_pnl": 0.0,
       "total_pnl": 3528.31,
-      "cum_pnl": 11703.5
+      "cum_pnl": 13675.61
     },
     {
       "date": "2026-04-12",
       "polymarket_pnl": 1642.19,
       "kalshi_pnl": 0.0,
       "total_pnl": 1642.19,
-      "cum_pnl": 13345.69
+      "cum_pnl": 15317.8
     },
     {
       "date": "2026-04-13",
       "polymarket_pnl": -6489.13,
       "kalshi_pnl": -1855.8,
       "total_pnl": -8344.93,
-      "cum_pnl": 5000.76
+      "cum_pnl": 6972.87
     },
     {
       "date": "2026-04-14",
       "polymarket_pnl": 298.49,
       "kalshi_pnl": 0.0,
       "total_pnl": 298.49,
-      "cum_pnl": 5299.25
+      "cum_pnl": 7271.36
     },
     {
       "date": "2026-04-15",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 5299.25
+      "cum_pnl": 7271.36
     },
     {
       "date": "2026-04-16",
       "polymarket_pnl": -922.07,
       "kalshi_pnl": -1218.02,
       "total_pnl": -2140.09,
-      "cum_pnl": 3159.16
+      "cum_pnl": 5131.27
     },
     {
       "date": "2026-04-17",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 3159.16
+      "cum_pnl": 5131.27
     },
     {
       "date": "2026-04-18",
       "polymarket_pnl": -1300.0,
       "kalshi_pnl": 0.0,
       "total_pnl": -1300.0,
-      "cum_pnl": 1859.16
+      "cum_pnl": 3831.27
     },
     {
       "date": "2026-04-19",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1859.16
+      "cum_pnl": 3831.27
     },
     {
       "date": "2026-04-20",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1859.16
+      "cum_pnl": 3831.27
     },
     {
       "date": "2026-04-21",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1859.16
+      "cum_pnl": 3831.27
     },
     {
       "date": "2026-04-22",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1859.16
+      "cum_pnl": 3831.27
     },
     {
       "date": "2026-04-23",
       "polymarket_pnl": -750.0,
       "kalshi_pnl": 0.0,
       "total_pnl": -750.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-04-24",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-04-25",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-04-26",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-04-27",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-04-28",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-04-29",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-04-30",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-05-01",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-05-02",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-05-03",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-05-04",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-05-05",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-05-06",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-05-07",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-05-08",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-05-09",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-05-10",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-05-11",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-05-12",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-05-13",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-05-14",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-05-15",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 1109.16
+      "cum_pnl": 3081.27
     },
     {
       "date": "2026-05-16",
       "polymarket_pnl": -124.0,
       "kalshi_pnl": 0.0,
       "total_pnl": -124.0,
-      "cum_pnl": 985.16
+      "cum_pnl": 2957.27
     },
     {
       "date": "2026-05-17",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 985.16
+      "cum_pnl": 2957.27
     },
     {
       "date": "2026-05-18",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": 985.16
+      "cum_pnl": 2957.27
     },
     {
       "date": "2026-05-19",
       "polymarket_pnl": -2105.0,
       "kalshi_pnl": 0.0,
       "total_pnl": -2105.0,
-      "cum_pnl": -1119.84
+      "cum_pnl": 852.27
     },
     {
       "date": "2026-05-20",
       "polymarket_pnl": 531.58,
       "kalshi_pnl": 0.0,
       "total_pnl": 531.58,
-      "cum_pnl": -588.26
+      "cum_pnl": 1383.85
     },
     {
       "date": "2026-05-21",
       "polymarket_pnl": -1.12,
       "kalshi_pnl": 0.0,
       "total_pnl": -1.12,
-      "cum_pnl": -589.38
+      "cum_pnl": 1382.73
     },
     {
       "date": "2026-05-22",
       "polymarket_pnl": -54.21,
       "kalshi_pnl": 0.0,
       "total_pnl": -54.21,
-      "cum_pnl": -643.59
+      "cum_pnl": 1328.52
     },
     {
       "date": "2026-05-23",
       "polymarket_pnl": -350.0,
       "kalshi_pnl": 0.0,
       "total_pnl": -350.0,
-      "cum_pnl": -993.59
+      "cum_pnl": 978.52
     },
     {
       "date": "2026-05-24",
       "polymarket_pnl": 528.01,
       "kalshi_pnl": 0.0,
       "total_pnl": 528.01,
-      "cum_pnl": -465.58
+      "cum_pnl": 1506.53
     },
     {
       "date": "2026-05-25",
       "polymarket_pnl": 661.3,
       "kalshi_pnl": 0.0,
       "total_pnl": 661.3,
-      "cum_pnl": 195.72
+      "cum_pnl": 2167.83
     },
     {
       "date": "2026-05-26",
       "polymarket_pnl": -105.0,
       "kalshi_pnl": 0.0,
       "total_pnl": -105.0,
-      "cum_pnl": 90.72
+      "cum_pnl": 2062.83
     },
     {
       "date": "2026-05-27",
       "polymarket_pnl": -595.27,
       "kalshi_pnl": 0.0,
       "total_pnl": -595.27,
-      "cum_pnl": -504.55
+      "cum_pnl": 1467.56
     },
     {
       "date": "2026-05-28",
       "polymarket_pnl": -71.21,
       "kalshi_pnl": 0.0,
       "total_pnl": -71.21,
-      "cum_pnl": -575.76
+      "cum_pnl": 1396.35
     },
     {
       "date": "2026-05-29",
       "polymarket_pnl": -242.2,
       "kalshi_pnl": 0.0,
       "total_pnl": -242.2,
-      "cum_pnl": -817.96
+      "cum_pnl": 1154.15
     },
     {
       "date": "2026-05-30",
       "polymarket_pnl": -12433.61,
       "kalshi_pnl": 0.0,
       "total_pnl": -12433.61,
-      "cum_pnl": -13251.57
+      "cum_pnl": -11279.46
     },
     {
       "date": "2026-05-31",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -13251.57
+      "cum_pnl": -11279.46
     },
     {
       "date": "2026-06-01",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -13251.57
+      "cum_pnl": -11279.46
     },
     {
       "date": "2026-06-02",
       "polymarket_pnl": 1560.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 1560.0,
-      "cum_pnl": -11691.57
+      "cum_pnl": -9719.46
     },
     {
       "date": "2026-06-03",
       "polymarket_pnl": -2451.16,
       "kalshi_pnl": 0.0,
       "total_pnl": -2451.16,
-      "cum_pnl": -14142.73
+      "cum_pnl": -12170.62
     },
     {
       "date": "2026-06-04",
       "polymarket_pnl": -2809.48,
       "kalshi_pnl": 0.0,
       "total_pnl": -2809.48,
-      "cum_pnl": -16952.21
+      "cum_pnl": -14980.1
     },
     {
       "date": "2026-06-05",
       "polymarket_pnl": -896.72,
       "kalshi_pnl": 0.0,
       "total_pnl": -896.72,
-      "cum_pnl": -17848.93
+      "cum_pnl": -15876.82
     },
     {
       "date": "2026-06-06",
       "polymarket_pnl": -4655.14,
       "kalshi_pnl": 0.0,
       "total_pnl": -4655.14,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-07",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-08",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-09",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-10",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-11",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-12",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-13",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-14",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-15",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-16",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-17",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-18",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-19",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-20",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-21",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-22",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-23",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-24",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-25",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-26",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-27",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-28",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-29",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-06-30",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-01",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-02",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-03",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-04",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-05",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-06",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-07",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-08",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-09",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-10",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-11",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-12",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-13",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-14",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-15",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-16",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-17",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-18",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-19",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-20",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-21",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-22",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-23",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-24",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-25",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-26",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-27",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-28",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-29",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-30",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-07-31",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-01",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-02",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-03",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-04",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-05",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-06",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-07",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-08",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-09",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-10",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-11",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-12",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-13",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-14",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-15",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-16",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-17",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-18",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-19",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-20",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-21",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-22",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-23",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-24",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-25",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-26",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-27",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
     },
     {
       "date": "2026-08-28",
       "polymarket_pnl": 0.0,
       "kalshi_pnl": 0.0,
       "total_pnl": 0.0,
-      "cum_pnl": -22504.07
+      "cum_pnl": -20531.96
+    },
+    {
+      "date": "2026-08-29",
+      "polymarket_pnl": 0.0,
+      "kalshi_pnl": 0.0,
+      "total_pnl": 0.0,
+      "cum_pnl": -20531.96
     }
   ]
 }
