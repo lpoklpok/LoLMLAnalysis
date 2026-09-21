@@ -1,5 +1,5 @@
 {
-  "generated": "2026-09-21T14:55:36Z",
+  "generated": "2026-09-21T19:13:03Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -20,7 +20,7 @@
       "team": "DN SOOPers",
       "n_games": 13,
       "wins": 8,
-      "avg_pred": 0.4118,
+      "avg_pred": 0.4119,
       "actual_wr": 0.6154,
       "closing_rate": 0.2035
     },
@@ -44,7 +44,7 @@
       "team": "Ninjas in Pyjamas",
       "n_games": 12,
       "wins": 8,
-      "avg_pred": 0.5372,
+      "avg_pred": 0.5373,
       "actual_wr": 0.6667,
       "closing_rate": 0.1294
     },
@@ -76,9 +76,9 @@
       "team": "ThunderTalk Gaming",
       "n_games": 10,
       "wins": 3,
-      "avg_pred": 0.195,
+      "avg_pred": 0.1949,
       "actual_wr": 0.3,
-      "closing_rate": 0.105
+      "closing_rate": 0.1051
     },
     {
       "team": "Gen.G",
@@ -116,9 +116,9 @@
       "team": "Team Liquid",
       "n_games": 30,
       "wins": 21,
-      "avg_pred": 0.6728,
+      "avg_pred": 0.6729,
       "actual_wr": 0.7,
-      "closing_rate": 0.0272
+      "closing_rate": 0.0271
     },
     {
       "team": "G2 Esports",
@@ -150,9 +150,9 @@
       "team": "FURIA",
       "n_games": 9,
       "wins": 0,
-      "avg_pred": 0.1825,
+      "avg_pred": 0.1824,
       "actual_wr": 0.0,
-      "closing_rate": -0.1825
+      "closing_rate": -0.1824
     },
     {
       "team": "Movistar KOI",
@@ -190,7 +190,7 @@
       "team": "JD Gaming",
       "n_games": 26,
       "wins": 14,
-      "avg_pred": 0.6059,
+      "avg_pred": 0.6058,
       "actual_wr": 0.5385,
       "closing_rate": -0.0674
     },
@@ -222,7 +222,7 @@
       "team": "T1",
       "n_games": 54,
       "wins": 31,
-      "avg_pred": 0.6234,
+      "avg_pred": 0.6235,
       "actual_wr": 0.5741,
       "closing_rate": -0.0494
     },
@@ -232,7 +232,7 @@
       "wins": 13,
       "avg_pred": 0.5271,
       "actual_wr": 0.4815,
-      "closing_rate": -0.0457
+      "closing_rate": -0.0456
     },
     {
       "team": "Bilibili Gaming",
@@ -254,7 +254,7 @@
       "team": "Team Secret Whales",
       "n_games": 10,
       "wins": 3,
-      "avg_pred": 0.3379,
+      "avg_pred": 0.3378,
       "actual_wr": 0.3,
       "closing_rate": -0.0379
     }
