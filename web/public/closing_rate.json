@@ -1,5 +1,5 @@
 {
-  "generated": "2026-09-25T13:21:14Z",
+  "generated": "2026-09-25T18:25:41Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -20,9 +20,9 @@
       "team": "DN SOOPers",
       "n_games": 13,
       "wins": 8,
-      "avg_pred": 0.4117,
+      "avg_pred": 0.4116,
       "actual_wr": 0.6154,
-      "closing_rate": 0.2037
+      "closing_rate": 0.2038
     },
     {
       "team": "GiantX",
@@ -52,7 +52,7 @@
       "team": "LYON",
       "n_games": 34,
       "wins": 23,
-      "avg_pred": 0.548,
+      "avg_pred": 0.5479,
       "actual_wr": 0.6765,
       "closing_rate": 0.1285
     },
@@ -100,9 +100,9 @@
       "team": "Anyone's Legend",
       "n_games": 20,
       "wins": 11,
-      "avg_pred": 0.4997,
+      "avg_pred": 0.4998,
       "actual_wr": 0.55,
-      "closing_rate": 0.0503
+      "closing_rate": 0.0502
     },
     {
       "team": "Top Esports",
@@ -134,7 +134,7 @@
       "wins": 23,
       "avg_pred": 0.6253,
       "actual_wr": 0.6389,
-      "closing_rate": 0.0135
+      "closing_rate": 0.0136
     }
   ],
   "throwers": [
@@ -176,7 +176,7 @@
       "wins": 4,
       "avg_pred": 0.3043,
       "actual_wr": 0.2105,
-      "closing_rate": -0.0938
+      "closing_rate": -0.0937
     },
     {
       "team": "Invictus Gaming",
@@ -198,9 +198,9 @@
       "team": "Fnatic",
       "n_games": 20,
       "wins": 9,
-      "avg_pred": 0.5135,
+      "avg_pred": 0.5136,
       "actual_wr": 0.45,
-      "closing_rate": -0.0635
+      "closing_rate": -0.0636
     },
     {
       "team": "Shifters",
@@ -240,7 +240,7 @@
       "wins": 23,
       "avg_pred": 0.6642,
       "actual_wr": 0.6216,
-      "closing_rate": -0.0426
+      "closing_rate": -0.0425
     },
     {
       "team": "LGD Gaming",
