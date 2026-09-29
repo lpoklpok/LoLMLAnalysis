@@ -1,5 +1,5 @@
 {
-  "generated": "2026-09-29T14:42:33Z",
+  "generated": "2026-09-29T19:16:01Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -28,15 +28,15 @@
       "team": "GiantX",
       "n_games": 32,
       "wins": 16,
-      "avg_pred": 0.3146,
+      "avg_pred": 0.3145,
       "actual_wr": 0.5,
-      "closing_rate": 0.1854
+      "closing_rate": 0.1855
     },
     {
       "team": "Shopify Rebellion",
       "n_games": 32,
       "wins": 15,
-      "avg_pred": 0.3134,
+      "avg_pred": 0.3135,
       "actual_wr": 0.4688,
       "closing_rate": 0.1553
     },
@@ -86,7 +86,7 @@
       "wins": 23,
       "avg_pred": 0.587,
       "actual_wr": 0.6765,
-      "closing_rate": 0.0895
+      "closing_rate": 0.0894
     },
     {
       "team": "Team Liquid",
@@ -116,7 +116,7 @@
       "team": "Top Esports",
       "n_games": 27,
       "wins": 13,
-      "avg_pred": 0.4413,
+      "avg_pred": 0.4414,
       "actual_wr": 0.4815,
       "closing_rate": 0.0401
     },
@@ -150,9 +150,9 @@
       "team": "FURIA",
       "n_games": 9,
       "wins": 0,
-      "avg_pred": 0.1838,
+      "avg_pred": 0.1837,
       "actual_wr": 0.0,
-      "closing_rate": -0.1838
+      "closing_rate": -0.1837
     },
     {
       "team": "Movistar KOI",
@@ -222,9 +222,9 @@
       "team": "EDward Gaming",
       "n_games": 13,
       "wins": 4,
-      "avg_pred": 0.3598,
+      "avg_pred": 0.3599,
       "actual_wr": 0.3077,
-      "closing_rate": -0.0521
+      "closing_rate": -0.0522
     },
     {
       "team": "Natus Vincere",
@@ -240,7 +240,7 @@
       "wins": 23,
       "avg_pred": 0.6642,
       "actual_wr": 0.6216,
-      "closing_rate": -0.0426
+      "closing_rate": -0.0425
     },
     {
       "team": "LGD Gaming",
