@@ -1,5 +1,5 @@
 {
-  "generated": "2026-10-02T19:07:30Z",
+  "generated": "2026-10-03T13:08:30Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -22,7 +22,7 @@
       "wins": 8,
       "avg_pred": 0.4117,
       "actual_wr": 0.6154,
-      "closing_rate": 0.2036
+      "closing_rate": 0.2037
     },
     {
       "team": "GiantX",
@@ -62,7 +62,7 @@
       "wins": 16,
       "avg_pred": 0.4522,
       "actual_wr": 0.5714,
-      "closing_rate": 0.1192
+      "closing_rate": 0.1193
     },
     {
       "team": "ThunderTalk Gaming",
@@ -71,6 +71,14 @@
       "avg_pred": 0.1949,
       "actual_wr": 0.3,
       "closing_rate": 0.1051
+    },
+    {
+      "team": "Top Esports",
+      "n_games": 18,
+      "wins": 10,
+      "avg_pred": 0.4607,
+      "actual_wr": 0.5556,
+      "closing_rate": 0.0949
     },
     {
       "team": "Gen.G",
@@ -94,7 +102,7 @@
       "wins": 18,
       "avg_pred": 0.7503,
       "actual_wr": 0.8182,
-      "closing_rate": 0.0678
+      "closing_rate": 0.0679
     },
     {
       "team": "Team WE",
@@ -113,20 +121,12 @@
       "closing_rate": 0.0502
     },
     {
-      "team": "Top Esports",
-      "n_games": 22,
-      "wins": 11,
-      "avg_pred": 0.453,
-      "actual_wr": 0.5,
-      "closing_rate": 0.047
-    },
-    {
       "team": "G2 Esports",
-      "n_games": 42,
+      "n_games": 39,
       "wins": 26,
-      "avg_pred": 0.5978,
-      "actual_wr": 0.619,
-      "closing_rate": 0.0213
+      "avg_pred": 0.6426,
+      "actual_wr": 0.6667,
+      "closing_rate": 0.0241
     },
     {
       "team": "Dplus Kia",
@@ -134,7 +134,7 @@
       "wins": 23,
       "avg_pred": 0.6254,
       "actual_wr": 0.6389,
-      "closing_rate": 0.0134
+      "closing_rate": 0.0135
     }
   ],
   "throwers": [
@@ -222,9 +222,9 @@
       "team": "EDward Gaming",
       "n_games": 13,
       "wins": 4,
-      "avg_pred": 0.3598,
+      "avg_pred": 0.3597,
       "actual_wr": 0.3077,
-      "closing_rate": -0.0521
+      "closing_rate": -0.052
     },
     {
       "team": "Natus Vincere",
@@ -240,7 +240,15 @@
       "wins": 9,
       "avg_pred": 0.448,
       "actual_wr": 0.4091,
-      "closing_rate": -0.0389
+      "closing_rate": -0.039
+    },
+    {
+      "team": "Hanwha Life Esports",
+      "n_games": 50,
+      "wins": 23,
+      "avg_pred": 0.4985,
+      "actual_wr": 0.46,
+      "closing_rate": -0.0385
     },
     {
       "team": "FlyQuest",
@@ -249,14 +257,6 @@
       "avg_pred": 0.4784,
       "actual_wr": 0.44,
       "closing_rate": -0.0384
-    },
-    {
-      "team": "Hanwha Life Esports",
-      "n_games": 53,
-      "wins": 26,
-      "avg_pred": 0.526,
-      "actual_wr": 0.4906,
-      "closing_rate": -0.0355
     }
   ]
 }
