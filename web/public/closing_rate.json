@@ -1,5 +1,5 @@
 {
-  "generated": "2026-11-05T16:15:39Z",
+  "generated": "2026-11-05T20:59:43Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -18,11 +18,11 @@
   "closers": [
     {
       "team": "GiantX",
-      "n_games": 28,
-      "wins": 14,
-      "avg_pred": 0.2723,
-      "actual_wr": 0.5,
-      "closing_rate": 0.2277
+      "n_games": 27,
+      "wins": 13,
+      "avg_pred": 0.2462,
+      "actual_wr": 0.4815,
+      "closing_rate": 0.2353
     },
     {
       "team": "Shopify Rebellion",
@@ -44,7 +44,7 @@
       "team": "Disguised",
       "n_games": 24,
       "wins": 13,
-      "avg_pred": 0.4252,
+      "avg_pred": 0.4253,
       "actual_wr": 0.5417,
       "closing_rate": 0.1164
     },
@@ -92,9 +92,9 @@
       "team": "Team WE",
       "n_games": 24,
       "wins": 9,
-      "avg_pred": 0.3227,
+      "avg_pred": 0.3226,
       "actual_wr": 0.375,
-      "closing_rate": 0.0523
+      "closing_rate": 0.0524
     },
     {
       "team": "Ninjas in Pyjamas",
@@ -116,7 +116,7 @@
       "team": "MVK Esports",
       "n_games": 13,
       "wins": 6,
-      "avg_pred": 0.4476,
+      "avg_pred": 0.4475,
       "actual_wr": 0.4615,
       "closing_rate": 0.014
     },
@@ -163,6 +163,14 @@
       "closing_rate": -0.1341
     },
     {
+      "team": "Shifters",
+      "n_games": 10,
+      "wins": 2,
+      "avg_pred": 0.3311,
+      "actual_wr": 0.2,
+      "closing_rate": -0.1311
+    },
+    {
       "team": "Dignitas",
       "n_games": 11,
       "wins": 1,
@@ -171,20 +179,20 @@
       "closing_rate": -0.1267
     },
     {
-      "team": "Shifters",
-      "n_games": 11,
-      "wins": 2,
-      "avg_pred": 0.3033,
-      "actual_wr": 0.1818,
-      "closing_rate": -0.1215
-    },
-    {
       "team": "T1",
       "n_games": 21,
       "wins": 10,
       "avg_pred": 0.5922,
       "actual_wr": 0.4762,
       "closing_rate": -0.116
+    },
+    {
+      "team": "Team Heretics",
+      "n_games": 12,
+      "wins": 2,
+      "avg_pred": 0.2753,
+      "actual_wr": 0.1667,
+      "closing_rate": -0.1086
     },
     {
       "team": "Cloud9",
@@ -224,7 +232,7 @@
       "wins": 7,
       "avg_pred": 0.6502,
       "actual_wr": 0.5833,
-      "closing_rate": -0.0668
+      "closing_rate": -0.0669
     },
     {
       "team": "G2 Esports",
@@ -241,14 +249,6 @@
       "avg_pred": 0.736,
       "actual_wr": 0.6765,
       "closing_rate": -0.0596
-    },
-    {
-      "team": "Fnatic",
-      "n_games": 18,
-      "wins": 9,
-      "avg_pred": 0.5518,
-      "actual_wr": 0.5,
-      "closing_rate": -0.0518
     },
     {
       "team": "Dplus Kia",
