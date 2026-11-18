@@ -1,5 +1,5 @@
 {
-  "generated": "2026-11-18T17:01:27Z",
+  "generated": "2026-11-18T21:47:42Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -28,7 +28,7 @@
       "team": "Shopify Rebellion",
       "n_games": 22,
       "wins": 9,
-      "avg_pred": 0.2517,
+      "avg_pred": 0.2518,
       "actual_wr": 0.4091,
       "closing_rate": 0.1573
     },
@@ -38,7 +38,7 @@
       "wins": 12,
       "avg_pred": 0.5153,
       "actual_wr": 0.6316,
-      "closing_rate": 0.1163
+      "closing_rate": 0.1162
     },
     {
       "team": "Gen.G",
@@ -52,7 +52,7 @@
       "team": "Top Esports",
       "n_games": 23,
       "wins": 11,
-      "avg_pred": 0.3719,
+      "avg_pred": 0.3718,
       "actual_wr": 0.4783,
       "closing_rate": 0.1064
     },
@@ -86,7 +86,7 @@
       "wins": 7,
       "avg_pred": 0.3945,
       "actual_wr": 0.4667,
-      "closing_rate": 0.0722
+      "closing_rate": 0.0721
     },
     {
       "team": "FURIA",
@@ -110,7 +110,7 @@
       "wins": 9,
       "avg_pred": 0.4972,
       "actual_wr": 0.5294,
-      "closing_rate": 0.0322
+      "closing_rate": 0.0323
     },
     {
       "team": "MVK Esports",
@@ -132,7 +132,7 @@
       "team": "L\u00d8S",
       "n_games": 10,
       "wins": 5,
-      "avg_pred": 0.4896,
+      "avg_pred": 0.4895,
       "actual_wr": 0.5,
       "closing_rate": 0.0105
     }
@@ -200,7 +200,7 @@
       "wins": 5,
       "avg_pred": 0.4655,
       "actual_wr": 0.3846,
-      "closing_rate": -0.0809
+      "closing_rate": -0.0808
     },
     {
       "team": "Karmine Corp",
@@ -216,13 +216,13 @@
       "wins": 5,
       "avg_pred": 0.4133,
       "actual_wr": 0.3571,
-      "closing_rate": -0.0561
+      "closing_rate": -0.0562
     },
     {
       "team": "JD Gaming",
       "n_games": 13,
       "wins": 7,
-      "avg_pred": 0.5934,
+      "avg_pred": 0.5935,
       "actual_wr": 0.5385,
       "closing_rate": -0.055
     },
