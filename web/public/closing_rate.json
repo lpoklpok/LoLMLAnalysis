@@ -1,5 +1,5 @@
 {
-  "generated": "2026-11-19T17:09:08Z",
+  "generated": "2026-11-19T22:03:37Z",
   "lookback_days": 90,
   "min_games": 8,
   "leagues": [
@@ -36,9 +36,9 @@
       "team": "Top Esports",
       "n_games": 21,
       "wins": 11,
-      "avg_pred": 0.381,
+      "avg_pred": 0.3811,
       "actual_wr": 0.5238,
-      "closing_rate": 0.1428
+      "closing_rate": 0.1427
     },
     {
       "team": "Disguised",
@@ -46,7 +46,7 @@
       "wins": 12,
       "avg_pred": 0.5153,
       "actual_wr": 0.6316,
-      "closing_rate": 0.1163
+      "closing_rate": 0.1162
     },
     {
       "team": "Gen.G",
@@ -58,11 +58,11 @@
     },
     {
       "team": "Team Vitality",
-      "n_games": 13,
-      "wins": 7,
-      "avg_pred": 0.4555,
-      "actual_wr": 0.5385,
-      "closing_rate": 0.083
+      "n_games": 11,
+      "wins": 6,
+      "avg_pred": 0.4377,
+      "actual_wr": 0.5455,
+      "closing_rate": 0.1077
     },
     {
       "team": "LYON",
@@ -78,7 +78,7 @@
       "wins": 7,
       "avg_pred": 0.3945,
       "actual_wr": 0.4667,
-      "closing_rate": 0.0721
+      "closing_rate": 0.0722
     },
     {
       "team": "Team WE",
@@ -92,7 +92,7 @@
       "team": "BNK FEARX",
       "n_games": 14,
       "wins": 6,
-      "avg_pred": 0.3715,
+      "avg_pred": 0.3714,
       "actual_wr": 0.4286,
       "closing_rate": 0.0571
     },
@@ -100,17 +100,17 @@
       "team": "FURIA",
       "n_games": 11,
       "wins": 4,
-      "avg_pred": 0.3078,
+      "avg_pred": 0.3079,
       "actual_wr": 0.3636,
-      "closing_rate": 0.0558
+      "closing_rate": 0.0557
     },
     {
       "team": "Anyone's Legend",
       "n_games": 13,
       "wins": 6,
-      "avg_pred": 0.4237,
+      "avg_pred": 0.4239,
       "actual_wr": 0.4615,
-      "closing_rate": 0.0379
+      "closing_rate": 0.0377
     },
     {
       "team": "FlyQuest",
@@ -124,17 +124,17 @@
       "team": "MVK Esports",
       "n_games": 13,
       "wins": 6,
-      "avg_pred": 0.4476,
+      "avg_pred": 0.4475,
       "actual_wr": 0.4615,
-      "closing_rate": 0.0139
+      "closing_rate": 0.014
     },
     {
       "team": "Team Liquid",
       "n_games": 25,
       "wins": 16,
-      "avg_pred": 0.6288,
+      "avg_pred": 0.6287,
       "actual_wr": 0.64,
-      "closing_rate": 0.0112
+      "closing_rate": 0.0113
     }
   ],
   "throwers": [
@@ -150,7 +150,7 @@
       "team": "Cupid Esports",
       "n_games": 9,
       "wins": 3,
-      "avg_pred": 0.4825,
+      "avg_pred": 0.4824,
       "actual_wr": 0.3333,
       "closing_rate": -0.1491
     },
@@ -158,7 +158,7 @@
       "team": "Cloud9",
       "n_games": 28,
       "wins": 12,
-      "avg_pred": 0.5376,
+      "avg_pred": 0.5377,
       "actual_wr": 0.4286,
       "closing_rate": -0.1091
     },
@@ -174,17 +174,17 @@
       "team": "HANJIN BRION",
       "n_games": 10,
       "wins": 4,
-      "avg_pred": 0.507,
+      "avg_pred": 0.5071,
       "actual_wr": 0.4,
-      "closing_rate": -0.107
+      "closing_rate": -0.1071
     },
     {
       "team": "G2 Esports",
       "n_games": 17,
       "wins": 10,
-      "avg_pred": 0.6801,
+      "avg_pred": 0.6799,
       "actual_wr": 0.5882,
-      "closing_rate": -0.0918
+      "closing_rate": -0.0917
     },
     {
       "team": "Movistar KOI",
@@ -214,9 +214,9 @@
       "team": "JD Gaming",
       "n_games": 13,
       "wins": 7,
-      "avg_pred": 0.5937,
+      "avg_pred": 0.5935,
       "actual_wr": 0.5385,
-      "closing_rate": -0.0553
+      "closing_rate": -0.055
     },
     {
       "team": "Bilibili Gaming",
@@ -238,7 +238,7 @@
       "team": "Maryville University",
       "n_games": 14,
       "wins": 9,
-      "avg_pred": 0.6806,
+      "avg_pred": 0.6807,
       "actual_wr": 0.6429,
       "closing_rate": -0.0378
     },
@@ -246,7 +246,7 @@
       "team": "Dplus Kia",
       "n_games": 17,
       "wins": 10,
-      "avg_pred": 0.6177,
+      "avg_pred": 0.6176,
       "actual_wr": 0.5882,
       "closing_rate": -0.0294
     },
@@ -254,9 +254,9 @@
       "team": "Invictus Gaming",
       "n_games": 31,
       "wins": 19,
-      "avg_pred": 0.6393,
+      "avg_pred": 0.6394,
       "actual_wr": 0.6129,
-      "closing_rate": -0.0264
+      "closing_rate": -0.0265
     }
   ]
 }
